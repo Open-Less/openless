@@ -2117,14 +2117,6 @@ pub fn log_dir_path() -> std::path::PathBuf {
     }
 }
 
-pub(crate) fn require_ask_anything() -> Result<(), String> {
-    if ask_anything_available() {
-        Ok(())
-    } else {
-        Err("Ask Anything is disabled in this build".into())
-    }
-}
-
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_window_mode(app);
     #[cfg(not(mobile))]

@@ -52,7 +52,8 @@ pub fn get_activity_stats(core: CoreState<'_>) -> Vec<ActivityDay> {
 
 #[tauri::command]
 pub fn get_activity_apps(core: CoreState<'_>, year: u32) -> Result<Vec<(String, u32)>, String> {
-    core.list_activity_apps(year).map_err(|error| error.to_string())
+    core.list_activity_apps(year)
+        .map_err(|error| error.to_string())
 }
 
 /// Resolves only the top ranked names through local native icon sources.
@@ -354,7 +355,9 @@ pub async fn retranscribe_recording(
     if !is_valid_session_id(&session_id) {
         return Err("historyRetranscribeInvalidId".into());
     }
-    retranscription::retranscribe_recording_with_path(&core, session_id, existing_recording_path).await
+    let path = existing_recording_path(&session_id)?;
+    let _lease = crate::persistence::acquire_recording_archive_lease(&path);
+    retranscription::retranscribe_recording_with_path(&core, session_id, |_| Ok(path)).await
 }
 
 #[tauri::command]

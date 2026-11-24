@@ -27,17 +27,17 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex, Notify};
+use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 
 use super::qwen_realtime::join_segments;
+use super::stream_send::{send_ws_message_with_timeout, PacedSendClock, SharedWriter};
 use super::{AudioConsumer, RawTranscript};
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
@@ -56,6 +56,7 @@ const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// Upper bound on the WebSocket handshake itself (TCP + TLS + HTTP upgrade).
 ///
 /// Without it, `connect_async` waits forever: a mid-handshake disconnect, a corporate
@@ -89,10 +90,6 @@ const FINISH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// closes the last segment, capping the worst-case wait at this instead of
 /// FINAL_RESULT_TIMEOUT (12s).
 const FINISH_HARD_DEADLINE: Duration = Duration::from_millis(3_000);
-
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
-type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
 
 #[derive(Clone, Debug)]
 pub struct StepfunRealtimeCredentials {
@@ -146,7 +143,7 @@ impl StepfunRealtimeCredentials {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum StepfunASRError {
     #[error("credentials missing")]
     CredentialsMissing,
@@ -165,10 +162,12 @@ pub enum StepfunASRError {
 enum SendItem {
     Audio {
         chunk: Vec<u8>,
+        /// Pre-silence-padding PCM bytes represented by this frame (`0`..`chunk.len()`).
+        input_bytes: u64,
         contains_non_silent_audio: bool,
         /// Lets `send_last_frame` confirm the tail frame was actually written to the
         /// WebSocket by the write worker.
-        written_tx: Option<oneshot::Sender<Result<(), String>>>,
+        written_tx: Option<oneshot::Sender<Result<(), StepfunASRError>>>,
     },
 }
 
@@ -177,16 +176,21 @@ struct SyncState {
     pending_audio: Vec<u8>,
     audio_scratch: Vec<u8>,
     bytes_received: u64,
+    bytes_sent_input: u64,
     /// Last time the write worker successfully wrote non-silent PCM to the WebSocket.
     last_non_silent_audio_written_at: Option<Instant>,
     /// Last time a server-side completed event arrived.
     last_completed_at: Option<Instant>,
     session_started: bool,
     session_finished: bool,
+    tail_written: bool,
+    ending: bool,
+    send_error: Option<StepfunASRError>,
     session_start_error: Option<String>,
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, StepfunASRError>>>,
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
+    cancel_tx: Option<watch::Sender<bool>>,
     /// Completed segments (completed.transcript) accumulated in arrival order after
     /// VAD segmentation.
     completed_segments: Vec<String>,
@@ -209,6 +213,7 @@ struct SyncState {
 
 pub struct StepfunRealtimeASR {
     credentials: StepfunRealtimeCredentials,
+    frame_send_timeout: Duration,
     task_spawner: Arc<dyn TaskSpawner>,
     state: ParkingMutex<SyncState>,
     writer: SharedWriter,
@@ -229,6 +234,7 @@ impl StepfunRealtimeASR {
     ) -> Self {
         Self {
             credentials,
+            frame_send_timeout: FRAME_SEND_TIMEOUT,
             task_spawner,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
@@ -237,6 +243,22 @@ impl StepfunRealtimeASR {
             session_finished: Arc::new(Notify::new()),
             partial_sink: ParkingMutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_frame_send_timeout(mut self, timeout: Duration) -> Self {
+        self.frame_send_timeout = timeout;
+        self
+    }
+
+    pub fn audio_coverage(&self) -> (u64, u64) {
+        let st = self.state.lock();
+        (st.bytes_sent_input, st.bytes_received)
+    }
+
+    pub fn is_stream_complete(&self) -> bool {
+        let st = self.state.lock();
+        st.send_error.is_none() && st.tail_written && st.bytes_sent_input == st.bytes_received
     }
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
@@ -272,43 +294,83 @@ impl StepfunRealtimeASR {
 
         let (final_tx, final_rx) = oneshot::channel();
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendItem>();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
         {
             let mut st = self.state.lock();
             *st = SyncState::default();
             st.start = Some(Instant::now());
             st.final_tx = Some(final_tx);
             st.send_tx = Some(send_tx);
+            st.cancel_tx = Some(cancel_tx);
         }
         *self.final_rx.lock() = Some(final_rx);
 
         let writer_for_worker = Arc::clone(&self.writer);
         let weak_self_for_worker = Arc::downgrade(self);
+        let frame_send_timeout = self.frame_send_timeout;
         let task_spawner = Arc::clone(&self.task_spawner);
         task_spawner.spawn(Box::pin(async move {
+            let mut clock = PacedSendClock::new();
             while let Some(SendItem::Audio {
                 chunk,
+                input_bytes,
                 contains_non_silent_audio,
                 written_tx,
             }) = send_rx.recv().await
             {
-                match send_text(&writer_for_worker, append_audio_message(&chunk)).await {
+                let Some(scheduled_start) = clock.wait_slot(&mut cancel_rx).await else {
+                    if let Some(tx) = written_tx {
+                        let _ = tx.send(Err(StepfunASRError::SendFailed(
+                            "session cancelled".to_string(),
+                        )));
+                    }
+                    break;
+                };
+                let is_tail = written_tx.is_some();
+                match send_ws_message_with_timeout(
+                    &writer_for_worker,
+                    Message::Text(append_audio_message(&chunk).into()),
+                    frame_send_timeout,
+                    &mut cancel_rx,
+                )
+                .await
+                {
                     Ok(()) => {
-                        if contains_non_silent_audio {
-                            if let Some(this) = weak_self_for_worker.upgrade() {
+                        if let Some(this) = weak_self_for_worker.upgrade() {
+                            {
+                                let mut st = this.state.lock();
+                                st.bytes_sent_input =
+                                    st.bytes_sent_input.saturating_add(input_bytes);
+                                if is_tail {
+                                    st.tail_written = true;
+                                    st.tail_write_pending = false;
+                                }
+                            }
+                            if contains_non_silent_audio {
                                 this.mark_non_silent_audio_written();
                             }
                         }
                         if let Some(tx) = written_tx {
                             let _ = tx.send(Ok(()));
+                            break;
                         }
+                        clock.mark_sent(
+                            scheduled_start,
+                            input_bytes.max(1) as usize,
+                            BYTES_PER_MS,
+                            2,
+                        );
                     }
-                    Err(error) => {
+                    Err(ws_err) => {
+                        let error = StepfunASRError::SendFailed(
+                            ws_err.into_message("websocket writer not available"),
+                        );
                         if let Some(tx) = written_tx {
-                            let _ = tx.send(Err(error.to_string()));
+                            let _ = tx.send(Err(error.clone()));
                         }
                         log::error!("[stepfun-asr] audio frame send failed: {error}");
                         if let Some(this) = weak_self_for_worker.upgrade() {
-                            this.finish_error(error);
+                            this.record_send_failure(error);
                         }
                         break;
                     }
@@ -394,129 +456,165 @@ impl StepfunRealtimeASR {
     /// Pure-silence sessions (no speech_started at all) are covered by the
     /// FINISH_GRACE backstop and return successfully with empty text.
     pub async fn send_last_frame(self: &Arc<Self>) -> Result<(), StepfunASRError> {
-        let result = tokio::time::timeout(FINAL_RESULT_TIMEOUT, async {
-            let finished = self.session_finished.notified();
-            tokio::pin!(finished);
-            finished.as_mut().enable();
-            let (send_tx, tail, contains_non_silent_audio) = {
-                let mut st = self.state.lock();
-                let send_tx = st.send_tx.clone();
-                if !st.pending_audio.is_empty() {
-                    let pending = std::mem::take(&mut st.pending_audio);
-                    st.audio_scratch.extend_from_slice(&pending);
+        let finished = self.session_finished.notified();
+        tokio::pin!(finished);
+        finished.as_mut().enable();
+        let (written_tx, written_rx) = oneshot::channel();
+        {
+            let mut st = self.state.lock();
+            if let Some(ref err) = st.send_error {
+                return Err(err.clone());
+            }
+            let Some(send_tx) = st.send_tx.take() else {
+                return Err(StepfunASRError::SendFailed(
+                    "audio writer is not available".to_string(),
+                ));
+            };
+            st.ending = true;
+            if !st.pending_audio.is_empty() {
+                let pending = std::mem::take(&mut st.pending_audio);
+                st.audio_scratch.extend_from_slice(&pending);
+            }
+            let full_chunks = drain_audio_chunks(&mut st.audio_scratch);
+            let mut tail = std::mem::take(&mut st.audio_scratch);
+            let tail_input_bytes = tail.len() as u64;
+            // Only the real recording counts as "voiced". The appended silence is a
+            // close-out tool; counting it would push last_non_silent_audio_written_at
+            // past the last completed, making has_audio_after_last_completed
+            // permanently true.
+            let contains_non_silent_audio = contains_non_silent_pcm(&tail);
+            // Merge tail audio and silence frames into one append to save a write.
+            tail.resize(tail.len() + (SILENCE_TAIL_MS * BYTES_PER_MS) as usize, 0);
+            st.finishing = true;
+            st.tail_write_pending = true;
+
+            for chunk in full_chunks {
+                let input_bytes = chunk.len() as u64;
+                let contains_non_silent_audio = contains_non_silent_pcm(&chunk);
+                if send_tx
+                    .send(SendItem::Audio {
+                        chunk,
+                        input_bytes,
+                        contains_non_silent_audio,
+                        written_tx: None,
+                    })
+                    .is_err()
+                {
+                    st.tail_write_pending = false;
+                    return Err(st.send_error.clone().unwrap_or_else(|| {
+                        StepfunASRError::SendFailed("audio writer is not available".to_string())
+                    }));
                 }
-                let mut tail = std::mem::take(&mut st.audio_scratch);
-                // Only the real recording counts as "voiced". The appended silence is a
-                // close-out tool; counting it would push last_non_silent_audio_written_at
-                // past the last completed, making has_audio_after_last_completed
-                // permanently true.
-                let contains_non_silent_audio = contains_non_silent_pcm(&tail);
-                // Merge tail audio and silence frames into one append to save a write.
-                tail.resize(tail.len() + (SILENCE_TAIL_MS * BYTES_PER_MS) as usize, 0);
-                st.finishing = true;
-                st.tail_write_pending = send_tx.is_some();
-                (send_tx, tail, contains_non_silent_audio)
-            };
-            let Some(send_tx) = send_tx else {
-                return Ok(());
-            };
-            let (written_tx, written_rx) = oneshot::channel();
-            send_tx
+            }
+            if send_tx
                 .send(SendItem::Audio {
                     chunk: tail,
+                    input_bytes: tail_input_bytes,
                     contains_non_silent_audio,
                     written_tx: Some(written_tx),
                 })
-                .map_err(|_| {
+                .is_err()
+            {
+                st.tail_write_pending = false;
+                return Err(st.send_error.clone().unwrap_or_else(|| {
                     StepfunASRError::SendFailed("audio writer is not available".to_string())
-                })?;
-            written_rx
-                .await
-                .map_err(|_| {
-                    StepfunASRError::SendFailed(
-                        "audio writer stopped before the tail frame was sent".to_string(),
-                    )
-                })?
-                .map_err(StepfunASRError::SendFailed)?;
-            self.state.lock().tail_write_pending = false;
+                }));
+            }
+        }
 
-            // Grace task: the tail frame is written and the client sends no more audio;
-            // all that remains is waiting for the server to turn the tail audio into
-            // completed events. Once FINISH_GRACE has elapsed with no open segments,
-            // finish.
-            //
-            // Must poll: this used to check once at FINISH_GRACE expiry, and a single
-            // failed check left no second chance — after the tail frame the server may
-            // send no further events at all (when the pause before release already
-            // exceeded the VAD threshold, the last segment's completed arrived before
-            // the tail), so the session idled until FINAL_RESULT_TIMEOUT. Measured at
-            // ~13% of dictations waiting the full 12 seconds this way. (The direct
-            // cause of that 13% was contains_non_silent_pcm treating room tone as
-            // speech, see that function; polling + the hard deadline are the second
-            // line of defense ensuring any finish failure never degrades to 12s again.)
-            //
-            // The finish precondition is still "no open segments, and no unconfirmed
-            // real audio after the last completed" — that guard is correct and must not
-            // be dropped to fix the stall. The real backstop is FINISH_HARD_DEADLINE:
-            // when the server never closes the last segment, worst-case wait is 3s
-            // instead of idling until FINAL_RESULT_TIMEOUT.
-            let weak = Arc::downgrade(self);
-            let task_spawner = Arc::clone(&self.task_spawner);
-            task_spawner.spawn(Box::pin(async move {
-                let since_tail = Instant::now();
-                loop {
-                    tokio::time::sleep(FINISH_POLL_INTERVAL).await;
-                    let Some(this) = weak.upgrade() else {
-                        return;
-                    };
-                    let waited = since_tail.elapsed();
-                    let expired = waited >= FINISH_HARD_DEADLINE;
-                    let should_finish = {
-                        let st = this.state.lock();
-                        if st.session_finished {
-                            return;
-                        }
-                        if expired {
-                            should_force_finish_at_hard_deadline(&st)
-                        } else {
-                            waited >= FINISH_GRACE
-                                && st.open_segments == 0
-                                && !has_audio_after_last_completed(&st)
-                        }
-                    };
-                    if should_finish {
-                        if expired {
-                            log::warn!(
-                                "[stepfun-asr] server did not settle within {FINISH_HARD_DEADLINE:?} \
-                                 (open segments); finishing with what we have"
-                            );
-                        }
-                        this.finish_success();
+        let write_result = match written_rx.await {
+            Ok(inner) => inner,
+            Err(_) => Err(self.state.lock().send_error.clone().unwrap_or_else(|| {
+                StepfunASRError::SendFailed(
+                    "audio writer stopped before the tail frame was sent".to_string(),
+                )
+            })),
+        };
+        if let Err(err) = write_result {
+            self.state.lock().tail_write_pending = false;
+            self.cancel();
+            return Err(err);
+        }
+
+        // Grace task: the tail frame is written and the client sends no more audio;
+        // all that remains is waiting for the server to turn the tail audio into
+        // completed events. Once FINISH_GRACE has elapsed with no open segments,
+        // finish.
+        //
+        // Must poll: this used to check once at FINISH_GRACE expiry, and a single
+        // failed check left no second chance — after the tail frame the server may
+        // send no further events at all (when the pause before release already
+        // exceeded the VAD threshold, the last segment's completed arrived before
+        // the tail), so the session idled until FINAL_RESULT_TIMEOUT. Measured at
+        // ~13% of dictations waiting the full 12 seconds this way. (The direct
+        // cause of that 13% was contains_non_silent_pcm treating room tone as
+        // speech, see that function; polling + the hard deadline are the second
+        // line of defense ensuring any finish failure never degrades to 12s again.)
+        //
+        // The finish precondition is still "no open segments, and no unconfirmed
+        // real audio after the last completed" — that guard is correct and must not
+        // be dropped to fix the stall. The real backstop is FINISH_HARD_DEADLINE:
+        // when the server never closes the last segment, worst-case wait is 3s
+        // instead of idling until FINAL_RESULT_TIMEOUT.
+        let weak = Arc::downgrade(self);
+        let task_spawner = Arc::clone(&self.task_spawner);
+        task_spawner.spawn(Box::pin(async move {
+            let since_tail = Instant::now();
+            loop {
+                tokio::time::sleep(FINISH_POLL_INTERVAL).await;
+                let Some(this) = weak.upgrade() else {
+                    return;
+                };
+                let waited = since_tail.elapsed();
+                let expired = waited >= FINISH_HARD_DEADLINE;
+                let should_finish = {
+                    let st = this.state.lock();
+                    if st.session_finished {
                         return;
                     }
+                    if expired {
+                        should_force_finish_at_hard_deadline(&st)
+                    } else {
+                        waited >= FINISH_GRACE
+                            && st.open_segments == 0
+                            && !has_audio_after_last_completed(&st)
+                    }
+                };
+                if should_finish {
+                    if expired {
+                        log::warn!(
+                            "[stepfun-asr] server did not settle within {FINISH_HARD_DEADLINE:?} \
+                             (open segments); finishing with what we have"
+                        );
+                    }
+                    this.finish_success();
+                    return;
                 }
-            }));
+            }
+        }));
 
+        let result = tokio::time::timeout(FINAL_RESULT_TIMEOUT, async {
             if !self.state.lock().session_finished {
                 finished.await;
             }
-            Ok(())
         })
         .await;
         match result {
-            Ok(inner) => inner,
+            Ok(()) => {
+                if let Some(error) = self.state.lock().send_error.clone() {
+                    return Err(error);
+                }
+                Ok(())
+            }
             Err(_) => {
-                // Timeout backstop: return the partial result if one exists, error
-                // otherwise — same as the disconnect path. Reaching here means the
-                // grace task above failed to finish (it has its own FINISH_HARD_DEADLINE
-                // backstop and normally should not get here), and the user has already
-                // waited the full 12 seconds — this must be logged.
+                // Timeout backstop: keep partial text if one exists for short sessions,
+                // while returning an error so long/incomplete sessions trigger recovery.
                 log::warn!(
                     "[stepfun-asr] finish stalled for {:?}, falling back to partial transcript",
                     FINAL_RESULT_TIMEOUT
                 );
                 self.finish_with_partial_or_error(StepfunASRError::FinalResultTimeout);
-                Ok(())
+                Err(StepfunASRError::FinalResultTimeout)
             }
         }
     }
@@ -539,7 +637,12 @@ impl StepfunRealtimeASR {
         st.send_tx.take();
         st.final_tx.take();
         st.session_finished = true;
+        if let Some(tx) = st.cancel_tx.as_ref() {
+            let _ = tx.send(true);
+        }
         drop(st);
+        self.session_started.notify_waiters();
+        self.session_finished.notify_waiters();
         let writer = Arc::clone(&self.writer);
         self.task_spawner.spawn(Box::pin(async move {
             let _ = close_writer(&writer).await;
@@ -620,9 +723,11 @@ impl StepfunRealtimeASR {
         };
         if let Some(tx) = send_tx {
             for chunk in chunks {
+                let input_bytes = chunk.len() as u64;
                 let _ = tx.send(SendItem::Audio {
                     contains_non_silent_audio: contains_non_silent_pcm(&chunk),
                     chunk,
+                    input_bytes,
                     written_tx: None,
                 });
             }
@@ -724,6 +829,9 @@ impl StepfunRealtimeASR {
             }
             st.session_finished = true;
             st.send_tx.take();
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
             let mut segments = std::mem::take(&mut st.completed_segments);
             // At close, if an interim tail is still un-completed (the silence frames
             // should flush it out; defensive backstop), append it last.
@@ -749,27 +857,51 @@ impl StepfunRealtimeASR {
 
     fn finish_with_partial_or_error(&self, error: StepfunASRError) {
         let has_result = {
-            let st = self.state.lock();
+            let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
             has_transcript(&st)
         };
         if has_result {
-            // Consistent with Bailian / Qwen / Volcengine: on error with an existing
-            // result, fall back to returning it.
+            // Consistent with Bailian / Qwen / Volcengine: on short-session break with an
+            // existing partial, salvage it via await_final_result while keeping
+            // st.send_error for coverage/long-recording checks.
             self.finish_success();
         } else {
             self.finish_error(error);
         }
     }
 
+    fn record_send_failure(&self, error: StepfunASRError) {
+        {
+            let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
+            st.tail_write_pending = false;
+            st.send_tx.take();
+            st.pending_audio.clear();
+            st.audio_scratch.clear();
+        }
+        self.finish_with_partial_or_error(error);
+    }
+
     fn finish_error(&self, error: StepfunASRError) {
         self.fail_session_start(&error.to_string());
         let tx = {
             let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
             if st.session_finished {
                 return;
             }
             st.session_finished = true;
             st.send_tx.take();
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
             st.final_tx.take()
         };
         if let Some(tx) = tx {
@@ -798,7 +930,13 @@ impl AudioConsumer for StepfunRealtimeASR {
         }
         let (send_tx, chunks) = {
             let mut st = self.state.lock();
+            if st.ending {
+                return;
+            }
             st.bytes_received = st.bytes_received.saturating_add(pcm.len() as u64);
+            if st.session_finished || st.send_error.is_some() {
+                return;
+            }
             if !st.session_started {
                 st.pending_audio.extend_from_slice(pcm);
                 return;
@@ -809,11 +947,18 @@ impl AudioConsumer for StepfunRealtimeASR {
         };
         if let Some(tx) = send_tx {
             for chunk in chunks {
-                let _ = tx.send(SendItem::Audio {
-                    contains_non_silent_audio: contains_non_silent_pcm(&chunk),
-                    chunk,
-                    written_tx: None,
-                });
+                let input_bytes = chunk.len() as u64;
+                if tx
+                    .send(SendItem::Audio {
+                        contains_non_silent_audio: contains_non_silent_pcm(&chunk),
+                        chunk,
+                        input_bytes,
+                        written_tx: None,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
             }
         }
     }
@@ -1552,5 +1697,80 @@ mod tests {
             "超时应在 CONNECT_TIMEOUT 量级返回，实际耗时 {:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn audio_coverage_excludes_closeout_silence_and_rejects_broken_stream() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "ws://{}/v1/realtime/asr/stream",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut append_count = 0usize;
+            while let Some(Ok(message)) = ws.next().await {
+                match message {
+                    Message::Text(text) => {
+                        let value: Value = serde_json::from_str(&text).unwrap();
+                        match value["type"].as_str().unwrap_or_default() {
+                            "session.update" => {
+                                ws.send(Message::text(
+                                    json!({ "type": "session.updated" }).to_string(),
+                                ))
+                                .await
+                                .unwrap();
+                            }
+                            "input_audio_buffer.append" => {
+                                append_count += 1;
+                                if append_count == 3 {
+                                    ws.send(Message::text(speech_started_event()))
+                                        .await
+                                        .unwrap();
+                                    ws.send(Message::text(completed_event("覆盖率测试。")))
+                                        .await
+                                        .unwrap();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        });
+
+        let asr = Arc::new(StepfunRealtimeASR::new(StepfunRealtimeCredentials {
+            api_key: "sk-test".to_string(),
+            endpoint,
+            model: DEFAULT_MODEL.to_string(),
+            prompt: None,
+        }));
+        asr.open_session().await.unwrap();
+        let total_input = TARGET_AUDIO_CHUNK_BYTES * 2 + 640;
+        asr.consume_pcm_chunk(&speech_pcm(total_input));
+        asr.send_last_frame().await.unwrap();
+        let transcript = asr.await_final_result().await.unwrap();
+        assert_eq!(transcript.text, "覆盖率测试。");
+        assert!(asr.is_stream_complete());
+        assert_eq!(
+            asr.audio_coverage(),
+            (total_input as u64, total_input as u64)
+        );
+        server.await.unwrap();
+
+        let closed_asr = Arc::new(
+            StepfunRealtimeASR::new(StepfunRealtimeCredentials {
+                api_key: "sk-test".to_string(),
+                endpoint: String::new(),
+                model: DEFAULT_MODEL.to_string(),
+                prompt: None,
+            })
+            .with_frame_send_timeout(Duration::from_millis(80)),
+        );
+        assert!(closed_asr.send_last_frame().await.is_err());
+        assert!(!closed_asr.is_stream_complete());
     }
 }

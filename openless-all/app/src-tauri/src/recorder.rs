@@ -38,7 +38,10 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySe
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use crate::issue1266_debug::{Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation, Outcome as DebugOutcome, Probe as DebugProbe};
+use crate::issue1266_debug::{
+    Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation,
+    Outcome as DebugOutcome, Probe as DebugProbe,
+};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
@@ -86,7 +89,11 @@ pub(crate) fn voice_diagnostic(
         crate::issue1266_debug::legacy(event, outcome);
         let _ = (probe_id, hypothesis_ids, safe);
     }
-    #[cfg(all(target_os = "windows", not(feature = "issue-1266-diagnostics"), not(test)))]
+    #[cfg(all(
+        target_os = "windows",
+        not(feature = "issue-1266-diagnostics"),
+        not(test)
+    ))]
     {
         use std::io::Write;
         static WRITER: OnceLock<Option<SyncSender<serde_json::Value>>> = OnceLock::new();
@@ -144,7 +151,10 @@ pub(crate) fn voice_diagnostic(
             }
         }
     }
-    #[cfg(any(not(target_os = "windows"), all(test, not(feature = "issue-1266-diagnostics"))))]
+    #[cfg(any(
+        not(target_os = "windows"),
+        all(test, not(feature = "issue-1266-diagnostics"))
+    ))]
     let _ = (probe_id, hypothesis_ids, event, outcome, safe);
 }
 
@@ -355,42 +365,112 @@ impl RecorderError {
     }
 }
 
+const MAX_ARCHIVE_QUEUE_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Default)]
+pub(crate) struct WavArchiveStatus {
+    error: Arc<Mutex<Option<String>>>,
+}
+
+impl WavArchiveStatus {
+    fn record_error(&self, message: impl Into<String>) {
+        let mut slot = self.error.lock();
+        if slot.is_none() {
+            *slot = Some(message.into());
+        }
+    }
+
+    pub(crate) fn error(&self) -> Option<String> {
+        self.error.lock().clone()
+    }
+
+    pub(crate) fn is_ok(&self) -> bool {
+        self.error.lock().is_none()
+    }
+}
+
 enum WavArchiveMessage {
     Pcm(Vec<u8>),
     Finish,
 }
 
 /// WAV archive entry point off the realtime audio callback. The callback only copies PCM and
-/// queues every frame without blocking on disk; file writing, seek, and sync run
-/// on a dedicated thread. A temporary disk backlog must not punch holes in a
-/// recoverable long recording.
+/// queues frames within a bounded memory budget without blocking live ASR; file writing,
+/// seek, and sync run on a dedicated thread and latch any write or overflow error.
 struct WavArchiveWriter {
     sender: Sender<WavArchiveMessage>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
     queue_full_warned: AtomicBool,
+    queued_bytes: Arc<AtomicUsize>,
+    max_queue_bytes: usize,
+    status: WavArchiveStatus,
 }
 
 impl WavArchiveWriter {
     fn create(path: &Path) -> std::io::Result<Self> {
+        Self::create_with_max_queue(path, MAX_ARCHIVE_QUEUE_BYTES)
+    }
+
+    fn create_with_max_queue(path: &Path, max_queue_bytes: usize) -> std::io::Result<Self> {
         let archiver = WavArchiver::create(path)?;
         let (sender, receiver) = channel::<WavArchiveMessage>();
+        let queued_bytes = Arc::new(AtomicUsize::new(0));
+        let worker_queued = Arc::clone(&queued_bytes);
+        let status = WavArchiveStatus::default();
+        let worker_status = status.clone();
         let join_handle = thread::Builder::new()
             .name("openless-wav-archive".into())
-            .spawn(move || run_wav_archive_writer(archiver, receiver))?;
+            .spawn(move || {
+                run_wav_archive_writer(archiver, receiver, worker_queued, worker_status);
+            })?;
         Ok(Self {
             sender,
             join_handle: Mutex::new(Some(join_handle)),
             queue_full_warned: AtomicBool::new(false),
+            queued_bytes,
+            max_queue_bytes,
+            status,
         })
     }
 
+    fn status(&self) -> WavArchiveStatus {
+        self.status.clone()
+    }
+
     fn append(&self, pcm_bytes: &[u8]) {
-        match self.sender.send(WavArchiveMessage::Pcm(pcm_bytes.to_vec())) {
-            Ok(()) => {}
-            Err(_) => {
-                if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
-                    log::warn!("[recorder] wav archive writer stopped before PCM was queued");
-                }
+        if pcm_bytes.is_empty() || !self.status.is_ok() {
+            return;
+        }
+        // Reserve bounded queue budget atomically so slow disk writes never block audio callbacks.
+        let reserved =
+            self.queued_bytes
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    current
+                        .checked_add(pcm_bytes.len())
+                        .filter(|&next| next <= self.max_queue_bytes)
+                });
+        if reserved.is_err() {
+            self.status
+                .record_error("wav archive queue exceeded 32 MiB limit");
+            if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    "[recorder] wav archive queue full ({} bytes limit); dropping further archive frames",
+                    self.max_queue_bytes
+                );
+            }
+            return;
+        }
+        if self
+            .sender
+            .send(WavArchiveMessage::Pcm(pcm_bytes.to_vec()))
+            .is_err()
+        {
+            self.queued_bytes
+                .fetch_sub(pcm_bytes.len(), Ordering::AcqRel);
+            self.status
+                .record_error("wav archive writer stopped before PCM was queued");
+            if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
+                log::warn!("[recorder] wav archive writer stopped before PCM was queued");
             }
         }
     }
@@ -402,21 +482,48 @@ impl WavArchiveWriter {
     fn finish_observed(&self, parent: Option<DebugOperation>) {
         let operation = DebugOperation::child(DebugProbe::P5, parent);
         let _scope = operation.scope();
-        operation.record(DebugEvent::ArchiveSend, DebugOutcome::Observed,
-            DebugFacts { kind: DebugKind::Archive, ..DebugFacts::default() });
+        operation.record(
+            DebugEvent::ArchiveSend,
+            DebugOutcome::Observed,
+            DebugFacts {
+                kind: DebugKind::Archive,
+                ..DebugFacts::default()
+            },
+        );
         let _ = self.sender.send(WavArchiveMessage::Finish);
         operation.mark(DebugEvent::ArchiveSent);
         operation.mark(DebugEvent::JoinLock);
         if let Some(handle) = self.join_handle.lock().take() {
             operation.mark(DebugEvent::JoinEntered);
             let result = handle.join();
-            operation.record(DebugEvent::JoinReturned,
-                if result.is_ok() { DebugOutcome::Ok } else { DebugOutcome::Error }, DebugFacts::default());
+            operation.record(
+                DebugEvent::JoinReturned,
+                if result.is_ok() {
+                    DebugOutcome::Ok
+                } else {
+                    DebugOutcome::Error
+                },
+                DebugFacts::default(),
+            );
             if let Err(error) = result {
+                self.status
+                    .record_error(format!("wav archive writer join failed: {error:?}"));
                 log::warn!("[recorder] wav archive writer join failed: {error:?}");
             }
         }
-        operation.record(DebugEvent::ArchiveReturned, DebugOutcome::Returned, DebugFacts::default());
+        operation.record(
+            DebugEvent::ArchiveReturned,
+            DebugOutcome::Returned,
+            DebugFacts::default(),
+        );
+    }
+}
+
+impl Drop for WavArchiveWriter {
+    fn drop(&mut self) {
+        if self.join_handle.lock().is_some() {
+            self.finish();
+        }
     }
 }
 
@@ -489,6 +596,7 @@ struct ForwardTarget {
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     archive: Option<Arc<WavArchiveWriter>>,
+    raw_archive: Option<Arc<WavArchiveWriter>>,
     write_processed: bool,
 }
 
@@ -542,6 +650,7 @@ impl CaptureSink {
     ) -> Result<(), RecorderError> {
         // 只要处理前时，主档案由 DSP 线程写原始 PCM，这里就不能再写处理后。
         let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
+        let raw_archive = raw_tap.as_ref().and_then(|tap| tap.raw_writer.clone());
         let mut tap_slot = self.raw_tap.lock();
         let _delivery = self.delivery_gate.lock();
         *tap_slot = raw_tap;
@@ -563,6 +672,7 @@ impl CaptureSink {
                 consumer,
                 level_handler,
                 archive,
+                raw_archive,
                 write_processed,
             });
             prefix
@@ -621,6 +731,7 @@ impl AudioConsumer for CaptureSink {
                     consumer: Arc::clone(&target.consumer),
                     level_handler: Arc::clone(&target.level_handler),
                     archive: target.archive.clone(),
+                    raw_archive: target.raw_archive.clone(),
                     write_processed: target.write_processed,
                 }),
                 CaptureSinkState::Discarded => None,
@@ -907,6 +1018,7 @@ impl WarmCaptureSink {
         let mut tap_slot = self.raw_tap.lock();
         let _delivery = self.delivery_gate.lock();
         let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
+        let raw_archive = raw_tap.as_ref().and_then(|tap| tap.raw_writer.clone());
         *tap_slot = raw_tap;
         let (prefix, staged_level) = {
             let mut state = self.state.lock();
@@ -928,6 +1040,7 @@ impl WarmCaptureSink {
                     consumer,
                     level_handler,
                     archive,
+                    raw_archive,
                     write_processed,
                 }),
             );
@@ -1029,18 +1142,21 @@ impl WarmCaptureSink {
     }
 
     fn clear(&self) -> Vec<Arc<WavArchiveWriter>> {
+        let mut tap_slot = self.raw_tap.lock();
         let _delivery = self.delivery_gate.lock();
+        *tap_slot = None;
         let mut state = self.state.lock();
         let WarmCaptureSinkState::Ring { pcm, claims } = &mut *state;
         pcm.clear();
         let claims = std::mem::take(claims);
-        claims
-            .into_values()
-            .filter_map(|claim| match claim {
-                WarmCaptureClaim::Staging { .. } => None,
-                WarmCaptureClaim::Promoted(target) => target.archive,
-            })
-            .collect()
+        let mut archives = Vec::new();
+        for claim in claims.into_values() {
+            if let WarmCaptureClaim::Promoted(target) = claim {
+                archives.extend(target.archive);
+                archives.extend(target.raw_archive);
+            }
+        }
+        archives
     }
 }
 
@@ -1136,6 +1252,7 @@ pub(crate) struct WarmStagedRecorder {
 pub(crate) struct WarmActiveCapture {
     hub: Arc<WarmCaptureHub>,
     press_id: u64,
+    archive_status: Option<WavArchiveStatus>,
 }
 
 impl WarmStagedRecorder {
@@ -1176,10 +1293,11 @@ impl WarmStagedRecorder {
             });
         let raw_tap = Some(Arc::new(RawTap::new(
             archive_writer.clone(),
-            raw_writer,
+            raw_writer.clone(),
             archives.write_processed,
         )));
         let archive_active = archive_writer.is_some();
+        let archive_status = archive_writer.as_ref().map(|writer| writer.status());
         let result = self.hub.promote(
             self.press_id,
             consumer,
@@ -1193,8 +1311,16 @@ impl WarmStagedRecorder {
                 if let Some(archive) = archive_writer {
                     archive.finish();
                 }
+                if let Some(raw) = raw_writer {
+                    raw.finish();
+                }
                 if let Some(path) = archive_path {
                     let _ = std::fs::remove_file(path);
+                }
+                if archives.processed.is_some() {
+                    if let Some(raw_path) = archives.raw.as_ref() {
+                        let _ = std::fs::remove_file(raw_path);
+                    }
                 }
                 self.consumed = true;
                 return Err(error);
@@ -1205,6 +1331,7 @@ impl WarmStagedRecorder {
             WarmActiveCapture {
                 hub: Arc::clone(&self.hub),
                 press_id: self.press_id,
+                archive_status,
             },
             runtime_errors,
             archive_active,
@@ -1227,6 +1354,10 @@ impl Drop for WarmStagedRecorder {
 }
 
 impl WarmActiveCapture {
+    pub(crate) fn archive_status(&self) -> Option<WavArchiveStatus> {
+        self.archive_status.clone()
+    }
+
     pub(crate) fn stop(self) {
         self.hub.release_claim(self.press_id);
     }
@@ -1370,7 +1501,11 @@ impl WarmCaptureHub {
         }
         let device = self.device_name.lock().clone();
         let processing = *self.processing_config.lock();
-        self.configure_locked(self.standby_requested.load(Ordering::Acquire), device, processing);
+        self.configure_locked(
+            self.standby_requested.load(Ordering::Acquire),
+            device,
+            processing,
+        );
     }
 
     pub(crate) fn configure(
@@ -1637,7 +1772,9 @@ impl WarmCaptureHub {
         loop {
             let lifecycle = self.lifecycle_gate.lock();
             if self.standby_policy.lock().1 {
-                return Err(RecorderError::EngineFailed("standby capture is paused".into()));
+                return Err(RecorderError::EngineFailed(
+                    "standby capture is paused".into(),
+                ));
             }
             let desired_processing = processing.unwrap_or(*self.processing_config.lock());
             if *self.device_name.lock() != device_name
@@ -1681,8 +1818,12 @@ impl WarmCaptureHub {
             if let Some(archive) = target.archive {
                 archive.finish();
             }
+            if let Some(raw_archive) = target.raw_archive {
+                raw_archive.finish();
+            }
         }
         if !self.sink.has_promoted_claims() {
+            *self.sink.raw_tap.lock() = None;
             let pending_configuration = self.pending_configuration.lock().take();
             if let Some((enabled, device_name, processing)) = pending_configuration {
                 self.configure_locked(enabled, device_name, processing);
@@ -1816,12 +1957,25 @@ pub(crate) fn warm_capture_hub() -> Arc<WarmCaptureHub> {
     Arc::clone(WARM_CAPTURE_HUB.get_or_init(WarmCaptureHub::new))
 }
 
-fn run_wav_archive_writer(mut archiver: WavArchiver, receiver: Receiver<WavArchiveMessage>) {
+fn run_wav_archive_writer(
+    mut archiver: WavArchiver,
+    receiver: Receiver<WavArchiveMessage>,
+    queued_bytes: Arc<AtomicUsize>,
+    status: WavArchiveStatus,
+) {
     while let Ok(message) = receiver.recv() {
         match message {
-            WavArchiveMessage::Pcm(pcm_bytes) => archiver.append(&pcm_bytes),
+            WavArchiveMessage::Pcm(pcm_bytes) => {
+                queued_bytes.fetch_sub(pcm_bytes.len(), Ordering::AcqRel);
+                if let Err(error) = archiver.append(&pcm_bytes) {
+                    status.record_error(error);
+                }
+            }
             WavArchiveMessage::Finish => break,
         }
+    }
+    if let Err(error) = archiver.finalize() {
+        status.record_error(error);
     }
 }
 
@@ -1830,6 +1984,7 @@ pub struct Recorder {
     stop_flag: Arc<AtomicBool>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
     archive_writer: Option<Arc<WavArchiveWriter>>,
+    raw_archive_writer: Option<Arc<WavArchiveWriter>>,
     state: Arc<StreamState>,
 }
 
@@ -1968,6 +2123,9 @@ impl Recorder {
                 if let Some(archive) = archive_writer.as_ref() {
                     archive.finish();
                 }
+                if let Some(raw) = raw_writer.as_ref() {
+                    raw.finish();
+                }
                 return Err(RecorderError::EngineFailed(format!(
                     "spawn audio thread: {error}"
                 )));
@@ -1982,6 +2140,9 @@ impl Recorder {
                 if let Some(archive) = archive_writer.as_ref() {
                     archive.finish();
                 }
+                if let Some(raw) = raw_writer.as_ref() {
+                    raw.finish();
+                }
                 return Err(RecorderError::EngineFailed(format!(
                     "audio thread vanished: {error}"
                 )));
@@ -1992,6 +2153,9 @@ impl Recorder {
             if let Some(archive) = archive_writer.as_ref() {
                 archive.finish();
             }
+            if let Some(raw) = raw_writer.as_ref() {
+                raw.finish();
+            }
             return Err(error);
         }
 
@@ -2000,11 +2164,16 @@ impl Recorder {
                 stop_flag,
                 join_handle: Mutex::new(Some(join_handle)),
                 archive_writer,
+                raw_archive_writer: raw_writer,
                 state,
             },
             runtime_error_rx,
             archive_active,
         ))
+    }
+
+    pub(crate) fn archive_status(&self) -> Option<WavArchiveStatus> {
+        self.archive_writer.as_ref().map(|writer| writer.status())
     }
 
     pub(crate) fn drain_pending_audio(&self) {
@@ -2024,12 +2193,19 @@ impl Recorder {
     pub fn stop(self) {
         let operation = DebugOperation::new(DebugProbe::P5);
         let _scope = operation.scope();
-        operation.record(DebugEvent::Entered, DebugOutcome::Observed,
-            DebugFacts { kind: DebugKind::Recorder, ..DebugFacts::default() });
+        operation.record(
+            DebugEvent::Entered,
+            DebugOutcome::Observed,
+            DebugFacts {
+                kind: DebugKind::Recorder,
+                ..DebugFacts::default()
+            },
+        );
         let Recorder {
             stop_flag,
             join_handle,
             archive_writer,
+            raw_archive_writer,
             state,
         } = self;
         operation.mark(DebugEvent::ProcessorLock);
@@ -2041,8 +2217,15 @@ impl Recorder {
         if let Some(handle) = join_handle.lock().take() {
             operation.mark(DebugEvent::JoinEntered);
             let result = handle.join();
-            operation.record(DebugEvent::JoinReturned,
-                if result.is_ok() { DebugOutcome::Ok } else { DebugOutcome::Error }, DebugFacts::default());
+            operation.record(
+                DebugEvent::JoinReturned,
+                if result.is_ok() {
+                    DebugOutcome::Ok
+                } else {
+                    DebugOutcome::Error
+                },
+                DebugFacts::default(),
+            );
             if let Err(err) = result {
                 log::warn!("recorder 线程 join 失败: {:?}", err);
             }
@@ -2051,7 +2234,14 @@ impl Recorder {
             operation.mark(DebugEvent::ArchiveFinish);
             archive.finish_observed(Some(operation));
         }
-        operation.record(DebugEvent::Returned, DebugOutcome::Returned, DebugFacts::default());
+        if let Some(raw_archive) = raw_archive_writer {
+            raw_archive.finish();
+        }
+        operation.record(
+            DebugEvent::Returned,
+            DebugOutcome::Returned,
+            DebugFacts::default(),
+        );
     }
 }
 
@@ -2132,7 +2322,7 @@ impl StagedRecorder {
             });
         let raw_tap = Some(Arc::new(RawTap::new(
             archive_writer.clone(),
-            raw_writer,
+            raw_writer.clone(),
             archives.write_processed,
         )));
         let archive_active = archive_writer.is_some();
@@ -2143,8 +2333,16 @@ impl StagedRecorder {
             if let Some(archive) = archive_writer {
                 archive.finish();
             }
+            if let Some(raw) = raw_writer {
+                raw.finish();
+            }
             if let Some(path) = archive_path {
                 let _ = std::fs::remove_file(path);
+            }
+            if archives.processed.is_some() {
+                if let Some(raw_path) = archives.raw.as_ref() {
+                    let _ = std::fs::remove_file(raw_path);
+                }
             }
             if let Some(recorder) = self.recorder.take() {
                 recorder.stop();
@@ -2155,6 +2353,7 @@ impl StagedRecorder {
             RecorderError::EngineFailed("provisional recorder was already stopped".into())
         })?;
         recorder.archive_writer = archive_writer;
+        recorder.raw_archive_writer = raw_writer;
         let runtime_errors = self.runtime_errors.take().ok_or_else(|| {
             RecorderError::EngineFailed(
                 "provisional recorder runtime channel was unavailable".into(),
@@ -2493,7 +2692,13 @@ fn run_audio_thread(
                                 "[recorder] watchdog: 录音回调已停止 {} 秒，触发错误恢复",
                                 elapsed.as_secs()
                             );
-                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "callback_silent", "{}");
+                            state_for_watchdog.diagnostics.event(
+                                "P4",
+                                "[\"H4\"]",
+                                "watchdog_fault",
+                                "callback_silent",
+                                "{}",
+                            );
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音回调静默停止 {} 秒", elapsed.as_secs()),
@@ -2509,7 +2714,13 @@ fn run_audio_thread(
                                 "[recorder] watchdog: {} 秒内未收到首次回调，触发错误恢复",
                                 elapsed.as_secs()
                             );
-                            state_for_watchdog.diagnostics.event("P4", "[\"H4\"]", "watchdog_fault", "first_callback_timeout", "{}");
+                            state_for_watchdog.diagnostics.event(
+                                "P4",
+                                "[\"H4\"]",
+                                "watchdog_fault",
+                                "first_callback_timeout",
+                                "{}",
+                            );
                             let _ =
                                 runtime_error_tx_for_watchdog.send(RecorderError::EngineFailed(
                                     format!("录音启动后 {} 秒内未收到回调", elapsed.as_secs()),
@@ -3528,12 +3739,14 @@ fn update_peak(slot: &AtomicUsize, current: f32) {
 
 /// Simple append-only writer for 16 kHz / mono / 16-bit PCM WAV.
 /// Writes a placeholder header with data_size=0 at construction, appends i16 PCM bytes on each
-/// append, and on Drop seeks back to 0 to backfill the RIFF / data length fields — no external
-/// finalize call site required.
+/// append, checkpoints header sizes periodically, and finalizes/flushes RIFF and data lengths on
+/// finalize or Drop while latching the first write/size error.
 struct WavArchiver {
     file: std::fs::File,
-    bytes_written: u32,
-    last_checkpoint_bytes: u32,
+    data_bytes: u64,
+    last_checkpoint_bytes: u64,
+    failed: Option<String>,
+    finalized: bool,
 }
 
 impl WavArchiver {
@@ -3546,52 +3759,93 @@ impl WavArchiver {
         file.write_all(&build_wav_header(0))?;
         Ok(Self {
             file,
-            bytes_written: 0,
+            data_bytes: 0,
             last_checkpoint_bytes: 0,
+            failed: None,
+            finalized: false,
         })
     }
 
-    fn append(&mut self, pcm_bytes: &[u8]) {
+    fn append(&mut self, pcm_bytes: &[u8]) -> Result<(), String> {
+        if let Some(error) = &self.failed {
+            return Err(error.clone());
+        }
         use std::io::Write;
-        if self.file.write_all(pcm_bytes).is_ok() {
-            self.bytes_written = self
-                .bytes_written
-                .saturating_add(pcm_bytes.len().min(u32::MAX as usize) as u32);
-            // Keep the header usable during a long meeting. Drop still does
-            // the final sync, but a process kill should not leave a WAV with
-            // data_size=0 for the entire recording.
-            const CHECKPOINT_INTERVAL_BYTES: u32 = 160_000;
-            if self
-                .bytes_written
-                .saturating_sub(self.last_checkpoint_bytes)
-                >= CHECKPOINT_INTERVAL_BYTES
-            {
-                self.checkpoint_header();
+        if let Err(error) = self.file.write_all(pcm_bytes) {
+            // Roll back any partial frame write so the WAV ends cleanly on the last good boundary.
+            let _ = self.file.set_len(44 + self.data_bytes);
+            let _ = self.file.sync_data();
+            let message = format!("wav archive write failed: {error}");
+            self.failed = Some(message.clone());
+            return Err(message);
+        }
+        self.data_bytes = self.data_bytes.saturating_add(pcm_bytes.len() as u64);
+        // Keep the header usable during a long meeting. finalize()/Drop still does
+        // the final sync, but a process kill should not leave data_size=0.
+        const CHECKPOINT_INTERVAL_BYTES: u64 = 160_000;
+        if self.data_bytes.saturating_sub(self.last_checkpoint_bytes) >= CHECKPOINT_INTERVAL_BYTES {
+            self.checkpoint_header()?;
+        }
+        Ok(())
+    }
+
+    fn checkpoint_header(&mut self) -> Result<(), String> {
+        if let Some(error) = &self.failed {
+            return Err(error.clone());
+        }
+        let Some(header) = checked_wav_header(self.data_bytes) else {
+            let message = "wav archive exceeds 4 GiB RIFF limit".to_string();
+            self.failed = Some(message.clone());
+            return Err(message);
+        };
+        use std::io::{Seek, SeekFrom, Write};
+        let result = (|| -> std::io::Result<()> {
+            self.file.seek(SeekFrom::Start(0))?;
+            self.file.write_all(&header)?;
+            self.file.seek(SeekFrom::Start(44 + self.data_bytes))?;
+            self.file.sync_data()?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.last_checkpoint_bytes = self.data_bytes;
+                Ok(())
+            }
+            Err(error) => {
+                let message = format!("wav archive header update failed: {error}");
+                self.failed = Some(message.clone());
+                Err(message)
             }
         }
     }
 
-    fn checkpoint_header(&mut self) {
-        use std::io::{Seek, SeekFrom, Write};
-        if self.file.seek(SeekFrom::Start(0)).is_ok() {
-            if self
-                .file
-                .write_all(&build_wav_header(self.bytes_written))
-                .is_ok()
-            {
-                let _ = self.file.seek(SeekFrom::End(0));
-                let _ = self.file.sync_data();
-                self.last_checkpoint_bytes = self.bytes_written;
-            }
+    fn finalize(&mut self) -> Result<(), String> {
+        if self.finalized {
+            return self.failed.clone().map_or(Ok(()), Err);
         }
+        self.finalized = true;
+        self.checkpoint_header()?;
+        if let Err(error) = self.file.sync_all() {
+            let message = format!("wav archive sync failed: {error}");
+            self.failed = Some(message.clone());
+            return Err(message);
+        }
+        Ok(())
     }
 }
 
 impl Drop for WavArchiver {
     fn drop(&mut self) {
-        self.checkpoint_header();
-        let _ = self.file.sync_all();
+        if !self.finalized && self.failed.is_none() && self.checkpoint_header().is_ok() {
+            let _ = self.file.sync_all();
+        }
     }
+}
+
+fn checked_wav_header(data_bytes: u64) -> Option<[u8; 44]> {
+    let data_size = u32::try_from(data_bytes).ok()?;
+    let _total_size = data_size.checked_add(36)?;
+    Some(build_wav_header(data_size))
 }
 
 fn build_wav_header(data_size: u32) -> [u8; 44] {
@@ -3634,14 +3888,21 @@ mod tests {
         let (sender, receiver) = channel();
         let start = Arc::new(std::sync::Barrier::new(2));
         let worker_start = start.clone();
+        let queued_bytes = Arc::new(AtomicUsize::new(0));
+        let worker_queued = Arc::clone(&queued_bytes);
+        let status = WavArchiveStatus::default();
+        let worker_status = status.clone();
         let join_handle = thread::spawn(move || {
             worker_start.wait();
-            run_wav_archive_writer(archiver, receiver);
+            run_wav_archive_writer(archiver, receiver, worker_queued, worker_status);
         });
         let writer = WavArchiveWriter {
             sender,
             join_handle: Mutex::new(Some(join_handle)),
             queue_full_warned: AtomicBool::new(false),
+            queued_bytes,
+            max_queue_bytes: MAX_ARCHIVE_QUEUE_BYTES,
+            status,
         };
         let mut expected = Vec::new();
         for index in 0..1024_u16 {
@@ -3769,14 +4030,26 @@ mod tests {
         let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
         let consumer = Arc::new(RecordingConsumer::default());
         let (worker, sender) = AudioProcessingWorker::start_with_targets(
-            Default::default(), consumer.clone(), Arc::new(|_| {}), Some(writer.clone()), None,
-            Arc::new(StreamState::new()), false, None, None,
-        ).unwrap();
+            Default::default(),
+            consumer.clone(),
+            Arc::new(|_| {}),
+            Some(writer.clone()),
+            None,
+            Arc::new(StreamState::new()),
+            false,
+            None,
+            None,
+        )
+        .unwrap();
         for _ in 0..2 {
-            sender.send(AudioProcessingMessage::Frame(RawAudioFrame {
-                captured_at: std::time::Instant::now(), samples: vec![0.3; 1001],
-                channels: 1, input_sample_rate: 44_100,
-            })).unwrap();
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: std::time::Instant::now(),
+                    samples: vec![0.3; 1001],
+                    channels: 1,
+                    input_sample_rate: 44_100,
+                }))
+                .unwrap();
             let (done, ack) = channel();
             sender.send(AudioProcessingMessage::Flush(done)).unwrap();
             ack.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
@@ -3928,41 +4201,69 @@ mod tests {
 
     #[test]
     fn playback_reference_uses_capture_times_after_an_early_start() {
-        let epoch=std::time::Instant::now();
-        let state=Arc::new(StreamState::new());
-        let reference=Arc::new(openless_core::ReferenceAudioBuffer::new(16_000));
-        reference.push_interleaved_at(&[0.9;160],1,epoch);
-        reference.push_interleaved_at(&[0.0;1280],1,epoch+std::time::Duration::from_millis(10));
-        *state.reference.lock()=Some(reference);
-        let consumer=Arc::new(RecordingConsumer::default());
-        let (worker,sender)=AudioProcessingWorker::start(
-            openless_core::AudioProcessingConfig {echo_cancellation_enabled:true,..Default::default()},
-            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,Arc::new(|_|{}),None,state,
-        ).unwrap();
+        let epoch = std::time::Instant::now();
+        let state = Arc::new(StreamState::new());
+        let reference = Arc::new(openless_core::ReferenceAudioBuffer::new(16_000));
+        reference.push_interleaved_at(&[0.9; 160], 1, epoch);
+        reference.push_interleaved_at(
+            &[0.0; 1280],
+            1,
+            epoch + std::time::Duration::from_millis(10),
+        );
+        *state.reference.lock() = Some(reference);
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                echo_cancellation_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            None,
+            state,
+        )
+        .unwrap();
         for index in 1..=8 {
-            sender.send(AudioProcessingMessage::Frame(RawAudioFrame {
-                captured_at:epoch+std::time::Duration::from_millis(index*10),samples:vec![0.25;160],channels:1,input_sample_rate:16_000,
-            })).unwrap();
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: epoch + std::time::Duration::from_millis(index * 10),
+                    samples: vec![0.25; 160],
+                    channels: 1,
+                    input_sample_rate: 16_000,
+                }))
+                .unwrap();
         }
-        drop(sender);worker.finish();
-        let chunks=consumer.chunks.lock().unwrap();assert_eq!(chunks.len(),8);
-        assert!(chunks.iter().all(|chunk|decode_i16_le(chunk)==vec![8191;160]));
+        drop(sender);
+        worker.finish();
+        let chunks = consumer.chunks.lock().unwrap();
+        assert_eq!(chunks.len(), 8);
+        assert!(chunks
+            .iter()
+            .all(|chunk| decode_i16_le(chunk) == vec![8191; 160]));
     }
 
     #[test]
     fn diagnostics_and_microphone_errors_stay_capture_scoped() {
-        let first=StreamState::new();let second=StreamState::new();
-        assert_ne!(first.diagnostics.run_id,second.diagnostics.run_id);
-        let (sender,receiver)=channel();
-        first.accepting_audio.store(false,Ordering::Release);
-        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
-        assert!(receiver.try_recv().is_err());assert_eq!(first.diagnostics.microphone.errors.load(Ordering::Relaxed),0);
-        first.accepting_audio.store(true,Ordering::Release);
-        handle_microphone_stream_error(&first,cpal::StreamError::DeviceNotAvailable,&sender);
-        assert!(matches!(receiver.try_recv(),Ok(RecorderError::EngineFailed(_))));
-        assert_eq!(first.diagnostics.microphone.record_callback(),(1,true));
-        assert_eq!(first.diagnostics.reference.record_callback(),(1,false));
-        assert_eq!(second.diagnostics.microphone.record_callback(),(1,false));
+        let first = StreamState::new();
+        let second = StreamState::new();
+        assert_ne!(first.diagnostics.run_id, second.diagnostics.run_id);
+        let (sender, receiver) = channel();
+        first.accepting_audio.store(false, Ordering::Release);
+        handle_microphone_stream_error(&first, cpal::StreamError::DeviceNotAvailable, &sender);
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            first.diagnostics.microphone.errors.load(Ordering::Relaxed),
+            0
+        );
+        first.accepting_audio.store(true, Ordering::Release);
+        handle_microphone_stream_error(&first, cpal::StreamError::DeviceNotAvailable, &sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(RecorderError::EngineFailed(_))
+        ));
+        assert_eq!(first.diagnostics.microphone.record_callback(), (1, true));
+        assert_eq!(first.diagnostics.reference.record_callback(), (1, false));
+        assert_eq!(second.diagnostics.microphone.record_callback(), (1, false));
     }
 
     #[test]
@@ -4189,7 +4490,9 @@ mod tests {
         assert!(hub.recorder.lock().is_none());
         hub.set_capture_paused(0, false);
         assert!(hub.standby_policy.lock().1);
-        assert!(hub.arm(99, None, openless_core::AudioProcessingConfig::default()).is_err());
+        assert!(hub
+            .arm(99, None, openless_core::AudioProcessingConfig::default())
+            .is_err());
     }
 
     #[test]
@@ -4198,14 +4501,18 @@ mod tests {
         let key = voice_capture_key(9);
         let consumer = Arc::new(RecordingConsumer::default());
         let body = [0x00, 0x40].repeat(160);
-        hub.sink.arm_with_limit(key, false, STAGED_CAPTURE_MAX_BYTES).unwrap();
+        hub.sink
+            .arm_with_limit(key, false, STAGED_CAPTURE_MAX_BYTES)
+            .unwrap();
         hub.sink.consume_pcm_chunk(&body);
         hub.enabled.store(true, Ordering::Release);
         hub.set_capture_paused(1, true);
         hub.configure(true, None, openless_core::AudioProcessingConfig::default());
         assert!(hub.sink.staging_claim_ids().contains(&key));
         assert!(!hub.runtime_fallback_claims.lock().contains(&key));
-        hub.sink.promote(key, consumer.clone(), Arc::new(|_| {}), None, None).unwrap();
+        hub.sink
+            .promote(key, consumer.clone(), Arc::new(|_| {}), None, None)
+            .unwrap();
         assert_eq!(consumer.chunks.lock().unwrap().concat(), body);
         hub.release_claim(key);
         assert!(!hub.enabled.load(Ordering::Acquire));
@@ -4216,8 +4523,12 @@ mod tests {
     fn linked_pause_preserves_promoted_recording_until_its_claim_releases() {
         let hub = WarmCaptureHub::new();
         let consumer = Arc::new(RecordingConsumer::default());
-        hub.sink.arm_with_limit(7, false, STAGED_CAPTURE_MAX_BYTES).unwrap();
-        hub.sink.promote(7, consumer, Arc::new(|_| {}), None, None).unwrap();
+        hub.sink
+            .arm_with_limit(7, false, STAGED_CAPTURE_MAX_BYTES)
+            .unwrap();
+        hub.sink
+            .promote(7, consumer, Arc::new(|_| {}), None, None)
+            .unwrap();
         hub.enabled.store(true, Ordering::Release);
         hub.set_capture_paused(1, true);
         assert!(hub.sink.has_promoted_claims());
@@ -4230,7 +4541,10 @@ mod tests {
 
     #[test]
     fn saved_default_microphone_skips_the_full_input_list() {
-        assert!(default_input_matches_preference(None, Some("MacBook Air麦克风")));
+        assert!(default_input_matches_preference(
+            None,
+            Some("MacBook Air麦克风")
+        ));
         assert!(default_input_matches_preference(
             Some(" MacBook Air麦克风 "),
             Some("MacBook Air麦克风")
@@ -4798,5 +5112,81 @@ mod tests {
             hub.end_cold_capture();
             assert!(hub.pending_configuration.lock().is_none());
         }
+    }
+
+    #[test]
+    fn wav_archive_queue_overflow_never_blocks_and_latches_status() {
+        let path = archive_test_path("openless-archive-overflow");
+        let archiver = WavArchiver::create(&path).unwrap();
+        let (sender, receiver) = channel();
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let worker_start = Arc::clone(&start);
+        let queued_bytes = Arc::new(AtomicUsize::new(0));
+        let worker_queued = Arc::clone(&queued_bytes);
+        let status = WavArchiveStatus::default();
+        let worker_status = status.clone();
+        let join_handle = thread::spawn(move || {
+            worker_start.wait();
+            run_wav_archive_writer(archiver, receiver, worker_queued, worker_status);
+        });
+        let writer = WavArchiveWriter {
+            sender,
+            join_handle: Mutex::new(Some(join_handle)),
+            queue_full_warned: AtomicBool::new(false),
+            queued_bytes,
+            max_queue_bytes: 1024,
+            status: status.clone(),
+        };
+
+        let first = [1u8, 2u8].repeat(512);
+        writer.append(&first);
+        assert!(status.is_ok());
+
+        // Exceeding the bounded queue drops further archive chunks without blocking and latches an error.
+        writer.append(&[3, 4]);
+        assert!(!status.is_ok());
+        assert!(status.error().is_some());
+        writer.append(&[5, 6]);
+
+        start.wait();
+        writer.finish();
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], first.as_slice());
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 1024);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wav_archiver_write_failure_truncates_partial_frame_and_latches_error() {
+        let path = archive_test_path("openless-archiver-fail");
+        {
+            let mut archiver = WavArchiver::create(&path).unwrap();
+            archiver.append(&[1, 2, 3, 4]).unwrap();
+            // Swap in a read-only handle so the next write fails cleanly across platforms.
+            archiver.file = std::fs::File::open(&path).unwrap();
+            let err = archiver.append(&[5, 6, 7, 8]).unwrap_err();
+            assert!(!err.is_empty());
+            assert_eq!(archiver.append(&[9, 10]).unwrap_err(), err);
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), 48);
+        }
+        assert!(checked_wav_header(u64::from(u32::MAX) - 35).is_none());
+        assert!(checked_wav_header(u64::from(u32::MAX) - 36).is_some());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wav_archive_writer_drop_finishes_and_backfills_wav_header() {
+        let path = archive_test_path("openless-archive-drop");
+        let status = {
+            let writer = WavArchiveWriter::create(&path).unwrap();
+            let status = writer.status();
+            writer.append(&[11, 22, 33, 44, 55, 66]);
+            status
+        };
+        assert!(status.is_ok());
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], &[11, 22, 33, 44, 55, 66]);
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 6);
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -49,9 +49,18 @@ impl FarEndQueue {
         }
         let clean: Vec<f32> = samples
             .iter()
-            .map(|sample| if sample.is_finite() { sample.clamp(-1.0, 1.0) } else { 0.0 })
+            .map(|sample| {
+                if sample.is_finite() {
+                    sample.clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                }
+            })
             .collect();
-        let mut queue = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut queue = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         queue.push_back(FarEndFrame {
             rate,
             channels,
@@ -59,14 +68,19 @@ impl FarEndQueue {
         });
         let mut total: usize = queue.iter().map(|frame| frame.samples.len()).sum();
         while total > FAR_END_QUEUE_LIMIT {
-            let Some(dropped) = queue.pop_front() else { break };
+            let Some(dropped) = queue.pop_front() else {
+                break;
+            };
             total -= dropped.samples.len();
         }
     }
 
     /// DSP 线程调用：取走全部待处理参考帧（保持到达顺序）。
     fn drain(&self) -> Vec<FarEndFrame> {
-        let mut queue = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut queue = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         queue.drain(..).collect()
     }
 
@@ -223,9 +237,8 @@ impl AudioProcessor {
             let key = (frame.rate, rate);
             if self.light_reference_rate != Some(key) {
                 self.light_reference_rate = Some(key);
-                self.light_reference_resampler = Some(
-                    crate::audio_dsp::SpeechResampler::new(frame.rate, rate),
-                );
+                self.light_reference_resampler =
+                    Some(crate::audio_dsp::SpeechResampler::new(frame.rate, rate));
             }
             let mono = downmix_to_mono(&frame.samples, frame.channels);
             if let Some(resampler) = self.light_reference_resampler.as_mut() {
@@ -239,12 +252,7 @@ impl AudioProcessor {
         Some(self.light_reference_pending.drain(..take).collect())
     }
 
-    fn apply_light_aec(
-        &mut self,
-        input: &[f32],
-        channels: usize,
-        reference: &[f32],
-    ) -> Vec<f32> {
+    fn apply_light_aec(&mut self, input: &[f32], channels: usize, reference: &[f32]) -> Vec<f32> {
         if channels <= 1 {
             return self
                 .light_aec
@@ -505,7 +513,6 @@ impl EnhancedStream {
         self.dsp.set_far_end_audio(&reference);
     }
 
-
     fn frames(&mut self, finish: bool) -> &[f32] {
         self.pending.extend(&self.working);
         if finish {
@@ -556,10 +563,85 @@ fn pcm_chunk(samples: &[f32]) -> Option<NormalizedPcmChunk> {
 /// Native adapters convert their device sample format to `f32` and pass each
 /// callback here. The output contract is always 16 kHz, mono, signed 16-bit
 /// little-endian PCM plus the UI level used by both hosts.
+const ANTI_ALIAS_CUTOFF_RATIO: f64 = 0.42;
+
+#[derive(Debug, Clone, Copy)]
+struct Biquad {
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+    z1: f64,
+    z2: f64,
+}
+
+impl Biquad {
+    fn lowpass(normalized_cutoff: f64, section_index: usize, total_order: usize) -> Self {
+        let theta =
+            std::f64::consts::PI * (2 * section_index + 1) as f64 / (2 * total_order) as f64;
+        let alpha = 2.0 * theta.sin();
+        let k = (std::f64::consts::PI * normalized_cutoff).tan();
+        let k2 = k * k;
+        let a0 = 1.0 + alpha * k + k2;
+        let b0 = k2 / a0;
+        Self {
+            b0,
+            b1: 2.0 * b0,
+            b2: b0,
+            a1: 2.0 * (k2 - 1.0) / a0,
+            a2: (1.0 - alpha * k + k2) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    #[inline]
+    fn process_sample(&mut self, x: f64) -> f64 {
+        let y = self.b0 * x + self.z1;
+        self.z1 = self.b1 * x - self.a1 * y + self.z2;
+        self.z2 = self.b2 * x - self.a2 * y;
+        y
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AntiAliasFilter {
+    source_rate: u32,
+    target_rate: u32,
+    sections: [Biquad; 4],
+}
+
+impl AntiAliasFilter {
+    fn new(source_rate: u32, target_rate: u32) -> Self {
+        let normalized_cutoff =
+            (ANTI_ALIAS_CUTOFF_RATIO * target_rate as f64 / source_rate as f64).clamp(1e-4, 0.49);
+        let sections = std::array::from_fn(|idx| Biquad::lowpass(normalized_cutoff, idx, 8));
+        Self {
+            source_rate,
+            target_rate,
+            sections,
+        }
+    }
+
+    fn process_sample(&mut self, sample: f32) -> f32 {
+        let mut x = if sample.is_finite() {
+            sample as f64
+        } else {
+            0.0
+        };
+        for section in &mut self.sections {
+            x = section.process_sample(x);
+        }
+        x as f32
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct PcmNormalizer {
     resample_phase: f64,
     last_sample: f32,
+    anti_alias: Option<AntiAliasFilter>,
 }
 
 pub fn encode_dictation_wav(pcm_i16_le: &[u8]) -> Result<Vec<u8>, crate::BackendError> {
@@ -679,35 +761,60 @@ impl PcmNormalizer {
             return Vec::new();
         }
         if source_rate == target_rate {
+            self.anti_alias = None;
             self.last_sample = *samples.last().unwrap_or(&0.0);
             return samples.to_vec();
         }
 
+        let filtered;
+        let interpolation_input: &[f32] = if source_rate > target_rate {
+            let filter = match self.anti_alias.as_mut() {
+                Some(existing)
+                    if existing.source_rate == source_rate
+                        && existing.target_rate == target_rate =>
+                {
+                    existing
+                }
+                _ => {
+                    self.anti_alias = Some(AntiAliasFilter::new(source_rate, target_rate));
+                    self.anti_alias.as_mut().expect("anti-alias filter set")
+                }
+            };
+            filtered = samples
+                .iter()
+                .map(|&sample| filter.process_sample(sample))
+                .collect::<Vec<_>>();
+            &filtered
+        } else {
+            self.anti_alias = None;
+            samples
+        };
+
         let step = source_rate as f64 / target_rate as f64;
         let mut phase = self.resample_phase;
         let mut output = Vec::with_capacity(
-            ((samples.len() as f64) / step).ceil() as usize + usize::from(step < 1.0),
+            ((interpolation_input.len() as f64) / step).ceil() as usize + usize::from(step < 1.0),
         );
-        while phase < samples.len() as f64 {
+        while phase < interpolation_input.len() as f64 {
             let floor = phase.floor() as isize;
             let fraction = (phase - phase.floor()) as f32;
             let left = if floor < 0 {
                 self.last_sample
             } else {
-                samples[floor as usize]
+                interpolation_input[floor as usize]
             };
             let right_index = (floor + 1) as usize;
-            if right_index >= samples.len() {
+            if right_index >= interpolation_input.len() {
                 output.push(left);
                 phase += step;
                 break;
             }
-            let right = samples[right_index];
+            let right = interpolation_input[right_index];
             output.push(left + (right - left) * fraction);
             phase += step;
         }
-        self.resample_phase = (phase - samples.len() as f64).max(0.0);
-        self.last_sample = *samples.last().unwrap_or(&0.0);
+        self.resample_phase = (phase - interpolation_input.len() as f64).max(0.0);
+        self.last_sample = *interpolation_input.last().unwrap_or(&0.0);
         output
     }
 }
@@ -804,9 +911,7 @@ mod tests {
         let first = processor.light_reference_at(&queue, 48_000, 480).unwrap();
         assert_eq!(first.len(), 480);
         assert!(!processor.light_reference_pending.is_empty());
-        let second = processor
-            .light_reference_at(&queue, 48_000, 480)
-            .unwrap();
+        let second = processor.light_reference_at(&queue, 48_000, 480).unwrap();
         assert!(!second.is_empty());
     }
 
@@ -839,7 +944,10 @@ mod tests {
             };
             for mode in [crate::AecMode::Light, crate::AecMode::Model] {
                 let mut selected = AudioProcessor::new(AudioProcessingConfig {
-                    dsp: crate::AudioDspConfig { aec_mode: mode, ..config.dsp },
+                    dsp: crate::AudioDspConfig {
+                        aec_mode: mode,
+                        ..config.dsp
+                    },
                     ..config
                 });
                 let mut standalone = AudioProcessor::new(config);
@@ -847,7 +955,9 @@ mod tests {
                 assert_eq!(selected.config.dsp.aec_mode, crate::AecMode::Off);
                 let microphone = vec![0.2; 480];
                 let reference = vec![0.1; 240];
-                for input_reference in [Some(reference.as_slice()), None, Some(reference.as_slice())] {
+                for input_reference in
+                    [Some(reference.as_slice()), None, Some(reference.as_slice())]
+                {
                     assert_eq!(
                         selected.process_with_reference(&microphone, 2, 48_000, input_reference),
                         standalone.process_with_reference(&microphone, 2, 48_000, input_reference),
@@ -954,5 +1064,150 @@ mod tests {
             wav[offset..offset + replacement.len()].copy_from_slice(&replacement);
             assert!(decode_dictation_wav(&wav).is_err());
         }
+    }
+
+    fn dft_magnitude(samples: &[f32], sample_rate: u32, freq_hz: f32) -> f64 {
+        let mut cos_sum = 0.0f64;
+        let mut sin_sum = 0.0f64;
+        let w = 2.0 * std::f64::consts::PI * freq_hz as f64 / sample_rate as f64;
+        for (idx, &sample) in samples.iter().enumerate() {
+            let angle = w * idx as f64;
+            cos_sum += sample as f64 * angle.cos();
+            sin_sum += sample as f64 * angle.sin();
+        }
+        (cos_sum.hypot(sin_sum) * 2.0) / samples.len().max(1) as f64
+    }
+
+    fn downsampled_f32(input: &[f32], source_rate: u32, chunk_len: usize) -> Vec<f32> {
+        let mut normalizer = PcmNormalizer::default();
+        let mut out = Vec::new();
+        for chunk in input.chunks(chunk_len.max(1)) {
+            if let Some(normalized) = normalizer.process(chunk, 1, source_rate) {
+                out.extend(
+                    decode(&normalized.pcm_i16_le)
+                        .into_iter()
+                        .map(|s| s as f32 / i16::MAX as f32),
+                );
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn normalizer_downsampling_suppresses_out_of_band_aliasing() {
+        for source_rate in [44_100u32, 48_000, 96_000] {
+            let len = source_rate as usize / 2; // 0.5 s -> 8,000 samples @ 16 kHz
+            let chunk_len = source_rate as usize / 50; // ~20 ms callbacks
+            let mix: Vec<f32> = (0..len)
+                .map(|i| {
+                    let t = i as f64 / source_rate as f64;
+                    let pass = 0.4 * (2.0 * std::f64::consts::PI * 1_000.0 * t).sin();
+                    let alias = 0.4 * (2.0 * std::f64::consts::PI * 12_000.0 * t).sin();
+                    (pass + alias) as f32
+                })
+                .collect();
+
+            let output = downsampled_f32(&mix, source_rate, chunk_len);
+            let steady = &output[1_600..];
+            let mag_1k = dft_magnitude(steady, DICTATION_SAMPLE_RATE, 1_000.0);
+            let mag_alias_4k = dft_magnitude(steady, DICTATION_SAMPLE_RATE, 4_000.0);
+            assert!(
+                mag_1k > 0.30,
+                "expected 1 kHz passband retention at {source_rate} Hz, got {mag_1k}"
+            );
+            assert!(
+                mag_alias_4k < 0.01,
+                "expected 12 kHz -> 4 kHz alias suppression at {source_rate} Hz, got {mag_alias_4k}"
+            );
+
+            // Verify upper speech band (4 kHz) itself remains essentially unattenuated.
+            let speech_4k: Vec<f32> = (0..len)
+                .map(|i| {
+                    let t = i as f64 / source_rate as f64;
+                    (0.4 * (2.0 * std::f64::consts::PI * 4_000.0 * t).sin()) as f32
+                })
+                .collect();
+            let speech_out = downsampled_f32(&speech_4k, source_rate, chunk_len);
+            let mag_speech_4k = dft_magnitude(&speech_out[1_600..], DICTATION_SAMPLE_RATE, 4_000.0);
+            assert!(
+                mag_speech_4k > 0.35,
+                "expected 4 kHz passband preservation at {source_rate} Hz, got {mag_speech_4k}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizer_48k_to_16k_matches_across_callback_boundaries() {
+        let input: Vec<f32> = (0..9_600)
+            .map(|i| {
+                let t = i as f64 / 48_000.0;
+                (0.25 * (2.0 * std::f64::consts::PI * 1_000.0 * t).sin()
+                    + 0.25 * (2.0 * std::f64::consts::PI * 3_000.0 * t).sin()
+                    + 0.25 * (2.0 * std::f64::consts::PI * 11_000.0 * t).sin())
+                    as f32
+            })
+            .collect();
+
+        let mut single = PcmNormalizer::default();
+        let whole = decode(
+            &single
+                .process(&input, 1, 48_000)
+                .expect("single chunk")
+                .pcm_i16_le,
+        );
+
+        let mut chunked_normalizer = PcmNormalizer::default();
+        let mut chunked = Vec::new();
+        let sizes = [480, 123, 960, 77, 1_024, 333];
+        let mut offset = 0;
+        let mut idx = 0;
+        while offset < input.len() {
+            let take = sizes[idx % sizes.len()].min(input.len() - offset);
+            idx += 1;
+            if let Some(out) = chunked_normalizer.process(&input[offset..offset + take], 1, 48_000)
+            {
+                chunked.extend(decode(&out.pcm_i16_le));
+            }
+            offset += take;
+        }
+
+        assert_eq!(whole.len(), 3_200);
+        assert_eq!(chunked, whole);
+    }
+
+    #[test]
+    fn normalizer_anti_alias_filter_survives_non_finite_samples() {
+        let mut normalizer = PcmNormalizer::default();
+        let mut dirty = vec![0.0f32; 480];
+        dirty[12] = f32::NAN;
+        dirty[87] = f32::INFINITY;
+        dirty[201] = f32::NEG_INFINITY;
+        let _ = normalizer.process(&dirty, 1, 48_000);
+
+        // Next clean 1 kHz buffer at 48 kHz must remain finite and recover steady tone.
+        let clean: Vec<f32> = (0..19_200)
+            .map(|i| {
+                let t = i as f64 / 48_000.0;
+                (0.4 * (2.0 * std::f64::consts::PI * 1_000.0 * t).sin()) as f32
+            })
+            .collect();
+        let out = normalizer.process(&clean, 1, 48_000).expect("clean chunk");
+        let decoded: Vec<f32> = decode(&out.pcm_i16_le)
+            .into_iter()
+            .map(|s| s as f32 / i16::MAX as f32)
+            .collect();
+        assert!(decoded.iter().all(|s| s.is_finite()));
+        let mag_1k = dft_magnitude(&decoded[1_600..], DICTATION_SAMPLE_RATE, 1_000.0);
+        assert!(
+            mag_1k > 0.35,
+            "expected recovery after NaN/Inf, got {mag_1k}"
+        );
+
+        // Switching to passthrough (16 kHz) clears the anti-alias filter cleanly.
+        assert!(normalizer.anti_alias.is_some());
+        let pass = vec![0.25f32; 320];
+        let pass_out = normalizer.process(&pass, 1, 16_000).expect("16k pass");
+        assert_eq!(decode(&pass_out.pcm_i16_le).len(), 320);
+        assert!(normalizer.anti_alias.is_none());
     }
 }

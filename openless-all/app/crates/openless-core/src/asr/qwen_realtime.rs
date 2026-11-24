@@ -26,16 +26,16 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex, Notify};
+use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 
+use super::stream_send::{send_ws_message_with_timeout, PacedSendClock, SharedWriter};
 use super::{AudioConsumer, RawTranscript};
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
@@ -50,6 +50,7 @@ const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cap on the WebSocket handshake (TCP + TLS + HTTP upgrade) itself. Without it
 /// `connect_async` waits forever, and `open_session` is awaited with `block_on` on
 /// the serial hotkey bridge thread — a hang means hotkeys are completely dead
@@ -59,10 +60,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// server_vad segmentation silence threshold. Official default is 400ms; 500ms
 /// lowers the chance of cutting a sentence on a mid-speech breath.
 const VAD_SILENCE_DURATION_MS: u32 = 500;
-
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
-type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
 
 #[derive(Clone, Debug)]
 pub struct Qwen3RealtimeCredentials {
@@ -105,7 +102,7 @@ impl Qwen3RealtimeCredentials {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Qwen3ASRError {
     #[error("credentials missing")]
     CredentialsMissing,
@@ -131,12 +128,17 @@ struct SyncState {
     pending_audio: Vec<u8>,
     audio_scratch: Vec<u8>,
     bytes_received: u64,
+    bytes_sent_input: u64,
     session_started: bool,
     session_finished: bool,
+    finish_sent: bool,
+    ending: bool,
+    send_error: Option<Qwen3ASRError>,
     session_start_error: Option<String>,
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, Qwen3ASRError>>>,
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
+    cancel_tx: Option<watch::Sender<bool>>,
     /// Completed segments (completed.transcript) accumulated in arrival order after
     /// VAD segmentation.
     completed_segments: Vec<String>,
@@ -150,6 +152,7 @@ struct SyncState {
 
 pub struct Qwen3RealtimeASR {
     credentials: Qwen3RealtimeCredentials,
+    frame_send_timeout: Duration,
     task_spawner: Arc<dyn TaskSpawner>,
     state: ParkingMutex<SyncState>,
     writer: SharedWriter,
@@ -170,6 +173,7 @@ impl Qwen3RealtimeASR {
     ) -> Self {
         Self {
             credentials,
+            frame_send_timeout: FRAME_SEND_TIMEOUT,
             task_spawner,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
@@ -178,6 +182,22 @@ impl Qwen3RealtimeASR {
             session_finished: Arc::new(Notify::new()),
             partial_sink: ParkingMutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_frame_send_timeout(mut self, timeout: Duration) -> Self {
+        self.frame_send_timeout = timeout;
+        self
+    }
+
+    pub fn audio_coverage(&self) -> (u64, u64) {
+        let st = self.state.lock();
+        (st.bytes_sent_input, st.bytes_received)
+    }
+
+    pub fn is_stream_complete(&self) -> bool {
+        let st = self.state.lock();
+        st.send_error.is_none() && st.finish_sent && st.bytes_sent_input == st.bytes_received
     }
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
@@ -216,37 +236,82 @@ impl Qwen3RealtimeASR {
 
         let (final_tx, final_rx) = oneshot::channel();
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendItem>();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
         {
             let mut st = self.state.lock();
             *st = SyncState::default();
             st.start = Some(Instant::now());
             st.final_tx = Some(final_tx);
             st.send_tx = Some(send_tx);
+            st.cancel_tx = Some(cancel_tx);
         }
         *self.final_rx.lock() = Some(final_rx);
 
         let writer_for_worker = Arc::clone(&self.writer);
         let weak_self_for_worker = Arc::downgrade(self);
+        let frame_send_timeout = self.frame_send_timeout;
         let task_spawner = Arc::clone(&self.task_spawner);
         task_spawner.spawn(Box::pin(async move {
+            let mut clock = PacedSendClock::new();
             while let Some(item) = send_rx.recv().await {
                 match item {
                     SendItem::Audio(chunk) => {
-                        if let Err(e) =
-                            send_text(&writer_for_worker, append_audio_message(&chunk)).await
+                        let Some(scheduled_start) = clock.wait_slot(&mut cancel_rx).await else {
+                            break;
+                        };
+                        let chunk_len = chunk.len();
+                        if let Err(ws_err) = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Text(append_audio_message(&chunk).into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
                         {
-                            log::error!("[qwen3-asr] audio frame send failed: {e}");
+                            let err = Qwen3ASRError::SendFailed(
+                                ws_err.into_message("websocket writer not available"),
+                            );
+                            log::error!("[qwen3-asr] audio frame send failed: {err}");
                             if let Some(this) = weak_self_for_worker.upgrade() {
-                                this.finish_error(e);
+                                this.record_send_failure(err);
                             }
                             break;
                         }
+                        if let Some(this) = weak_self_for_worker.upgrade() {
+                            let mut st = this.state.lock();
+                            st.bytes_sent_input =
+                                st.bytes_sent_input.saturating_add(chunk_len as u64);
+                        }
+                        clock.mark_sent(scheduled_start, chunk_len, BYTES_PER_MS, 2);
                     }
                     SendItem::Finish(done) => {
-                        let result = send_text(&writer_for_worker, finish_session_message())
-                            .await
-                            .map_err(|e| Qwen3ASRError::SendFailed(e.to_string()));
+                        let result = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Text(finish_session_message().into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        .map_err(|ws_err| {
+                            Qwen3ASRError::SendFailed(
+                                ws_err.into_message("websocket writer not available"),
+                            )
+                        });
+                        match &result {
+                            Ok(()) => {
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.state.lock().finish_sent = true;
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("[qwen3-asr] finish frame send failed: {err}");
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.record_send_failure(err.clone());
+                                }
+                            }
+                        }
                         let _ = done.send(result);
+                        break;
                     }
                 }
             }
@@ -319,51 +384,70 @@ impl Qwen3RealtimeASR {
     }
 
     pub async fn send_last_frame(&self) -> Result<(), Qwen3ASRError> {
-        let result = tokio::time::timeout(FINAL_RESULT_TIMEOUT, async {
-            let finished = self.session_finished.notified();
-            tokio::pin!(finished);
-            finished.as_mut().enable();
-            let (send_tx, tail_chunks) = {
-                let mut st = self.state.lock();
-                let send_tx = st.send_tx.clone();
-                if !st.pending_audio.is_empty() {
-                    let pending = std::mem::take(&mut st.pending_audio);
-                    st.audio_scratch.extend_from_slice(&pending);
-                }
-                let tail = if st.audio_scratch.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![std::mem::take(&mut st.audio_scratch)]
-                };
-                (send_tx, tail)
-            };
-            let Some(send_tx) = send_tx else {
-                return Ok(());
-            };
-            for chunk in tail_chunks {
-                send_tx
-                    .send(SendItem::Audio(chunk))
-                    .map_err(|_| Qwen3ASRError::SendFailed("send worker closed".to_string()))?;
+        let finished = self.session_finished.notified();
+        tokio::pin!(finished);
+        finished.as_mut().enable();
+        let (done_tx, done_rx) = oneshot::channel();
+        {
+            let mut st = self.state.lock();
+            if let Some(ref error) = st.send_error {
+                return Err(error.clone());
             }
-            let (done_tx, done_rx) = oneshot::channel();
-            send_tx
-                .send(SendItem::Finish(done_tx))
-                .map_err(|_| Qwen3ASRError::SendFailed("send worker closed".to_string()))?;
-            done_rx
-                .await
-                .map_err(|_| Qwen3ASRError::SendFailed("finish ack dropped".to_string()))??;
+            let Some(send_tx) = st.send_tx.take() else {
+                return Err(Qwen3ASRError::SendFailed(
+                    "websocket session is not open".to_string(),
+                ));
+            };
+            st.ending = true;
+            if !st.pending_audio.is_empty() {
+                let pending = std::mem::take(&mut st.pending_audio);
+                st.audio_scratch.extend_from_slice(&pending);
+            }
+            let mut tail_chunks = drain_audio_chunks(&mut st.audio_scratch);
+            if !st.audio_scratch.is_empty() {
+                tail_chunks.push(std::mem::take(&mut st.audio_scratch));
+            }
+            for chunk in tail_chunks {
+                if send_tx.send(SendItem::Audio(chunk)).is_err() {
+                    return Err(st.send_error.clone().unwrap_or_else(|| {
+                        Qwen3ASRError::SendFailed("send worker closed".to_string())
+                    }));
+                }
+            }
+            if send_tx.send(SendItem::Finish(done_tx)).is_err() {
+                return Err(st.send_error.clone().unwrap_or_else(|| {
+                    Qwen3ASRError::SendFailed("send worker closed".to_string())
+                }));
+            }
+        }
+        let drain_result =
+            match done_rx.await {
+                Ok(inner) => inner,
+                Err(_) => Err(self.state.lock().send_error.clone().unwrap_or_else(|| {
+                    Qwen3ASRError::SendFailed("finish ack dropped".to_string())
+                })),
+            };
+        if let Err(err) = drain_result {
+            self.cancel();
+            return Err(err);
+        }
+
+        // Wait for server finalization outside the upload pacing loop so large buffered
+        // uploads cannot consume FINAL_RESULT_TIMEOUT while draining frames.
+        let waited = tokio::time::timeout(FINAL_RESULT_TIMEOUT, async {
             if !self.state.lock().session_finished {
                 finished.await;
             }
-            Ok(())
         })
-        .await
-        .map_err(|_| Qwen3ASRError::FinalResultTimeout)
-        .and_then(|result| result);
-        if result.is_err() {
-            self.cancel();
+        .await;
+        if waited.is_err() {
+            self.finish_with_partial_or_error(Qwen3ASRError::FinalResultTimeout);
+            return Err(Qwen3ASRError::FinalResultTimeout);
         }
-        result
+        if let Some(error) = self.state.lock().send_error.clone() {
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub async fn await_final_result(&self) -> Result<RawTranscript, Qwen3ASRError> {
@@ -384,7 +468,12 @@ impl Qwen3RealtimeASR {
         st.send_tx.take();
         st.final_tx.take();
         st.session_finished = true;
+        if let Some(tx) = st.cancel_tx.as_ref() {
+            let _ = tx.send(true);
+        }
         drop(st);
+        self.session_started.notify_waiters();
+        self.session_finished.notify_waiters();
         let writer = Arc::clone(&self.writer);
         self.task_spawner.spawn(Box::pin(async move {
             let _ = close_writer(&writer).await;
@@ -552,6 +641,9 @@ impl Qwen3RealtimeASR {
             }
             st.session_finished = true;
             st.send_tx.take();
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
             let mut segments = std::mem::take(&mut st.completed_segments);
             // If an interim tail is still un-completed before session.finished (finish
             // should flush it out; defensive backstop), append it last.
@@ -577,27 +669,50 @@ impl Qwen3RealtimeASR {
 
     fn finish_with_partial_or_error(&self, error: Qwen3ASRError) {
         let has_partial = {
-            let st = self.state.lock();
+            let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
             !st.completed_segments.is_empty() || !st.partial_text.trim().is_empty()
         };
         if has_partial {
-            // Consistent with Bailian / Volcengine: on error with an existing result,
-            // fall back to returning it.
+            // Consistent with Bailian / Volcengine: on short-session break with an
+            // existing partial, salvage it via await_final_result while preserving
+            // st.send_error for coverage/long-recording checks.
             self.finish_success();
         } else {
             self.finish_error(error);
         }
     }
 
+    fn record_send_failure(&self, error: Qwen3ASRError) {
+        {
+            let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
+            st.send_tx.take();
+            st.pending_audio.clear();
+            st.audio_scratch.clear();
+        }
+        self.finish_with_partial_or_error(error);
+    }
+
     fn finish_error(&self, error: Qwen3ASRError) {
         self.fail_session_start(&error.to_string());
         let tx = {
             let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
             if st.session_finished {
                 return;
             }
             st.session_finished = true;
             st.send_tx.take();
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
             st.final_tx.take()
         };
         if let Some(tx) = tx {
@@ -622,7 +737,13 @@ impl AudioConsumer for Qwen3RealtimeASR {
         }
         let (send_tx, chunks) = {
             let mut st = self.state.lock();
+            if st.ending {
+                return;
+            }
             st.bytes_received = st.bytes_received.saturating_add(pcm.len() as u64);
+            if st.session_finished || st.send_error.is_some() {
+                return;
+            }
             if !st.session_started {
                 st.pending_audio.extend_from_slice(pcm);
                 return;
@@ -633,7 +754,9 @@ impl AudioConsumer for Qwen3RealtimeASR {
         };
         if let Some(tx) = send_tx {
             for chunk in chunks {
-                let _ = tx.send(SendItem::Audio(chunk));
+                if tx.send(SendItem::Audio(chunk)).is_err() {
+                    break;
+                }
             }
         }
     }
@@ -1092,5 +1215,146 @@ mod tests {
         let chunks = drain_audio_chunks(&mut buffer);
         assert_eq!(chunks.len(), 2);
         assert_eq!(buffer.len(), 17);
+    }
+
+    #[tokio::test]
+    async fn buffered_audio_tracks_coverage_and_paces_before_finish() {
+        let frames = Arc::new(ParkingMutex::new(Vec::<Instant>::new()));
+        let finish_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let frames_srv = Arc::clone(&frames);
+        let finish_seen_srv = Arc::clone(&finish_seen);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/api-ws/v1/realtime", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                match value["type"].as_str().unwrap_or_default() {
+                    "session.update" => {
+                        ws.send(Message::text(
+                            json!({"type": "session.updated"}).to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "input_audio_buffer.append" => {
+                        frames_srv.lock().push(Instant::now());
+                    }
+                    "session.finish" => {
+                        finish_seen_srv.store(true, std::sync::atomic::Ordering::Release);
+                        ws.send(Message::text(completed_event("你好世界").to_string()))
+                            .await
+                            .unwrap();
+                        ws.send(Message::text(
+                            json!({"type": "session.finished"}).to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let asr = Arc::new(Qwen3RealtimeASR::new(Qwen3RealtimeCredentials {
+            api_key: "sk-test".into(),
+            endpoint,
+            model: DEFAULT_MODEL.into(),
+        }));
+        asr.open_session().await.unwrap();
+
+        let total_bytes = TARGET_AUDIO_CHUNK_BYTES * 5 + 300;
+        asr.consume_pcm_chunk(&vec![0x12u8; total_bytes]);
+        asr.send_last_frame().await.unwrap();
+        let res = asr.await_final_result().await.unwrap();
+        assert_eq!(res.text, "你好世界");
+        assert!(asr.is_stream_complete());
+        assert_eq!(
+            asr.audio_coverage(),
+            (total_bytes as u64, total_bytes as u64)
+        );
+        assert!(finish_seen.load(std::sync::atomic::Ordering::Acquire));
+
+        let recorded = frames.lock();
+        assert_eq!(recorded.len(), 6);
+        let span = recorded
+            .last()
+            .unwrap()
+            .saturating_duration_since(recorded[0]);
+        assert!(
+            span >= Duration::from_millis(180),
+            "expected >= 2x pacing (~250ms across 5 intervals), got {span:?}"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_last_frame_fails_when_session_broken_or_unwritten_audio_grows() {
+        let asr = Arc::new(create_test_asr());
+        assert!(asr.send_last_frame().await.is_err());
+
+        let first_append = Arc::new(Notify::new());
+        let first_append_srv = Arc::clone(&first_append);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/api-ws/v1/realtime", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                match value["type"].as_str().unwrap_or_default() {
+                    "session.update" => {
+                        ws.send(Message::text(
+                            json!({"type": "session.updated"}).to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                    "input_audio_buffer.append" => {
+                        ws.send(Message::text(completed_event("已识别").to_string()))
+                            .await
+                            .unwrap();
+                        ws.send(Message::text(
+                            json!({"type": "error", "error": {"message": "server drop"}})
+                                .to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                        first_append_srv.notify_waiters();
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let asr = Arc::new(
+            Qwen3RealtimeASR::new(Qwen3RealtimeCredentials {
+                api_key: "sk-test".into(),
+                endpoint,
+                model: DEFAULT_MODEL.into(),
+            })
+            .with_frame_send_timeout(Duration::from_millis(80)),
+        );
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&vec![0x33u8; TARGET_AUDIO_CHUNK_BYTES]);
+        tokio::time::timeout(Duration::from_secs(2), first_append.notified())
+            .await
+            .unwrap();
+        // Let the server error transition complete, then feed trailing audio that cannot be sent.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        asr.consume_pcm_chunk(&vec![0x44u8; 40_000]);
+
+        assert!(asr.send_last_frame().await.is_err());
+        assert!(!asr.is_stream_complete());
+        let (sent, received) = asr.audio_coverage();
+        assert_eq!(sent, TARGET_AUDIO_CHUNK_BYTES as u64);
+        assert_eq!(received, (TARGET_AUDIO_CHUNK_BYTES + 40_000) as u64);
+        server.await.unwrap();
     }
 }

@@ -141,8 +141,10 @@ pub(crate) fn backend_dependencies(
     #[cfg(target_os = "windows")]
     {
         let prefs = preferences.get();
-        warm_hub.set_capture_paused(0,
-            prefs.voice_activation_enabled && prefs.voice_activation_hotkey_linked);
+        warm_hub.set_capture_paused(
+            0,
+            prefs.voice_activation_enabled && prefs.voice_activation_hotkey_linked,
+        );
         warm_hub.configure(
             crate::recorder::warm_capture_enabled(prefs.low_latency_dictation_enabled, false),
             (!prefs.microphone_device_name.trim().is_empty())
@@ -254,7 +256,8 @@ pub(crate) fn backend_dependencies(
         )
         .expect("Apple system speech provider ID");
     let polisher = Arc::new(openless_core::TextPolisherRouter::default());
-    let production_polisher = openless_core::SharedCloudTextPolisher::new(Arc::clone(&credential_store));
+    let production_polisher =
+        openless_core::SharedCloudTextPolisher::new(Arc::clone(&credential_store));
     let production_polisher: Arc<dyn TextPolisher> = Arc::new(match &usage_recorder {
         Some(recorder) => production_polisher.with_usage_recorder(Arc::clone(recorder)),
         None => production_polisher,
@@ -3197,6 +3200,9 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     .flatten();
                 // 调试录音：主档案写处理后（或只勾处理前时写原始），需要对照时
                 // 同目录再存一份 `<session>.raw.wav`。
+                let archive_lease = archive_path
+                    .as_deref()
+                    .map(crate::persistence::acquire_recording_archive_lease);
                 let archives = crate::recorder::ArchiveTargets {
                     processed: archive_path.clone(),
                     raw: (recording_plan.archive_raw && archive_path.is_some())
@@ -3208,9 +3214,24 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         .flatten(),
                     write_processed: recording_plan.archive_processed,
                 };
+                let archive_status_slot: Arc<Mutex<Option<crate::recorder::WavArchiveStatus>>> =
+                    Arc::new(Mutex::new(None));
+                let status_for_levels = Arc::clone(&archive_status_slot);
+                let fault_reported = AtomicBool::new(false);
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
                 let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
+                    let archive_error = status_for_levels
+                        .lock()
+                        .as_ref()
+                        .and_then(|status| status.error());
+                    if let Some(error) = archive_error {
+                        if !fault_reported.swap(true, Ordering::AcqRel) {
+                            let _ = level_progress.publish(openless_core::RecordingEvent::Fatal(
+                                BackendError::new(BackendErrorCode::Persistence, error),
+                            ));
+                        }
+                    }
                     let _ = level_progress
                         .publish_level(started_at.elapsed().as_millis() as u64, level);
                 });
@@ -3305,6 +3326,15 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                         false,
                     ),
                 };
+                let archive_status = recorder
+                    .as_ref()
+                    .and_then(Recorder::archive_status)
+                    .or_else(|| {
+                        warm_capture
+                            .as_ref()
+                            .and_then(WarmActiveCapture::archive_status)
+                    });
+                *archive_status_slot.lock() = archive_status.clone();
                 if recording_plan.archive_required && !archive_active {
                     if let Some(recorder) = recorder {
                         recorder.stop();
@@ -3346,8 +3376,14 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     resume_warm_hub,
                     backend: Arc::clone(&backend_for_recording),
                     reconfigure_voice_activation,
-                    archive: archive_path
-                        .map(|path| Arc::new(TauriRecordingArchive::new(path, archive_active))),
+                    archive: archive_path.zip(archive_lease).map(|(path, lease)| {
+                        Arc::new(TauriRecordingArchive::new(
+                            path,
+                            archive_active,
+                            archive_status,
+                            lease,
+                        ))
+                    }),
                     _mute: mute,
                 }) as Box<dyn ActiveRecording>;
                 Ok((recording, runtime_errors))
@@ -3430,13 +3466,22 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
 struct TauriRecordingArchive {
     path: Arc<Mutex<PathBuf>>,
     available: Arc<AtomicBool>,
+    status: Option<crate::recorder::WavArchiveStatus>,
+    lease: Arc<Mutex<crate::persistence::RecordingArchiveLease>>,
 }
 
 impl TauriRecordingArchive {
-    fn new(path: PathBuf, available: bool) -> Self {
+    fn new(
+        path: PathBuf,
+        available: bool,
+        status: Option<crate::recorder::WavArchiveStatus>,
+        lease: crate::persistence::RecordingArchiveLease,
+    ) -> Self {
         Self {
             path: Arc::new(Mutex::new(path)),
             available: Arc::new(AtomicBool::new(available)),
+            status,
+            lease: Arc::new(Mutex::new(lease)),
         }
     }
 }
@@ -3478,6 +3523,42 @@ impl RecordingArchive for TauriRecordingArchive {
                 ));
             }
             Ok(pcm_bytes)
+        })
+    }
+
+    fn write_error(&self) -> Option<String> {
+        self.status.as_ref().and_then(|status| status.error())
+    }
+
+    fn read_pcm_range(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+        let path = self.path.lock().clone();
+        let lease = crate::persistence::acquire_recording_archive_lease(&path);
+        Box::pin(async move {
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
+            let _lease = lease;
+            let read = async {
+                let mut file = tokio::fs::File::open(path).await?;
+                file.seek(std::io::SeekFrom::Start(
+                    44u64
+                        .checked_add(offset)
+                        .ok_or_else(|| std::io::Error::other("PCM offset overflow"))?,
+                ))
+                .await?;
+                let mut pcm = vec![0; len];
+                file.read_exact(&mut pcm).await?;
+                Ok::<_, std::io::Error>(pcm)
+            }
+            .await;
+            read.map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    format!("read recording PCM range: {error}"),
+                )
+            })
         })
     }
 
@@ -3536,6 +3617,7 @@ impl RecordingArchive for TauriRecordingArchive {
 
     fn promote_to_quick_note(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let path = Arc::clone(&self.path);
+        let lease = Arc::clone(&self.lease);
         Box::pin(async move {
             let current = path.lock().clone();
             let Some(file_name) = current.file_name().map(|name| name.to_owned()) else {
@@ -3552,6 +3634,7 @@ impl RecordingArchive for TauriRecordingArchive {
             if current == target {
                 return Ok(());
             }
+            let target_lease = crate::persistence::acquire_recording_archive_lease(&target);
             tokio::fs::rename(&current, &target)
                 .await
                 .map_err(|error| {
@@ -3561,12 +3644,14 @@ impl RecordingArchive for TauriRecordingArchive {
                     )
                 })?;
             *path.lock() = target;
+            *lease.lock() = target_lease;
             Ok(())
         })
     }
 
     fn demote_to_ordinary_recording(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let path = Arc::clone(&self.path);
+        let lease = Arc::clone(&self.lease);
         Box::pin(async move {
             let current = path.lock().clone();
             let Some(file_name) = current.file_name().map(|name| name.to_owned()) else {
@@ -3583,6 +3668,7 @@ impl RecordingArchive for TauriRecordingArchive {
             if current == target {
                 return Ok(());
             }
+            let target_lease = crate::persistence::acquire_recording_archive_lease(&target);
             tokio::fs::rename(&current, &target)
                 .await
                 .map_err(|error| {
@@ -3592,6 +3678,7 @@ impl RecordingArchive for TauriRecordingArchive {
                     )
                 })?;
             *path.lock() = target;
+            *lease.lock() = target_lease;
             Ok(())
         })
     }
@@ -3865,9 +3952,27 @@ impl AudioRecorder for TauriAudioRecorder {
                     recording_plan.mute_during_recording,
                     crate::audio_mute::AudioMuteGuard::activate,
                 );
+                let archive_lease = archive_path
+                    .as_deref()
+                    .map(crate::persistence::acquire_recording_archive_lease);
+                let archive_status_slot: Arc<Mutex<Option<crate::recorder::WavArchiveStatus>>> =
+                    Arc::new(Mutex::new(None));
+                let status_for_levels = Arc::clone(&archive_status_slot);
+                let fault_reported = AtomicBool::new(false);
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
                 let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
+                    let archive_error = status_for_levels
+                        .lock()
+                        .as_ref()
+                        .and_then(|status| status.error());
+                    if let Some(error) = archive_error {
+                        if !fault_reported.swap(true, Ordering::AcqRel) {
+                            let _ = level_progress.publish(openless_core::RecordingEvent::Fatal(
+                                BackendError::new(BackendErrorCode::Persistence, error),
+                            ));
+                        }
+                    }
                     let _ = level_progress
                         .publish_level(started_at.elapsed().as_millis() as u64, level);
                 });
@@ -3907,6 +4012,8 @@ impl AudioRecorder for TauriAudioRecorder {
                         "速记录音文件无法创建，已阻止开始录音以避免丢失内容",
                     ));
                 }
+                let archive_status = recorder.archive_status();
+                *archive_status_slot.lock() = archive_status.clone();
                 let recording = Box::new(TauriActiveRecording {
                     recorder: Some(recorder),
                     warm_capture: None,
@@ -3914,8 +4021,14 @@ impl AudioRecorder for TauriAudioRecorder {
                     resume_warm_hub: Some(worker_resume_warm_hub),
                     backend: Arc::clone(&backend_for_recording),
                     reconfigure_voice_activation: true,
-                    archive: archive_path
-                        .map(|path| Arc::new(TauriRecordingArchive::new(path, archive_active))),
+                    archive: archive_path.zip(archive_lease).map(|(path, lease)| {
+                        Arc::new(TauriRecordingArchive::new(
+                            path,
+                            archive_active,
+                            archive_status,
+                            lease,
+                        ))
+                    }),
                     _mute: mute,
                 }) as Box<dyn ActiveRecording>;
                 Ok((recording, runtime_errors))
@@ -4277,7 +4390,9 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
-    fn defer_preparation_until_stop(&self) -> bool { true }
+    fn defer_preparation_until_stop(&self) -> bool {
+        true
+    }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let insertion_target = crate::selection::capture_selection_insertion_target();
         #[cfg(target_os = "windows")]
@@ -4830,10 +4945,12 @@ impl TauriTextInsertionSession {
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
         crate::selection::reactivate_dictation_insertion_target(&self.insertion_target)
             .then_some(())
-            .ok_or_else(|| BackendError::new(
-                BackendErrorCode::Platform,
-                "original text insertion target is unavailable",
-            ))
+            .ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::Platform,
+                    "original text insertion target is unavailable",
+                )
+            })
     }
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
@@ -5071,7 +5188,8 @@ impl TauriTextInsertionSession {
                                         .and_then(|b| b.upgrade())
                                         .is_some_and(|b| {
                                             let prefs = b.get_preferences();
-                                            prefs.vocabulary_learning_enabled || prefs.expression_learning_enabled
+                                            prefs.vocabulary_learning_enabled
+                                                || prefs.expression_learning_enabled
                                         })
                             },
                             || {
@@ -5178,7 +5296,8 @@ impl TauriTextInsertionSession {
                             if session.cancel_requested.load(Ordering::Acquire) {
                                 return Ok(MacInsertionCompletion::Cancelled);
                             }
-                            finish_mac_final_text(final_text, |text| session.insert_final(text)).await
+                            finish_mac_final_text(final_text, |text| session.insert_final(text))
+                                .await
                         },
                         || session.restore_platform_state(),
                     )
@@ -5247,9 +5366,13 @@ fn replace_unwritten_target<T>(
 impl TextInsertionSession for TauriTextInsertionSession {
     fn supports_streaming(&self) -> bool {
         #[cfg(target_os = "macos")]
-        { self.streaming_ready }
+        {
+            self.streaming_ready
+        }
         #[cfg(not(target_os = "macos"))]
-        { cfg!(target_os = "windows") }
+        {
+            cfg!(target_os = "windows")
+        }
     }
 
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
@@ -5407,7 +5530,10 @@ mod mac_insertion_lifecycle_tests {
         })
         .await
         .unwrap();
-        assert_eq!(result, MacInsertionCompletion::Finished(InsertOutcome::Inserted));
+        assert_eq!(
+            result,
+            MacInsertionCompletion::Finished(InsertOutcome::Inserted)
+        );
         assert_eq!(*calls.lock(), ["final text"]);
     }
 
@@ -5418,7 +5544,10 @@ mod mac_insertion_lifecycle_tests {
         })
         .await
         .unwrap();
-        assert_eq!(result, MacInsertionCompletion::Finished(InsertOutcome::Inserted));
+        assert_eq!(
+            result,
+            MacInsertionCompletion::Finished(InsertOutcome::Inserted)
+        );
         assert_eq!(
             finish_mac_final_text(None, |_| async {
                 panic!("cancelled text must not invoke insertion")
@@ -5617,10 +5746,7 @@ mod mac_insertion_lifecycle_tests {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_unicode_fallback(
-    context: &DictationContext,
-    text: &str,
-) -> crate::types::InsertStatus {
+fn windows_unicode_fallback(context: &DictationContext, text: &str) -> crate::types::InsertStatus {
     let inserter = crate::insertion::TextInserter::new();
     let status = inserter.insert_via_unicode_keystrokes(
         text,
@@ -5628,7 +5754,11 @@ fn windows_unicode_fallback(
             newline_mode: context.insertion.windows_sendinput_newline_mode,
         },
     );
-    if matches!(status, crate::types::InsertStatus::Inserted | crate::types::InsertStatus::PasteSent) || !context.insertion.allow_non_tsf_fallback {
+    if matches!(
+        status,
+        crate::types::InsertStatus::Inserted | crate::types::InsertStatus::PasteSent
+    ) || !context.insertion.allow_non_tsf_fallback
+    {
         status
     } else {
         inserter.copy_fallback(text)
@@ -5767,11 +5897,17 @@ impl HostActions for TauriHostActions {
             HostAction::ShowMain | HostAction::FocusMain => crate::show_main_window(&app),
             HostAction::ShowDictationFeedback | HostAction::HideDictationFeedback => {}
             HostAction::ShowSelectionPreview => {
-                return Err(BackendError::new(BackendErrorCode::Unsupported, "Selection polish preview is unavailable"));
+                return Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "Selection polish preview is unavailable",
+                ));
             }
             HostAction::HideSelectionPreview => {}
             HostAction::ShowQa => {
-                return Err(BackendError::new(BackendErrorCode::Unsupported, "Ask is unavailable"));
+                return Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "Ask is unavailable",
+                ));
             }
             HostAction::HideQa => {
                 self.qa_context.set_voice_surface_active(false);
@@ -5818,10 +5954,12 @@ mod tests {
             written: false,
             current: false,
         });
-        let capture = || Ok(Target {
-            written: false,
-            current: true,
-        });
+        let capture = || {
+            Ok(Target {
+                written: false,
+                current: true,
+            })
+        };
         let replace = |target: &mut Target, _: &str| {
             if !target.current {
                 return Err("target changed".into());

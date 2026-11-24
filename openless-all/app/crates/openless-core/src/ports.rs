@@ -297,7 +297,11 @@ pub enum EngineStage {
 pub enum EngineProgress {
     /// The recorder is registered; provider preparation may still be pending.
     CaptureReady,
-    RecordingLevel { elapsed_ms: u64, level: f32 },
+    RecordingLevel {
+        elapsed_ms: u64,
+        level: f32,
+    },
+    CapturedDurationMs(u64),
     RecordingLimitReached,
     RecordingFault(BackendError),
     Notification(crate::types::NotificationPayload),
@@ -359,7 +363,10 @@ pub trait DictationEngine: Send + Sync + 'static {
 
     /// Retain an early stop request, preserving PCM and stop errors for finish().
     /// Returns false until the session is registered, or for legacy engines.
-    fn stop_recording(&self, _session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+    fn stop_recording(
+        &self,
+        _session_id: SessionId,
+    ) -> BoxFuture<'static, Result<bool, BackendError>> {
         Box::pin(async { Ok(false) })
     }
 
@@ -606,6 +613,24 @@ pub trait RecordingArchive: Send + Sync {
         })
     }
 
+    fn read_pcm_range(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+        let read = self.read_pcm();
+        Box::pin(async move {
+            let pcm = read.await?;
+            let start = usize::try_from(offset).unwrap_or(usize::MAX).min(pcm.len());
+            let end = start.saturating_add(len).min(pcm.len());
+            Ok(pcm[start..end].to_vec())
+        })
+    }
+
+    fn write_error(&self) -> Option<String> {
+        None
+    }
+
     fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>>;
 }
 
@@ -826,7 +851,9 @@ pub trait TextPolisher: Send + Sync {
 pub trait TextInserter: Send + Sync {
     /// Desktop keyboard/input-source preparation must run in the serialized
     /// processing lane, so a recording never owns another segment's native state.
-    fn defer_preparation_until_stop(&self) -> bool { false }
+    fn defer_preparation_until_stop(&self) -> bool {
+        false
+    }
     /// Freeze the native destination and its matching host-context reader before context or
     /// credentials can await. Only capture identity here; input-source changes belong to `begin`
     /// and its existing cancellation cleanup. Target-independent adapters use None.

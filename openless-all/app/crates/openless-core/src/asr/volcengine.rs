@@ -5,24 +5,23 @@
 //! final response. A `definite=true` utterance commits that segment only; it does
 //! not end the stream or prevent later audio from being sent.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
+use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
 use tokio_tungstenite::tungstenite::{handshake::client::Request as WebSocketRequest, Message};
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 
 use super::frame::{self, Flags, MessageType, Serialization};
+use super::stream_send::{send_ws_message_with_timeout, PacedSendClock, SharedWriter, WsStream};
 use super::{AudioConsumer, DictionaryHotword, RawTranscript};
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
@@ -38,6 +37,8 @@ const ENDPOINT_AGENT_PLAN: &str = "wss://openspeech.bytedance.com/api/v3/plan/sa
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 6_400;
 /// 16 kHz · 16-bit · mono = 32 000 bytes/sec → 32 bytes/ms.
 const BYTES_PER_MS: f64 = 32.0;
+const BYTES_PER_MS_U64: u64 = 32;
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const HOTWORD_CAP: usize = 80;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 
@@ -161,7 +162,7 @@ impl VolcengineCredentials {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum VolcengineASRError {
     #[error("credentials missing")]
     CredentialsMissing,
@@ -193,10 +194,16 @@ pub enum VolcengineASRError {
     DecodeFailed(String),
 }
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
-type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
-type AudioFrameSender = mpsc::UnboundedSender<(i32, Vec<u8>)>;
+enum SendItem {
+    Audio {
+        seq: i32,
+        chunk: Vec<u8>,
+    },
+    End {
+        final_seq: i32,
+        done: oneshot::Sender<Result<(), VolcengineASRError>>,
+    },
+}
 
 /// Sync state shared across the receive loop, the public API, and the
 /// audio-consumer fast path.
@@ -204,9 +211,15 @@ type AudioFrameSender = mpsc::UnboundedSender<(i32, Vec<u8>)>;
 struct SyncState {
     pending_audio: Vec<u8>,
     next_sequence: i32,
-    bytes_sent: usize,
-    frames_sent: usize,
+    bytes_received: u64,
+    bytes_written: u64,
+    frames_written: usize,
     is_connected: bool,
+    ending: bool,
+    final_frame_sent: bool,
+    send_tx: Option<mpsc::UnboundedSender<SendItem>>,
+    send_error: Option<VolcengineASRError>,
+    cancel_tx: Option<watch::Sender<bool>>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, VolcengineASRError>>>,
     start: Option<Instant>,
     /// Accumulated transcript of the latest partial (non-final). Returned to the
@@ -218,6 +231,9 @@ struct SyncState {
 
 pub struct VolcengineStreamingASR {
     credentials: VolcengineCredentials,
+    #[cfg(test)]
+    endpoint_override: Option<String>,
+    frame_send_timeout: Duration,
     task_spawner: Arc<dyn TaskSpawner>,
     hotwords: Vec<DictionaryHotword>,
     state: ParkingMutex<SyncState>,
@@ -226,18 +242,6 @@ pub struct VolcengineStreamingASR {
     /// of the lifetime of any particular `&self` borrow.
     writer: SharedWriter,
     final_rx: ParkingMutex<Option<oneshot::Receiver<Result<RawTranscript, VolcengineASRError>>>>,
-    /// Single-worker mode: consume_pcm_chunk enqueues (seq, chunk) into this channel
-    /// and the single worker spawned in open_session serially recvs and send_binary,
-    /// guaranteeing seq order equals actual send order. At session end the sender is
-    /// take()n; the worker's recv() returns None and it exits.
-    audio_tx: ParkingMutex<Option<AudioFrameSender>>,
-    /// Total audio frames queued plus in flight in the worker. consume adds N, the
-    /// worker subtracts 1 after sending a frame. send_last_frame must wait for this
-    /// to reach 0 before sending the final frame, otherwise the server could receive
-    /// the final frame first and treat later chunks as data after "stream ended",
-    /// dropping them — losing the tail sentence.
-    pending_sends: Arc<AtomicUsize>,
-    send_done: Arc<Notify>,
     partial_sink: ParkingMutex<Option<Arc<dyn TextStreamSink>>>,
 }
 
@@ -253,16 +257,38 @@ impl VolcengineStreamingASR {
     ) -> Self {
         Self {
             credentials,
+            #[cfg(test)]
+            endpoint_override: None,
+            frame_send_timeout: FRAME_SEND_TIMEOUT,
             task_spawner,
             hotwords,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
             final_rx: ParkingMutex::new(None),
-            audio_tx: ParkingMutex::new(None),
-            pending_sends: Arc::new(AtomicUsize::new(0)),
-            send_done: Arc::new(Notify::new()),
             partial_sink: ParkingMutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint_override = Some(endpoint.into());
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_frame_send_timeout(mut self, timeout: Duration) -> Self {
+        self.frame_send_timeout = timeout;
+        self
+    }
+
+    pub fn audio_coverage(&self) -> (u64, u64) {
+        let st = self.state.lock();
+        (st.bytes_written, st.bytes_received)
+    }
+
+    pub fn is_stream_complete(&self) -> bool {
+        let st = self.state.lock();
+        st.send_error.is_none() && st.final_frame_sent && st.bytes_written == st.bytes_received
     }
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
@@ -283,47 +309,117 @@ impl VolcengineStreamingASR {
         let (write, read) = ws.split();
 
         let (tx, rx) = oneshot::channel();
+        let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendItem>();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
 
         // Reset sync state for the new session.
         {
             let mut st = self.state.lock();
-            st.pending_audio.clear();
+            *st = SyncState::default();
             st.next_sequence = 1;
-            st.bytes_sent = 0;
-            st.frames_sent = 0;
             st.is_connected = true;
             st.final_tx = Some(tx);
+            st.send_tx = Some(send_tx);
+            st.cancel_tx = Some(cancel_tx);
             st.start = Some(Instant::now());
-            st.last_partial_text.clear();
         }
-        self.pending_sends.store(0, Ordering::SeqCst);
         *self.final_rx.lock() = Some(rx);
         *self.writer.lock().await = Some(write);
 
-        // Spawn the single audio worker: consume_pcm_chunk pushes (seq, chunk) into
-        // audio_tx; the worker FIFO-recvs and sends serially. At session end the
-        // caller (cancel / handle_frame error / fallback_to_partial_or_error) takes
-        // self.audio_tx, closing the channel so the worker exits naturally.
-        let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<(i32, Vec<u8>)>();
-        *self.audio_tx.lock() = Some(audio_tx);
+        // Spawn the single FIFO audio worker: drains queued audio with 2x realtime
+        // pacing before sending the NegativeSequence terminal frame.
         let writer_for_worker = Arc::clone(&self.writer);
-        let pending_for_worker = Arc::clone(&self.pending_sends);
-        let notify_for_worker = Arc::clone(&self.send_done);
+        let weak_self_for_worker = Arc::downgrade(self);
+        let frame_send_timeout = self.frame_send_timeout;
         let task_spawner = Arc::clone(&self.task_spawner);
         task_spawner.spawn(Box::pin(async move {
-            while let Some((seq, chunk)) = audio_rx.recv().await {
-                let frame = frame::build(
-                    MessageType::AudioOnlyRequest,
-                    Flags::PositiveSequence,
-                    Serialization::None,
-                    &chunk,
-                    Some(seq),
-                );
-                if let Err(e) = send_binary(&writer_for_worker, frame).await {
-                    log::error!("[asr] audio frame seq={} send 失败: {}", seq, e);
-                }
-                if pending_for_worker.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    notify_for_worker.notify_one();
+            let mut clock = PacedSendClock::new();
+            loop {
+                let item = tokio::select! {
+                    maybe_item = send_rx.recv() => match maybe_item {
+                        Some(item) => item,
+                        None => break,
+                    },
+                    changed = cancel_rx.changed() => {
+                        if changed.is_err() || *cancel_rx.borrow_and_update() {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                match item {
+                    SendItem::Audio { seq, chunk } => {
+                        let Some(slot) = clock.wait_slot(&mut cancel_rx).await else {
+                            break;
+                        };
+                        let chunk_len = chunk.len();
+                        let frame = frame::build(
+                            MessageType::AudioOnlyRequest,
+                            Flags::PositiveSequence,
+                            Serialization::None,
+                            &chunk,
+                            Some(seq),
+                        );
+                        if let Err(ws_err) = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Binary(frame.into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        {
+                            let err = VolcengineASRError::ConnectionFailed(
+                                ws_err.into_message("websocket not open"),
+                            );
+                            log::error!("[asr] audio frame seq={} send 失败: {}", seq, err);
+                            if let Some(this) = weak_self_for_worker.upgrade() {
+                                this.record_send_failure(err);
+                            }
+                            break;
+                        }
+                        if let Some(this) = weak_self_for_worker.upgrade() {
+                            let mut st = this.state.lock();
+                            st.bytes_written = st.bytes_written.saturating_add(chunk_len as u64);
+                            st.frames_written = st.frames_written.saturating_add(1);
+                        }
+                        clock.mark_sent(slot, chunk_len, BYTES_PER_MS_U64, 2);
+                    }
+                    SendItem::End { final_seq, done } => {
+                        let frame = frame::build(
+                            MessageType::AudioOnlyRequest,
+                            Flags::NegativeSequence,
+                            Serialization::None,
+                            &[],
+                            Some(final_seq),
+                        );
+                        let result = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Binary(frame.into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        .map_err(|ws_err| {
+                            VolcengineASRError::ConnectionFailed(
+                                ws_err.into_message("websocket not open"),
+                            )
+                        });
+                        match &result {
+                            Ok(()) => {
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.state.lock().final_frame_sent = true;
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("[asr] final frame send 失败: {err}");
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.record_send_failure(err.clone());
+                                }
+                            }
+                        }
+                        let _ = done.send(result);
+                        break;
+                    }
                 }
             }
         }));
@@ -340,7 +436,10 @@ impl VolcengineStreamingASR {
             &payload_bytes,
             Some(first_seq),
         );
-        send_binary(&self.writer, frame).await?;
+        if let Err(err) = send_binary(&self.writer, frame).await {
+            self.cancel();
+            return Err(err);
+        }
 
         // Spawn the receive loop. Holds a Weak<Self> so it doesn't keep
         // the struct alive forever if callers drop their Arcs.
@@ -396,6 +495,25 @@ impl VolcengineStreamingASR {
             .credentials
             .service
             .auth_mode(self.credentials.auth_mode.clone());
+        #[cfg(test)]
+        if let Some(ref endpoint) = self.endpoint_override {
+            let mut request = endpoint
+                .as_str()
+                .into_client_request()
+                .map_err(|e| VolcengineASRError::ConnectionFailed(e.to_string()))?;
+            let headers = request.headers_mut();
+            headers.insert(
+                "X-Api-Connect-Id",
+                HeaderValue::from_str(connect_id)
+                    .map_err(|e| VolcengineASRError::ConnectionFailed(e.to_string()))?,
+            );
+            headers.insert(
+                "X-Api-Request-Id",
+                HeaderValue::from_str(request_id)
+                    .map_err(|e| VolcengineASRError::ConnectionFailed(e.to_string()))?,
+            );
+            return Ok(request);
+        }
         let endpoint = match (self.credentials.service, &auth_mode) {
             (VolcengineService::AgentPlan, _) => ENDPOINT_AGENT_PLAN,
             (_, VolcengineAuthMode::AppIdToken) => ENDPOINT_APP_ID_TOKEN,
@@ -525,78 +643,70 @@ impl VolcengineStreamingASR {
     }
 
     pub async fn send_last_frame(&self) -> Result<(), VolcengineASRError> {
-        // Wait for all fire-and-forget sends to complete. Otherwise the final frame
-        // (NegativeSequence) could reach the server before the tail chunks, which are
-        // then treated as data after "stream ended" and dropped = tail sentence lost.
-        // A stalled writer must fail instead of overtaking queued audio.
-        let drain_deadline = Instant::now() + CONNECT_TIMEOUT;
-        while self.pending_sends.load(Ordering::SeqCst) > 0 {
-            let remaining = drain_deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+        let (done_tx, done_rx) = oneshot::channel();
+        {
+            let mut st = self.state.lock();
+            if let Some(ref err) = st.send_error {
+                return Err(err.clone());
+            }
+            let Some(tx) = st.send_tx.take() else {
                 return Err(VolcengineASRError::ConnectionFailed(
-                    "Timed out draining the audio queue".into(),
+                    "websocket closed before final frame".into(),
                 ));
+            };
+            st.ending = true;
+            if !st.pending_audio.is_empty() {
+                let leftover = std::mem::take(&mut st.pending_audio);
+                let seq = st.next_sequence;
+                st.next_sequence += 1;
+                if tx
+                    .send(SendItem::Audio {
+                        seq,
+                        chunk: leftover,
+                    })
+                    .is_err()
+                {
+                    return Err(st.send_error.clone().unwrap_or_else(|| {
+                        VolcengineASRError::ConnectionFailed("audio send queue closed".into())
+                    }));
+                }
             }
-            // notified() returns a future; wrapped in timeout -> wait for sends to
-            // drain or time out.
-            let _ = tokio::time::timeout(remaining, self.send_done.notified()).await;
-        }
-
-        // Drain leftover audio (if any) into one final positive-sequence frame.
-        let leftover = {
-            let mut st = self.state.lock();
-            if st.pending_audio.is_empty() {
-                None
-            } else {
-                Some(std::mem::take(&mut st.pending_audio))
-            }
-        };
-
-        if let Some(buf) = leftover {
-            let seq = self.allocate_positive_seq();
-            let len = buf.len();
-            let frame = frame::build(
-                MessageType::AudioOnlyRequest,
-                Flags::PositiveSequence,
-                Serialization::None,
-                &buf,
-                Some(seq),
-            );
-            {
-                let mut st = self.state.lock();
-                st.bytes_sent += len;
-                st.frames_sent += 1;
-            }
-            send_binary(&self.writer, frame).await?;
-        }
-
-        // Final frame: negativeSequence + negative seq number signals stream end.
-        // Final frame uses negativeSequence + negative seq number to tell the server
-        // "the stream ends here".
-        let final_seq = {
-            let mut st = self.state.lock();
-            let s = -st.next_sequence;
+            let final_seq = -st.next_sequence;
             st.next_sequence += 1;
-            s
-        };
-        let frame = frame::build(
-            MessageType::AudioOnlyRequest,
-            Flags::NegativeSequence,
-            Serialization::None,
-            &[],
-            Some(final_seq),
-        );
-        send_binary(&self.writer, frame).await?;
+            if tx
+                .send(SendItem::End {
+                    final_seq,
+                    done: done_tx,
+                })
+                .is_err()
+            {
+                return Err(st.send_error.clone().unwrap_or_else(|| {
+                    VolcengineASRError::ConnectionFailed("audio send queue closed".into())
+                }));
+            }
+        }
 
-        let (total_bytes, total_frames) = {
+        match done_rx.await {
+            Ok(inner) => inner?,
+            Err(_) => {
+                return Err(self.state.lock().send_error.clone().unwrap_or_else(|| {
+                    VolcengineASRError::ConnectionFailed(
+                        "audio send worker stopped before final frame".into(),
+                    )
+                }));
+            }
+        }
+
+        let (written_frames, written_bytes, received_bytes) = {
             let st = self.state.lock();
-            (st.bytes_sent, st.frames_sent)
+            (st.frames_written, st.bytes_written, st.bytes_received)
         };
-        let duration_ms = (total_bytes as f64 / BYTES_PER_MS) as u64;
+        let duration_ms = (written_bytes as f64 / BYTES_PER_MS) as u64;
         log::info!(
-            "[asr] 发送总结：{} audio frames, {} bytes (~{} ms)",
-            total_frames,
-            total_bytes,
+            "[asr] 发送总结：{} written frames, {}/{} bytes (~{} ms)",
+            written_frames,
+            written_bytes,
+            received_bytes,
             duration_ms
         );
         Ok(())
@@ -634,10 +744,11 @@ impl VolcengineStreamingASR {
             let mut st = self.state.lock();
             st.is_connected = false;
             st.pending_audio.clear();
+            st.send_tx = None;
+            if let Some(tx) = st.cancel_tx.as_ref() {
+                let _ = tx.send(true);
+            }
         }
-        // Dropping the audio sender -> worker.recv() returns None -> worker exits and
-        // stops holding the writer.
-        *self.audio_tx.lock() = None;
         // Close the writer asynchronously so the receive loop sees EOF. The
         // host-provided spawner also handles synchronous teardown callers.
         let writer = Arc::clone(&self.writer);
@@ -647,6 +758,27 @@ impl VolcengineStreamingASR {
             }
         }));
         self.signal_error(VolcengineASRError::NoFinalResult);
+    }
+
+    fn stop_send_worker(&self) {
+        let mut st = self.state.lock();
+        st.send_tx = None;
+        if let Some(tx) = st.cancel_tx.as_ref() {
+            let _ = tx.send(true);
+        }
+    }
+
+    fn record_send_failure(&self, err: VolcengineASRError) {
+        {
+            let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(err.clone());
+            }
+            st.is_connected = false;
+            st.send_tx = None;
+            st.pending_audio.clear();
+        }
+        self.fallback_to_partial_or_error(err);
     }
 
     // ---- internals ----
@@ -694,11 +826,19 @@ impl VolcengineStreamingASR {
         if parsed.message_type == Some(MessageType::ErrorMessage) {
             let code = parsed.error_code.unwrap_or(0);
             log::error!("[asr] Volcengine error frame code={code}");
-            self.signal_error(VolcengineASRError::ConnectionFailed(format!(
-                "Volcengine ASR error {code}"
-            )));
-            self.state.lock().is_connected = false;
-            *self.audio_tx.lock() = None;
+            let err = VolcengineASRError::ConnectionFailed(format!("Volcengine ASR error {code}"));
+            {
+                let mut st = self.state.lock();
+                if st.send_error.is_none() {
+                    st.send_error = Some(err.clone());
+                }
+                st.is_connected = false;
+                st.send_tx = None;
+                if let Some(tx) = st.cancel_tx.as_ref() {
+                    let _ = tx.send(true);
+                }
+            }
+            self.signal_error(err);
             return false;
         }
 
@@ -810,8 +950,14 @@ impl VolcengineStreamingASR {
                 duration_ms,
             };
             self.signal_success(transcript);
-            self.state.lock().is_connected = false;
-            *self.audio_tx.lock() = None;
+            {
+                let mut st = self.state.lock();
+                st.is_connected = false;
+                st.send_tx = None;
+                if let Some(tx) = st.cancel_tx.as_ref() {
+                    let _ = tx.send(true);
+                }
+            }
             return false;
         }
         true
@@ -837,7 +983,10 @@ impl VolcengineStreamingASR {
     /// speech".
     fn fallback_to_partial_or_error(&self, err: VolcengineASRError) {
         let (partial, duration_ms) = {
-            let st = self.state.lock();
+            let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(err.clone());
+            }
             (
                 st.last_partial_text.clone(),
                 st.start
@@ -859,52 +1008,35 @@ impl VolcengineStreamingASR {
             self.signal_error(err);
         }
         self.state.lock().is_connected = false;
-        *self.audio_tx.lock() = None;
+        self.stop_send_worker();
     }
 }
 
 impl AudioConsumer for VolcengineStreamingASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        // Single-worker serial send mode: drain and allocate seq inside the state lock
-        // (seq monotonic), then push (seq, chunk) into the mpsc. The worker sends in
-        // enqueue order, so even across multiple consume calls and spawns there is no
-        // writer lock contention.
-        let chunks: Vec<(i32, Vec<u8>)> = {
-            let mut st = self.state.lock();
-            if !st.is_connected {
-                return;
-            }
-            st.pending_audio.extend_from_slice(pcm);
-
-            let mut out: Vec<(i32, Vec<u8>)> = Vec::new();
-            while st.pending_audio.len() >= TARGET_AUDIO_CHUNK_BYTES {
-                let chunk: Vec<u8> = st.pending_audio.drain(..TARGET_AUDIO_CHUNK_BYTES).collect();
-                let seq = st.next_sequence;
-                st.next_sequence += 1;
-                st.bytes_sent += chunk.len();
-                st.frames_sent += 1;
-                out.push((seq, chunk));
-            }
-            out
-        };
-
-        if chunks.is_empty() {
+        let mut st = self.state.lock();
+        if st.ending || (!st.is_connected && st.bytes_received == 0 && st.send_tx.is_none()) {
             return;
         }
-        let Some(tx) = self.audio_tx.lock().as_ref().cloned() else {
+        st.bytes_received = st.bytes_received.saturating_add(pcm.len() as u64);
+        if !st.is_connected || st.send_error.is_some() {
+            return;
+        }
+        let Some(tx) = st.send_tx.clone() else {
             return;
         };
+        st.pending_audio.extend_from_slice(pcm);
 
-        for entry in chunks {
-            // pending_sends must be incremented before tx.send: otherwise the worker
-            // could recv + send + decrement first, underflowing the usize counter.
-            self.pending_sends.fetch_add(1, Ordering::SeqCst);
-            if tx.send(entry).is_err() {
-                // The worker already exited (cancel / error path took audio_tx).
-                // Undo the increment so send_last_frame's wait can reach 0.
-                if self.pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    self.send_done.notify_one();
-                }
+        let mut chunks: Vec<(i32, Vec<u8>)> = Vec::new();
+        while st.pending_audio.len() >= TARGET_AUDIO_CHUNK_BYTES {
+            let chunk: Vec<u8> = st.pending_audio.drain(..TARGET_AUDIO_CHUNK_BYTES).collect();
+            let seq = st.next_sequence;
+            st.next_sequence += 1;
+            chunks.push((seq, chunk));
+        }
+
+        for (seq, chunk) in chunks {
+            if tx.send(SendItem::Audio { seq, chunk }).is_err() {
                 log::warn!("[asr] audio queue closed; dropping subsequent frames");
                 return;
             }
@@ -1062,7 +1194,8 @@ mod tests {
                     "text": text,
                     "utterances": [{ "text": text, "definite": packet % 20 == 0 }],
                 },
-            })).unwrap();
+            }))
+            .unwrap();
             let bytes = frame::build(
                 MessageType::FullServerResponse,
                 Flags::PositiveSequence,
@@ -1374,5 +1507,252 @@ mod tests {
             result,
             Err(VolcengineASRError::FinalResultTimeout)
         ));
+    }
+
+    async fn spawn_loopback_ws<F, Fut>(handler: F) -> (String, tokio::task::JoinHandle<()>)
+    where
+        F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut
+            + Send
+            + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            handler(ws).await;
+        });
+        (format!("ws://{addr}"), handle)
+    }
+
+    fn loopback_volcengine(endpoint: String) -> Arc<VolcengineStreamingASR> {
+        Arc::new(
+            VolcengineStreamingASR::new(
+                VolcengineCredentials {
+                    service: VolcengineService::Standard,
+                    auth_mode: VolcengineAuthMode::ApiKey,
+                    app_id: String::new(),
+                    access_token: "test-key".into(),
+                    resource_id: VolcengineCredentials::default_resource_id().into(),
+                },
+                Vec::new(),
+            )
+            .with_endpoint(endpoint),
+        )
+    }
+
+    fn volc_final_response(text: &str) -> Vec<u8> {
+        let payload = serde_json::to_vec(&json!({ "result": { "text": text } })).unwrap();
+        frame::build(
+            MessageType::FullServerResponse,
+            Flags::NegativeSequence,
+            Serialization::Json,
+            &payload,
+            Some(-1),
+        )
+    }
+
+    #[tokio::test]
+    async fn audio_frame_write_failure_stops_worker_and_fails_send_last_frame() {
+        let received_frames = Arc::new(ParkingMutex::new(Vec::<frame::ParsedFrame>::new()));
+        let first_audio_seen = Arc::new(tokio::sync::Notify::new());
+        let shutdown_srv = Arc::new(tokio::sync::Notify::new());
+        let received_srv = Arc::clone(&received_frames);
+        let first_audio_srv = Arc::clone(&first_audio_seen);
+        let shutdown_srv_task = Arc::clone(&shutdown_srv);
+
+        let (endpoint, server_handle) = spawn_loopback_ws(move |mut ws| async move {
+            loop {
+                tokio::select! {
+                    msg = ws.next() => match msg {
+                        Some(Ok(Message::Binary(data))) => {
+                            let parsed = frame::parse(&data).unwrap();
+                            let is_audio = parsed.message_type == Some(MessageType::AudioOnlyRequest)
+                                && !parsed.is_final();
+                            received_srv.lock().push(parsed);
+                            if is_audio {
+                                first_audio_srv.notify_waiters();
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    },
+                    _ = shutdown_srv_task.notified() => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+
+        let asr = Arc::new(
+            VolcengineStreamingASR::new(
+                VolcengineCredentials {
+                    service: VolcengineService::Standard,
+                    auth_mode: VolcengineAuthMode::ApiKey,
+                    app_id: String::new(),
+                    access_token: "test-key".into(),
+                    resource_id: VolcengineCredentials::default_resource_id().into(),
+                },
+                Vec::new(),
+            )
+            .with_endpoint(endpoint)
+            .with_frame_send_timeout(Duration::from_millis(60)),
+        );
+        asr.open_session().await.unwrap();
+
+        asr.consume_pcm_chunk(&vec![0x11u8; TARGET_AUDIO_CHUNK_BYTES]);
+        tokio::time::timeout(Duration::from_secs(2), first_audio_seen.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            asr.audio_coverage(),
+            (
+                TARGET_AUDIO_CHUNK_BYTES as u64,
+                TARGET_AUDIO_CHUNK_BYTES as u64
+            )
+        );
+        assert_eq!(asr.state.lock().frames_written, 1);
+
+        let writer_guard = asr.writer.lock().await;
+        asr.consume_pcm_chunk(&vec![0x22u8; TARGET_AUDIO_CHUNK_BYTES + 200]);
+        let err = asr
+            .send_last_frame()
+            .await
+            .expect_err("must fail on write timeout");
+        assert!(matches!(err, VolcengineASRError::ConnectionFailed(_)));
+        drop(writer_guard);
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(
+            asr.audio_coverage(),
+            (
+                TARGET_AUDIO_CHUNK_BYTES as u64,
+                (TARGET_AUDIO_CHUNK_BYTES * 2 + 200) as u64
+            )
+        );
+        assert_eq!(asr.state.lock().frames_written, 1);
+        assert!(!asr.is_stream_complete());
+        assert!(
+            received_frames.lock().iter().all(|f| !f.is_final()),
+            "NegativeSequence must never be transmitted after failed audio write"
+        );
+
+        shutdown_srv.notify_waiters();
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn buffered_audio_is_paced_and_precedes_negative_sequence() {
+        let frames = Arc::new(ParkingMutex::new(
+            Vec::<(Instant, frame::ParsedFrame)>::new(),
+        ));
+        let frames_srv = Arc::clone(&frames);
+        let (endpoint, server_handle) = spawn_loopback_ws(move |mut ws| async move {
+            while let Some(Ok(Message::Binary(data))) = ws.next().await {
+                let parsed = frame::parse(&data).unwrap();
+                let is_final = parsed.is_final();
+                frames_srv.lock().push((Instant::now(), parsed));
+                if is_final {
+                    ws.send(Message::Binary(volc_final_response("火山完成").into()))
+                        .await
+                        .unwrap();
+                    let _ = ws.close(None).await;
+                    break;
+                }
+            }
+        })
+        .await;
+
+        let asr = loopback_volcengine(endpoint);
+        asr.open_session().await.unwrap();
+        let payload = vec![0x33u8; TARGET_AUDIO_CHUNK_BYTES * 3 + 320];
+        asr.consume_pcm_chunk(&payload);
+        asr.send_last_frame().await.unwrap();
+
+        let transcript = asr.await_final_result().await.unwrap();
+        assert_eq!(transcript.text, "火山完成");
+        assert!(asr.is_stream_complete());
+        assert_eq!(
+            asr.audio_coverage(),
+            (payload.len() as u64, payload.len() as u64)
+        );
+        server_handle.await.unwrap();
+
+        let recorded = frames.lock();
+        // FullClientRequest + 3 chunks + 1 leftover + 1 NegativeSequence = 6 frames.
+        assert_eq!(recorded.len(), 6);
+        assert_eq!(
+            recorded[0].1.message_type,
+            Some(MessageType::FullClientRequest)
+        );
+        for i in 1..=4 {
+            assert_eq!(
+                recorded[i].1.message_type,
+                Some(MessageType::AudioOnlyRequest)
+            );
+            assert!(!recorded[i].1.is_final());
+        }
+        assert!(recorded[5].1.is_final());
+        // 3 full chunks = 3 * 100ms intervals at 2x realtime -> total span across frames 1..=4 >= 220ms.
+        let pacing_span = recorded[4].0.saturating_duration_since(recorded[1].0);
+        assert!(
+            pacing_span >= Duration::from_millis(220),
+            "expected ~300 ms 2x realtime pacing, got {pacing_span:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_wakes_paced_send_worker_promptly() {
+        let frames = Arc::new(ParkingMutex::new(0usize));
+        let first_audio = Arc::new(tokio::sync::Notify::new());
+        let shutdown = Arc::new(tokio::sync::Notify::new());
+        let frames_srv = Arc::clone(&frames);
+        let first_audio_srv = Arc::clone(&first_audio);
+        let shutdown_srv = Arc::clone(&shutdown);
+
+        let (endpoint, server_handle) = spawn_loopback_ws(move |mut ws| async move {
+            loop {
+                tokio::select! {
+                    msg = ws.next() => match msg {
+                        Some(Ok(Message::Binary(data))) => {
+                            let parsed = frame::parse(&data).unwrap();
+                            if parsed.message_type == Some(MessageType::AudioOnlyRequest) {
+                                *frames_srv.lock() += 1;
+                                first_audio_srv.notify_waiters();
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    },
+                    _ = shutdown_srv.notified() => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+
+        let asr = loopback_volcengine(endpoint);
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&vec![0x55u8; TARGET_AUDIO_CHUNK_BYTES * 40]);
+        tokio::time::timeout(Duration::from_secs(2), first_audio.notified())
+            .await
+            .unwrap();
+
+        let started = Instant::now();
+        asr.cancel();
+        let res = tokio::time::timeout(Duration::from_millis(250), asr.await_final_result())
+            .await
+            .expect("cancel must wake await_final_result promptly");
+        assert!(matches!(res, Err(VolcengineASRError::NoFinalResult)));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert!(*frames.lock() <= 3);
+
+        shutdown.notify_waiters();
+        server_handle.await.unwrap();
     }
 }
