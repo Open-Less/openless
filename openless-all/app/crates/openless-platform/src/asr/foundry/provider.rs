@@ -2,28 +2,28 @@
 //! Recording buffer and chunked transcription adapter for Foundry Local Whisper.
 //! The Windows path performs native inference; other targets keep type-compatible stubs.
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 use std::fs::{self, OpenOptions};
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 use std::io::Write;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 use anyhow::Context;
 use anyhow::Result;
 use parking_lot::Mutex;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 use uuid::Uuid;
 
 use openless_core::asr::wav::encode_wav_16k_mono;
 use openless_core::asr::RawTranscript;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 use crate::asr::foundry::runtime::FoundryLocalRuntime;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 use crate::asr::foundry::runtime::FoundryRouteEpoch;
 use crate::asr::foundry::runtime::{FoundryFallbackNoticeCallback, FoundryPrimaryRecoveryToken};
 
@@ -40,9 +40,9 @@ pub struct FoundryProviderTranscription {
 }
 
 pub struct FoundryLocalWhisperAsr {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     runtime: Arc<FoundryLocalRuntime>,
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     route_epoch: FoundryRouteEpoch,
     model_alias: String,
     runtime_source: String,
@@ -52,7 +52,7 @@ pub struct FoundryLocalWhisperAsr {
 }
 
 impl FoundryLocalWhisperAsr {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     pub fn new(
         runtime: Arc<FoundryLocalRuntime>,
         model_alias: String,
@@ -71,7 +71,7 @@ impl FoundryLocalWhisperAsr {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
     pub fn new(model_alias: String, language_hint: Option<String>) -> Self {
         Self {
             model_alias,
@@ -139,7 +139,7 @@ impl FoundryLocalWhisperAsr {
     ) -> Result<FoundryProviderTranscription> {
         let duration_ms = pcm_duration_ms(pcm);
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
         {
             let _ = pcm;
             let _ = notices;
@@ -149,7 +149,7 @@ impl FoundryLocalWhisperAsr {
             );
         }
 
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
         {
             let chunks = openless_core::asr::whisper::split_pcm_by_duration(
                 pcm,
@@ -213,7 +213,7 @@ impl FoundryLocalWhisperAsr {
 
     pub fn cancel(&self) {
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
         {
             // An old provider must not cancel a new route; the runtime also returns the exact CPU
             // lease for the current route, avoiding cross-session cancellation of the shared
@@ -256,12 +256,12 @@ fn pcm_to_wav(pcm: &[u8]) -> Vec<u8> {
     encode_wav_16k_mono(&samples)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 struct TempWavFile {
     path: PathBuf,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 impl TempWavFile {
     fn create(pcm: &[u8]) -> Result<Self> {
         let dir = foundry_temp_dir();
@@ -293,7 +293,7 @@ impl TempWavFile {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 impl Drop for TempWavFile {
     fn drop(&mut self) {
         match fs::remove_file(&self.path) {
@@ -309,7 +309,7 @@ impl Drop for TempWavFile {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 fn remove_partial_temp_wav(path: &Path) {
     match fs::remove_file(path) {
         Ok(()) => {}
@@ -323,7 +323,7 @@ fn remove_partial_temp_wav(path: &Path) {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 fn foundry_temp_dir() -> PathBuf {
     std::env::temp_dir()
         .join("OpenLess")
@@ -349,7 +349,7 @@ fn foundry_transcribe_attempt_consumes_buffer<T>(result: &Result<T>) -> bool {
 mod tests {
     use openless_core::AudioConsumer;
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     fn test_provider() -> (
         super::FoundryLocalWhisperAsr,
         std::sync::Arc<super::FoundryLocalRuntime>,
@@ -368,7 +368,7 @@ mod tests {
         )
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
     fn test_provider() -> super::FoundryLocalWhisperAsr {
         super::FoundryLocalWhisperAsr::new("whisper-small".into(), Some(" zh ".into()))
     }
@@ -406,9 +406,9 @@ mod tests {
 
     #[test]
     fn foundry_provider_reports_buffer_duration_without_consuming() {
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
         let (provider, _) = test_provider();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
         let provider = test_provider();
 
         provider.consume_pcm_chunk(&vec![0u8; 32_000]);
@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(provider.buffer.lock().len(), 32_000);
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     #[test]
     fn foundry_provider_binds_a_new_route_when_the_recording_is_created() {
         let runtime = std::sync::Arc::new(super::FoundryLocalRuntime::new());
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(runtime.route_epoch_snapshot(), second.route_epoch);
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     #[test]
     fn foundry_provider_route_is_not_rebased_by_a_later_setting_change() {
         let runtime = std::sync::Arc::new(super::FoundryLocalRuntime::new());
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(provider.route_epoch, recording_route);
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     #[test]
     fn foundry_provider_temp_wav_drop_removes_file() {
         let pcm = [0x01, 0x00, 0xff, 0x7f];
@@ -491,9 +491,9 @@ mod tests {
 
     #[test]
     fn foundry_provider_cancel_clears_buffer() {
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
         let (provider, _) = test_provider();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
         let provider = test_provider();
 
         provider.consume_pcm_chunk(&[1, 0, 2, 0]);
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(provider.language_hint(), Some("zh"));
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "asr-foundry"))]
     #[test]
     fn foundry_provider_cancel_requests_runtime_prepare_cancel() {
         let (provider, runtime) = test_provider();

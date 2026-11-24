@@ -25,7 +25,6 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=CoreAudio");
         let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
         if target_arch == "aarch64" {
-            build_experimental_gemma();
         }
     }
 
@@ -45,50 +44,6 @@ fn main() {
     }
 
     tauri_build::build();
-}
-
-fn build_experimental_gemma() {
-    const SOURCE: &str = "src/asr/local/experimental/gemma.swift";
-    println!("cargo:rerun-if-changed={SOURCE}");
-    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let status = std::process::Command::new("xcrun")
-        .args([
-            "swiftc",
-            "-O",
-            "-parse-as-library",
-            "-emit-library",
-            "-static",
-            "-module-name",
-            "OpenlessGemma",
-            "-target",
-            "arm64-apple-macosx14.0",
-            SOURCE,
-            "-o",
-        ])
-        .arg(out.join("libOpenlessGemma.a"))
-        .status()
-        .expect("Swift compiler is required for the experimental Core ML adapter");
-    assert!(
-        status.success(),
-        "experimental Core ML adapter failed to compile"
-    );
-    let swift = std::process::Command::new("xcrun")
-        .args(["--find", "swiftc"])
-        .output()
-        .expect("find swiftc");
-    let compiler = std::path::PathBuf::from(String::from_utf8(swift.stdout).unwrap().trim());
-    let libraries = compiler
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("lib/swift/macosx");
-    println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-search=native={}", libraries.display());
-    println!("cargo:rustc-link-lib=static=OpenlessGemma");
-    println!("cargo:rustc-link-lib=framework=CoreML");
-    println!("cargo:rustc-link-lib=framework=Accelerate");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
 }
 
 /// Native Apple adapters use availability checks. Rust links with

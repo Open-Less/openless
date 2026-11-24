@@ -1,4 +1,4 @@
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 mod imp {
     use std::fs;
     use std::io::{self, Read};
@@ -796,10 +796,10 @@ if ($readyForFoundryX64) { exit 0 } else { exit 1 }
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 pub use imp::*;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
 pub fn normalize_runtime_source_str(value: &str) -> String {
     match value.trim() {
         "nuget" => "nuget".into(),

@@ -17,6 +17,10 @@ pub mod receipt;
 // Foundry Local：描述层常开；WinML 运行时由 `asr-foundry` 控制。
 pub mod foundry;
 
+// 端侧实验引擎（SenseVoice / EmbeddingGemma / TextStream + Swift Gemma 适配）。
+#[cfg(feature = "asr-experimental")]
+pub mod experimental;
+
 // Apple Speech 只在 macOS 编译（Speech.framework）。
 #[cfg(all(feature = "asr-apple", target_os = "macos"))]
 pub mod apple;

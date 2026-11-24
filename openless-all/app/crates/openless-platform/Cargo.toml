@@ -63,6 +63,14 @@ asr-foundry = [
     "dep:zip",
 ]
 
+# 端侧实验引擎：sherpa 引擎 + Swift Gemma 适配 + 逐字文本流
+asr-experimental = [
+    "asr-sherpa",
+    "dep:futures-util",
+    "dep:tokio",
+    "dep:anyhow",
+]
+
 # Apple Speech（macOS Speech.framework）
 asr-apple = ["asr", "dep:objc2", "dep:block2", "dep:futures-util", "dep:parking_lot"]
 
@@ -223,6 +231,9 @@ sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
 ], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = [
+  "static",
+], optional = true }
 block2 = { version = "0.6", optional = true }
 core-foundation = { version = "0.10", optional = true }
 coreaudio-sys = { version = "0.2", optional = true }

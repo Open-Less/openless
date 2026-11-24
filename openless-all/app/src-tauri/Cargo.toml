@@ -117,7 +117,7 @@ jni = "0.21"
 ndk-context = "0.1"
 tao = "0.35"
 # Android 的 JNI 通道能力（无障碍 / Shizuku / 悬浮层 / AudioRecord）。
-openless-platform = { path = "../crates/openless-platform", features = ["android"] }
+openless-platform = { path = "../crates/openless-platform", features = ["android", "asr-experimental"] }
 
 # Local ASR on arm64 Android: the crate has no Android prebuilt download, so
 # scripts/run-android-tauri-build.mjs points SHERPA_ONNX_LIB_DIR at the
@@ -139,8 +139,8 @@ dispatch2 = "0.3"
 coreaudio-sys = "0.2"
 objc2 = { version = "0.5", features = ["exception"] }
 objc2-foundation = "0.2"
-# Apple Speech 只在 macOS 编译，对应平台层 feature。
-openless-platform = { path = "../crates/openless-platform", features = ["asr-apple"] }
+# Apple Speech 与端侧实验引擎（SenseVoice / Gemma / TextStream）都在平台层。
+openless-platform = { path = "../crates/openless-platform", features = ["asr-apple", "asr-experimental"] }
 
 # 0.2.2 的 NSPanel feature 定义缺少结构体 cfg 所需的 NSResponder/NSWindow
 # （app workspace 靠 winit 的 feature union 掩盖了它，src-tauri 无 winit）。
@@ -153,7 +153,7 @@ openless-platform = { path = "../crates/openless-platform", features = ["asr-she
 
 
 [target.'cfg(target_os = "windows")'.dependencies]
-openless-platform = { path = "../crates/openless-platform", features = ["asr-foundry", "ime"] }
+openless-platform = { path = "../crates/openless-platform", features = ["asr-foundry", "ime", "asr-experimental"] }
 windows-core = "0.58"
 foundry-local-sdk = { version = "=1.2.1", features = ["winml"] }
 raw-window-handle = "0.6"

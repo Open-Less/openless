@@ -113,11 +113,11 @@ pub fn is_terminal_foundry_fallback_error(error: &anyhow::Error) -> bool {
 /// the err field, never shown directly to users. The Foundry provider exists
 /// only on Windows, so non-Windows targets need not compile it (avoids
 /// dead_code warnings).
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 pub const FOUNDRY_FALLBACK_TERMINAL_USER_MESSAGE: &str =
     "本地识别失败: GPU 识别异常，且 CPU 回退未能完成（详情见日志）";
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 // The Windows native runtime module exposes both preload and transcription
 // interfaces; the call site picks one based on the target configuration.
 #[allow(dead_code)]
@@ -2533,20 +2533,20 @@ mod imp {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "asr-foundry"))]
 pub use imp::FoundryLocalRuntime;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
 pub struct FoundryLocalRuntime;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
 impl Default for FoundryLocalRuntime {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "asr-foundry")))]
 impl FoundryLocalRuntime {
     pub fn new() -> Self {
         Self

@@ -236,7 +236,7 @@ pub(crate) async fn run(root: PathBuf, wav: PathBuf, download: bool) -> Result<(
     );
 
     let bytes = std::fs::read(&wav).with_context(|| format!("read WAV {}", wav.display()))?;
-    let samples = super::super::test_run::decode_wav_16k_mono(&bytes)?;
+    let samples = crate::asr::experimental::wav::decode_wav_16k_mono(&bytes)?;
     let pcm: Vec<u8> = samples
         .iter()
         .flat_map(|s| ((s * 32768.0).clamp(-32768.0, 32767.0) as i16).to_le_bytes())

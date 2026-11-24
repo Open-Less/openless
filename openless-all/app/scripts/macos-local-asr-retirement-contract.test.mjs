@@ -50,7 +50,7 @@ const run = service.slice(
 );
 assert.doesNotMatch(run, /runtime\.prepare/);
 assert.match(service, /saved\.download_pending/);
-const native = read('src-tauri/src/asr/local/experimental.rs');
+const native = read('crates/openless-platform/src/asr/experimental/mod.rs');
 assert.match(native, /models\.lease\(model\)[^]*?runtime\.prepare\(model[^]*?models\.check_lease/);
 
 const channels = read('src/features/providers/ChannelList.tsx');

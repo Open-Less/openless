@@ -12,12 +12,12 @@ assert.doesNotMatch(modules, /mod retired|QwenBackend|mod models/);
 assert.equal(existsSync(new URL('../src-tauri/src/asr/local/retired.rs', import.meta.url)), false);
 const native = read('src-tauri/src/core_adapters.rs');
 assert.doesNotMatch(native, /LocalAsrCache|LocalWhisperCache|LocalQwenEngine|AppleSpeechAsr/);
-const worker = read('src-tauri/src/asr/local/experimental/textstream.rs');
+const worker = read('crates/openless-platform/src/asr/experimental/textstream.rs');
 assert.match(
   worker,
   /installed\(&directory\)[^]*?verification\.verify\(Model::TextStream[^]*?models\.check_lease[^]*?Command::new\(install::python/,
 );
-const verification = read('src-tauri/src/asr/local/experimental/textstream/package_cache.rs');
+const verification = read('crates/openless-platform/src/asr/experimental/textstream/package_cache.rs');
 assert.match(verification, /verify_package\(model, directory\)/);
 assert.match(verification, /meta\.ino\(\)/);
 assert.match(verification, /meta\.ctime_nsec\(\)/);

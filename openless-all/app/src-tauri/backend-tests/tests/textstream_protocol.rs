@@ -1,2 +1,2 @@
-#[path = "../../src/asr/local/experimental/textstream/protocol.rs"]
+#[path = "../../../crates/openless-platform/src/asr/experimental/textstream/protocol.rs"]
 mod protocol;

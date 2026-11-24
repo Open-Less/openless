@@ -42,6 +42,7 @@ cargo test  --no-default-features --features storage          # 只测存储模�
 | `asr` | 本地 ASR 元数据（provider id / 模型收据 / sherpa 描述 / 诊断钩子） | anyhow, serde, serde_json, uuid |
 | `asr-sherpa` | sherpa-onnx 原生运行时（仅 Windows / Android arm64） | sherpa-onnx, tokio, parking_lot |
 | `asr-apple` | Apple Speech（仅 macOS） | objc2, block2, futures-util, parking_lot |
+| `asr-experimental` | 端侧实验引擎（SenseVoice / Gemma / TextStream） | → `asr-sherpa`, futures-util, tokio, swiftc |
 | `asr-foundry` | Foundry Local（Windows WinML） | foundry-local-sdk, zip, tokio, uuid |
 | `ime` | Windows TSF 通道（提交 / 选区读取） | serde, tokio, parking_lot |
 | `ime-profile` | Windows IME 语言配置 | winreg |

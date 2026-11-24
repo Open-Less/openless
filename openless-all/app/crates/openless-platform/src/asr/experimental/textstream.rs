@@ -110,13 +110,13 @@ impl Runtime {
         let verify = directory.clone();
         let verification = Arc::clone(&self.verification);
         let budget = tokio::task::spawn_blocking(move || {
-            let _background = super::compute_policy::BackgroundScope::enter();
+            let _background = crate::asr::experimental::compute_policy::BackgroundScope::enter();
             let cached = verification.verify(Model::TextStream, &verify)?;
             log::info!(
                 "[experimental-asr] model=textstream stage=verify cached={cached} elapsed_ms={}",
                 started.elapsed().as_millis()
             );
-            Ok::<_, BackendError>(super::compute_policy::Budget::capture())
+            Ok::<_, BackendError>(crate::asr::experimental::compute_policy::Budget::capture())
         })
         .await
         .map_err(error)??;
