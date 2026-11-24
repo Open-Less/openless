@@ -93,7 +93,7 @@ export function setTranslationHotkey(binding: ShortcutBinding | null): Promise<v
   });
 }
 
-// binding = null disables (clears the global key), matching set_qa_hotkey (issue #576).
+// binding = null disables (clears the global key).
 export function setSwitchStyleHotkey(binding: ShortcutBinding | null): Promise<void> {
   return invokeOrMock('set_switch_style_hotkey', { binding }, () => undefined);
 }

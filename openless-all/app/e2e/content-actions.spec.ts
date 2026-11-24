@@ -8,7 +8,7 @@ test('dictionary deletion waits for confirmation and keeps selection after cance
   const dictionary = page.locator('[data-ol-page="vocab"]');
   await expect(dictionary).toHaveAttribute('data-transition-phase', 'settled');
   await dictionary.getByRole('button', { name: '选择', exact: true }).click();
-  await dictionary.getByRole('checkbox', { name: '选择当前结果' }).check();
+  await dictionary.getByRole('button', { name: '选择所有结果' }).click();
   const remove = dictionary.getByRole('button', { name: /^删除已选/ });
   await remove.click();
   const confirmation = page.getByRole('dialog', { name: /^删除已选/ });
@@ -17,8 +17,9 @@ test('dictionary deletion waits for confirmation and keeps selection after cance
   await expect(remove).toBeVisible();
   await remove.click();
   await confirmation.getByRole('button', { name: '删除', exact: true }).click();
-  await expect(remove).toHaveCount(0);
-  await expect(dictionary.getByRole('checkbox', { name: '选择当前结果' })).toBeDisabled();
+  await expect(remove).toBeVisible();
+  await expect(remove).toBeDisabled();
+  await expect(dictionary.getByRole('button', { name: '选择所有结果' })).toBeDisabled();
 });
 
 test('style editor retains its draft when discard is cancelled', async ({ page }) => {

@@ -10,12 +10,16 @@ const second = controller.createScope();
 try {
   const saving = first.interaction.notify({ key: 'save', state: 'saving', message: 'Saving' });
   const id = controller.getNotifications()[0].id;
-  first.interaction.notify({ key: 'save', state: 'saved', message: 'Saved' });
+  saving.update({ state: 'saved', message: 'Saved' });
   assert.equal(controller.getNotifications().length, 1);
   assert.equal(controller.getNotifications()[0].id, id);
   saving.update({ state: 'failed', message: 'Could not save' });
   assert.equal(controller.getNotifications()[0].message, 'Could not save');
 
+  first.interaction.notify({ key: 'save', state: 'failed', message: 'Could not save' });
+  const repeated = controller.getNotifications()[0];
+  assert.notEqual(repeated.id, id);
+  assert.equal(repeated.message, 'Could not save');
   second.interaction.notify({ key: 'save', state: 'saving', message: 'New owner saving' });
   const next = controller.getNotifications()[0];
   assert.notEqual(next.id, id);

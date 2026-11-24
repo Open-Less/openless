@@ -4859,14 +4859,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun startRuntimeService() {
-        OpenLessRuntimeService.imeRequested = true
         try {
-            val intent = android.content.Intent(this, OpenLessRuntimeService::class.java)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+            OpenLessRuntimeService.setImeRequested(this, true)
             ensureBackendReady()
         } catch (error: Throwable) {
             android.util.Log.w("OpenLessImeService", "failed to start IME runtime service", error)
@@ -4926,9 +4920,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun ensureBackendReady() = OpenLessBackendWarmupActivity.ensureBackendReady(this)
 
     private fun stopRuntimeService() {
-        OpenLessRuntimeService.imeRequested = false
-        if (OpenLessRuntimeService.authorizationActive()) return
-        runCatching { stopService(android.content.Intent(this, OpenLessRuntimeService::class.java)) }
+        OpenLessRuntimeService.setImeRequested(this, false)
     }
 
     /**

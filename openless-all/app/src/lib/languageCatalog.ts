@@ -40,10 +40,11 @@ function searchText(value: string): string {
   return value.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase();
 }
 
-export function localizedLanguages(
-  locale: string,
-  existingValues: readonly string[] = [],
-): LocalizedLanguage[] {
+const localizedCatalogCache = new Map<string, readonly LocalizedLanguage[]>();
+
+function getBaseLocalizedLanguages(locale: string): readonly LocalizedLanguage[] {
+  const cached = localizedCatalogCache.get(locale);
+  if (cached) return cached;
   let names: Intl.DisplayNames | undefined;
   try {
     if (typeof Intl.DisplayNames === 'function') {
@@ -73,13 +74,27 @@ export function localizedLanguages(
       ),
     };
   });
-  const known = new Set(languages.map((language) => language.nativeName));
+  const collator = new Intl.Collator(locale, { sensitivity: 'base', numeric: true });
+  languages.sort((left, right) => collator.compare(left.displayName, right.displayName));
+  if (localizedCatalogCache.size >= 4) localizedCatalogCache.clear();
+  localizedCatalogCache.set(locale, languages);
+  return languages;
+}
+
+export function localizedLanguages(
+  locale: string,
+  existingValues: readonly string[] = [],
+): LocalizedLanguage[] {
+  const base = getBaseLocalizedLanguages(locale);
+  if (existingValues.length === 0) return [...base];
+  const known = new Set(base.map((language) => language.nativeName));
+  const extras: LocalizedLanguage[] = [];
   for (const value of existingValues) {
     const nativeName = nativeLanguageName(value);
     if (!nativeName || known.has(nativeName)) continue;
     known.add(nativeName);
     // Keep a previously saved custom name visible and removable instead of silently dropping it.
-    languages.push({
+    extras.push({
       code: '',
       nativeName,
       displayName: nativeName,
@@ -87,8 +102,11 @@ export function localizedLanguages(
       searchText: searchText(nativeName),
     });
   }
+  if (extras.length === 0) return [...base];
   const collator = new Intl.Collator(locale, { sensitivity: 'base', numeric: true });
-  return languages.sort((left, right) => collator.compare(left.displayName, right.displayName));
+  return [...base, ...extras].sort((left, right) =>
+    collator.compare(left.displayName, right.displayName),
+  );
 }
 
 export function filterLanguages(

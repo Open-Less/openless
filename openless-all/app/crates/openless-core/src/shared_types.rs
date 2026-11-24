@@ -170,7 +170,9 @@ pub use crate::types::HistoryInsertStatus as InsertStatus;
 #[serde(rename_all = "camelCase")]
 pub enum SelectionPolishOutputMode {
     #[default]
+    #[serde(alias = "previewConfirm")]
     DirectReplace,
+    #[serde(skip_deserializing)]
     PreviewConfirm,
 }
 
@@ -187,13 +189,13 @@ pub struct FrontApp {
 /// `FrontApp { name, bundle_id }`.
 ///
 /// macOS composes `"Claude (com.anthropic.claudefordesktop)"`; Windows has
-/// only window titles, no bundle id. History entries have separate
+/// an executable name, not a bundle id. History entries have separate
 /// `app_name` / `app_bundle_id` fields, so splitting lets the detail page
 /// show a readable app name instead of gluing the whole bundle id into the
 /// body text.
 ///
 /// Only macOS labels are `"name (bundle.id)"`; on Windows parentheses are
-/// part of the title. Callers must pass `is_macos` per platform (production
+/// part of the label. Callers must pass `is_macos` per platform (production
 /// goes through `split_front_app_opt`). Non-macOS labels and labels whose
 /// bracket structure doesn't parse stay whole as the app name — better a
 /// verbose display than misreading ordinary parentheses in a window title
@@ -231,7 +233,7 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
 
 /// `Option` convenience wrapper for `split_front_app_label`; keeps the
 /// platform switch in one place: only macOS display strings are
-/// `"name (bundle.id)"`; other platforms (Windows window titles, Linux)
+/// `"name (bundle.id)"`; other platforms (Windows, Linux)
 /// keep the whole string as the name and leave the bundle id empty.
 pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
     label
@@ -596,6 +598,8 @@ pub struct UserPreferences {
     /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
     #[serde(default = "default_qa_companion_key")]
     pub qa_companion_key: String,
+    #[serde(default)]
+    pub qa_shortcut_behavior: QaShortcutBehavior,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -785,6 +789,12 @@ pub struct UserPreferences {
     /// always polish regardless of this value.
     #[serde(default = "default_polish_skip_max_chars")]
     pub polish_skip_max_chars: u32,
+    /// Enables the bounded post-ASR polish strategy hook. Disabled by default.
+    #[serde(default)]
+    pub polish_strategy_enabled: bool,
+    /// Rhai source for the bounded post-ASR polish strategy.
+    #[serde(default)]
+    pub polish_strategy_script: String,
     /// Start silently (no main window). Common for login-launch users who
     /// want the tray rather than a popped-up window. When on, every launch
     /// path skips the window (manual clicks included); users reach the main
@@ -1138,6 +1148,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_qa_companion_key")]
     qa_companion_key: String,
     #[serde(default)]
+    qa_shortcut_behavior: QaShortcutBehavior,
+    #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
     /// `Some(None)` means the user explicitly disabled it.
@@ -1233,6 +1245,10 @@ struct UserPreferencesWire {
     polish_context_window_minutes: u32,
     #[serde(default = "default_polish_skip_max_chars")]
     polish_skip_max_chars: u32,
+    #[serde(default)]
+    polish_strategy_enabled: bool,
+    #[serde(default)]
+    polish_strategy_script: String,
     #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
@@ -1399,6 +1415,7 @@ impl Default for UserPreferencesWire {
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
             qa_companion_key: prefs.qa_companion_key,
+            qa_shortcut_behavior: prefs.qa_shortcut_behavior,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
@@ -1451,6 +1468,8 @@ impl Default for UserPreferencesWire {
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
             polish_skip_max_chars: prefs.polish_skip_max_chars,
+            polish_strategy_enabled: prefs.polish_strategy_enabled,
+            polish_strategy_script: prefs.polish_strategy_script,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
@@ -1560,7 +1579,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                             AndroidOverlayGestureAction::StylePack
                         }
                     },
-                    right: AndroidOverlayGestureAction::Qa,
+                    right: AndroidOverlayGestureAction::None,
                 });
 
         Ok(Self {
@@ -1635,6 +1654,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             output_language_preference: wire.output_language_preference,
             qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
             qa_companion_key: wire.qa_companion_key,
+            qa_shortcut_behavior: wire.qa_shortcut_behavior,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
@@ -1694,6 +1714,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
             polish_skip_max_chars: wire.polish_skip_max_chars,
+            polish_strategy_enabled: wire.polish_strategy_enabled,
+            polish_strategy_script: wire.polish_strategy_script,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
             streaming_insert,
@@ -1859,6 +1881,16 @@ fn salvage_without_incomplete_legacy_hotkey(
 
 fn default_qa_hotkey() -> Option<ShortcutBinding> {
     if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
+}
+
+/// Initial action of the recording shortcut plus the Ask companion key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QaShortcutBehavior {
+    #[default]
+    Record,
+    Open,
+    Draft,
 }
 
 fn default_qa_companion_key() -> String { "Space".into() }
@@ -2031,6 +2063,7 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
+            qa_shortcut_behavior: QaShortcutBehavior::default(),
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
@@ -2080,6 +2113,8 @@ impl Default for UserPreferences {
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
             polish_skip_max_chars: default_polish_skip_max_chars(),
+            polish_strategy_enabled: false,
+            polish_strategy_script: String::new(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),
             streaming_insert: true,
@@ -3768,6 +3803,28 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn polish_strategy_defaults_disabled_and_round_trips() {
+        assert!(!UserPreferences::default().polish_strategy_enabled);
+        assert!(UserPreferences::default().polish_strategy_script.is_empty());
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!from_empty.polish_strategy_enabled);
+        assert!(from_empty.polish_strategy_script.is_empty());
+
+        let configured: UserPreferences = serde_json::from_str(
+            r#"{"polishStrategyEnabled":true,"polishStrategyScript":"fn strategy(input) { #{ action: \"polish\" } }"}"#,
+        )
+        .unwrap();
+        assert!(configured.polish_strategy_enabled);
+        assert!(configured.polish_strategy_script.contains("strategy"));
+        let saved = serde_json::to_value(&configured).unwrap();
+        assert_eq!(saved["polishStrategyEnabled"], true);
+        assert!(saved["polishStrategyScript"]
+            .as_str()
+            .unwrap()
+            .contains("strategy"));
     }
 
     #[test]

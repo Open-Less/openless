@@ -1,0 +1,200 @@
+.ol-app-style-page {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+.ol-app-style-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  min-height: 0;
+  flex: 1 1 0;
+}
+.ol-app-style-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.ol-app-style-panel > h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+.ol-app-style-panel-body {
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  scrollbar-width: none;
+}
+.ol-app-style-page ::-webkit-scrollbar {
+  display: none;
+}
+.ol-app-style-categories {
+  display: grid;
+  min-height: 0;
+}
+.ol-app-style-app-search {
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.ol-app-style-apps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ol-app-style-status {
+  height: 3em;
+  flex-shrink: 0;
+  line-height: 1.5;
+  margin-top: 8px;
+}
+.ol-app-style-hint {
+  color: var(--ol-ink-3);
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+.ol-app-style-group {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.6fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--ol-line);
+}
+.ol-app-category-button.ol-action-button {
+  min-width: 0;
+}
+.ol-app-category-button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+.ol-app-category-button > svg {
+  flex-shrink: 0;
+}
+.ol-app-style-page .ol-select-trigger {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 32px;
+  padding-block: 6px;
+  line-height: 1.3;
+}
+.ol-app-style-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr);
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 64px;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-2);
+}
+.ol-app-style-name {
+  position: relative;
+  padding-inline-start: 28px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.ol-app-style-name small {
+  display: block;
+  color: var(--ol-ink-3);
+  font-size: 0.85em;
+}
+.ol-app-style-icon {
+  position: absolute;
+  inset-inline-start: 0;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+.ol-app-style-page .ol-select-value,
+.ol-app-style-options .ol-select-item > :first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.ol-app-members-dialog {
+  height: min(540px, calc(100dvh - 48px));
+}
+.ol-app-members-dialog .ol-dialog-body {
+  flex: 1 1 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.ol-app-members-dialog .ol-dialog-body::-webkit-scrollbar {
+  display: none;
+}
+.ol-app-members-dialog .ol-dialog-footer {
+  justify-content: space-between;
+}
+.ol-app-members-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: var(--ol-font-weight-semibold);
+}
+.ol-app-members-search {
+  padding: 0 24px 16px;
+}
+.ol-app-members-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(64px, auto);
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+}
+.ol-app-member-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-r-md);
+  background: var(--ol-surface-2);
+  color: var(--ol-ink);
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.ol-app-member-option:hover,
+.ol-app-member-option:focus-visible {
+  background: var(--ol-control-muted);
+}
+.ol-app-member-option > :last-child {
+  min-width: 0;
+}
+.ol-app-member-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--ol-line);
+  border-radius: 5px;
+}
+.ol-app-member-option[aria-checked='true'] .ol-app-member-check {
+  color: var(--ol-blue);
+}
+.ol-app-member-option[data-conflict] .ol-app-member-check {
+  color: var(--ol-ink-3);
+}

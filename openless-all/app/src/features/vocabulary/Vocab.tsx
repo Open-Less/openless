@@ -1,18 +1,23 @@
+import { TextField } from '../../ui/controls/TextField';
 import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DictionaryEntry } from '../../api/contracts';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { Icon } from '../../components/Icon';
-import { Tooltip } from '../../components/Tooltip';
 import { Button as Btn } from '../../ui/controls/Button';
+import { Segmented } from '../../ui/controls/Segmented';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Modal } from '../../ui/overlays/Modal';
 import { useVocabularyWorkspace } from './useVocabularyWorkspace';
+import {
+  VocabularySelectionFooter,
+  VocabularySelectionToggle,
+} from './VocabularySelectionControls';
+import { VocabularyWordCard } from './VocabularyWordCard';
+import './vocabulary.css';
 
 export function Vocab() {
   const {
     t,
-    mobile,
     loading,
     error,
     presets,
@@ -36,12 +41,12 @@ export function Vocab() {
     cardRefs,
     removingIds,
     selectedIds,
-    setSelectedIds,
     selecting,
-    setSelecting,
     batchBusy,
     removeEntries,
     toggleSelection,
+    toggleSelectionMode,
+    selectAllVisible,
     onToggle,
     openEdit,
     saveEdit,
@@ -53,119 +58,65 @@ export function Vocab() {
     needle,
     visibleEntries,
   } = useVocabularyWorkspace();
+  const selectedCount = selectedIds.size;
+  const canSelectMore = visibleEntries.some((entry) => !selectedIds.has(entry.id));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      <PageHeader
-        kicker={t('vocab.kicker')}
-        title={t('vocab.title')}
-        desc={t('vocab.desc')}
-        right={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-            {selectedIds.size > 0 && (
-              <button
-                type="button"
-                className="ol-vocab-delete-selected"
-                disabled={batchBusy}
-                onClick={() => void removeEntries([...selectedIds])}
-              >
-                <Icon name="trash" size={15} />
-                {t('vocab.deleteSelected', { count: selectedIds.size })}
-              </button>
-            )}
-            <Btn
-              variant="primary"
-              icon="plus"
-              onClick={() => {
-                setNewWordOpen(true);
-                setNewWordDraft('');
-                setNewWordTemplateIds([]);
-              }}
-            >
-              {t('vocab.newWord')}
-            </Btn>
-          </div>
-        }
-      />
+      <PageHeader kicker={t('vocab.kicker')} title={t('vocab.title')} desc={t('vocab.desc')} />
 
-      {/* Toolbar: source segment filter + circular search (expands leftward on click). */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 14,
-          flexWrap: 'wrap',
-          flexShrink: 0,
-        }}
-      >
-        <div className="ol-seg" role="tablist" aria-label={t('vocab.title')}>
-          {(
-            [
-              { id: 'all', icon: null },
-              { id: 'auto', icon: 'sparkle' },
-              { id: 'manual', icon: 'feather' },
-            ] as const
-          ).map((seg) => (
-            <button
-              key={seg.id}
-              type="button"
-              role="tab"
-              aria-selected={filter === seg.id}
-              className={filter === seg.id ? 'ol-seg-item ol-seg-item-active' : 'ol-seg-item'}
-              onClick={() => setFilter(seg.id)}
-            >
-              {seg.icon && <Icon name={seg.icon} size={13} />}
-              {t(`vocab.filter.${seg.id}`)}
-            </button>
-          ))}
-        </div>
-        <Btn
-          size="sm"
-          onClick={() => {
-            setSelecting((current) => {
-              if (current) setSelectedIds(new Set());
-              return !current;
-            });
-          }}
-        >
-          {selecting ? t('vocab.doneSelecting') : t('vocab.selecting')}
-        </Btn>
-        <label className="ol-vocab-select-all" hidden={!selecting}>
-          <input
-            type="checkbox"
-            disabled={batchBusy || visibleEntries.length === 0}
-            checked={
-              visibleEntries.length > 0 &&
-              visibleEntries.every((entry) => selectedIds.has(entry.id))
-            }
-            ref={(element) => {
-              if (element)
-                element.indeterminate =
-                  visibleEntries.some((entry) => selectedIds.has(entry.id)) &&
-                  !visibleEntries.every((entry) => selectedIds.has(entry.id));
-            }}
-            onChange={(event) => {
-              const checked = event.target.checked;
-              setSelectedIds((current) => {
-                const next = new Set(current);
-                visibleEntries.forEach((entry) =>
-                  checked ? next.add(entry.id) : next.delete(entry.id),
-                );
-                return next;
-              });
-            }}
+      <div className="ol-vocab-toolbar">
+        <div className="ol-vocab-search-actions">
+          <ExpandingSearch
+            value={query}
+            onChange={setQuery}
+            placeholder={t('vocab.searchPlaceholder')}
+            label={t('vocab.searchPlaceholder')}
+            expandTo="right"
           />
-          {selectedIds.size
-            ? t('vocab.selectedCount', { count: selectedIds.size })
-            : t('vocab.selectAllVisible')}
-        </label>
-        <div style={{ flex: 1 }} />
-        <ExpandingSearch
-          value={query}
-          onChange={setQuery}
-          placeholder={t('vocab.searchPlaceholder')}
-          label={t('vocab.searchPlaceholder')}
-        />
+          <button
+            type="button"
+            className="ol-field ol-field-icon-action ol-pressable ol-vocab-add"
+            aria-label={t('vocab.newWord')}
+            title={t('vocab.newWord')}
+            onClick={() => {
+              setNewWordOpen(true);
+              setNewWordDraft('');
+              setNewWordTemplateIds([]);
+            }}
+          >
+            <svg
+              className="ol-vocab-add-icon"
+              width={15}
+              height={15}
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
+            </svg>
+          </button>
+        </div>
+        <div className="ol-vocab-filter-actions">
+          <Segmented
+            className="ol-vocab-filters"
+            label={t('vocab.title')}
+            value={filter}
+            onChange={setFilter}
+            compact
+            options={[
+              { value: 'all', label: t('vocab.filter.all') },
+              { value: 'auto', label: t('vocab.filter.auto'), icon: <Icon name="sparkle" size={13} /> },
+              { value: 'manual', label: t('vocab.filter.manual'), icon: <Icon name="feather" size={13} /> },
+            ]}
+          />
+          <VocabularySelectionToggle
+            selecting={selecting}
+            disabled={batchBusy}
+            onToggle={toggleSelectionMode}
+            onSelectAll={selectAllVisible}
+          />
+        </div>
       </div>
 
       {error && (
@@ -209,15 +160,10 @@ export function Vocab() {
           the previous glitch where the grid, as a page-root flex item, got squashed and its
           content overflowed behind the section below. */}
       <div
-        className="ol-thinscroll"
-        style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2, paddingBottom: 12 }}
+        className="ol-thinscroll ol-vocab-scroll"
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
-        {/* Word grid: hover dims cards and reveals edit/delete on the right. */}
-        <div
-          className="ol-grid-12 ol-grid-cards"
-          data-columns={mobile ? '1' : undefined}
-          style={{ minHeight: 80, alignContent: 'start' }}
-        >
+        <div className="ol-grid-12 ol-vocab-grid">
           {loading && (
             <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
           )}
@@ -227,14 +173,14 @@ export function Vocab() {
             </div>
           )}
           {visibleEntries.map((entry) => (
-            <WordCard
+            <VocabularyWordCard
               key={entry.id}
               entry={entry}
               auto={sourceOf(entry) === 'auto'}
               removing={removingIds.has(entry.id) || batchBusy}
               selected={selectedIds.has(entry.id)}
               selecting={selecting}
-              onSelect={() => toggleSelection(entry.id)}
+              onSelect={(extend) => toggleSelection(entry.id, extend)}
               cardRef={(element) => {
                 if (element) cardRefs.current.set(entry.id, element);
                 else cardRefs.current.delete(entry.id);
@@ -247,6 +193,15 @@ export function Vocab() {
         </div>
       </div>
 
+      <VocabularySelectionFooter
+        selecting={selecting}
+        batchBusy={batchBusy}
+        canSelectMore={canSelectMore}
+        selectedCount={selectedCount}
+        onSelectAll={selectAllVisible}
+        onRemove={() => void removeEntries([...selectedIds])}
+      />
+
       {/* Edit-entry modal */}
       {editMount.mounted && (
         <ModalShell
@@ -254,7 +209,7 @@ export function Vocab() {
           closing={editMount.closing}
           onClose={() => setEditingEntry(null)}
         >
-          <input
+          <TextField
             autoFocus
             value={editDraft}
             onChange={(e) => {
@@ -267,19 +222,7 @@ export function Vocab() {
                 void saveEdit();
               }
             }}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              height: 40,
-              padding: '0 12px',
-              border: '1.5px solid var(--ol-ink)',
-              borderRadius: 'var(--ol-r-md)',
-              fontSize: 14,
-              fontFamily: 'inherit',
-              outline: 'none',
-              background: 'var(--ol-surface)',
-              color: 'var(--ol-ink)',
-            }}
+            style={{ height: 40 }}
           />
           {editError && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-red, #ef4444)' }}>
@@ -306,7 +249,7 @@ export function Vocab() {
           onClose={() => setNewWordOpen(false)}
         >
           <div style={{ display: 'flex', gap: 8 }}>
-            <input
+            <TextField
               autoFocus
               value={newWordDraft}
               onChange={(e) => setNewWordDraft(e.target.value)}
@@ -317,19 +260,7 @@ export function Vocab() {
                 }
               }}
               placeholder={t('vocab.newWordInputPlaceholder')}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                height: 38,
-                padding: '0 12px',
-                border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 'var(--ol-radius)',
-                fontSize: 13.5,
-                fontFamily: 'inherit',
-                outline: 'none',
-                background: 'var(--ol-surface-2)',
-                color: 'var(--ol-ink)',
-              }}
+              style={{ height: 38, flex: 1 }}
             />
             <Btn
               variant="primary"
@@ -433,96 +364,6 @@ export function Vocab() {
           </div>
         </ModalShell>
       )}
-
-      <style>{`
-        @keyframes ol-chip-in {
-          from { opacity: 0; transform: scale(.97); }
-          to   { opacity: 1; transform: scale(1); }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-interface WordCardProps {
-  entry: DictionaryEntry;
-  auto: boolean;
-  /** Delete exit animation in progress: block interaction to prevent repeated clicks. */
-  removing: boolean;
-  cardRef: (element: HTMLDivElement | null) => void;
-  onToggle: () => void;
-  onEdit: () => void;
-  onRemove: () => void;
-  selected: boolean;
-  selecting: boolean;
-  onSelect: () => void;
-}
-
-/** Word card: shows icon + text + hit count by default; hover/focus-within dims it and
-    reveals edit/delete. */
-function WordCard({
-  entry,
-  auto,
-  removing,
-  selected,
-  selecting,
-  cardRef,
-  onToggle,
-  onEdit,
-  onRemove,
-  onSelect,
-}: WordCardProps) {
-  const { t } = useTranslation();
-  const enabled = entry.enabled;
-  return (
-    <div
-      ref={cardRef}
-      className="ol-word-card"
-      data-disabled={enabled ? undefined : 'true'}
-      data-selected={selected ? 'true' : undefined}
-      data-selecting={selecting ? 'true' : undefined}
-      style={removing ? { pointerEvents: 'none' } : undefined}
-    >
-      <span className="ol-word-card-icon" aria-hidden>
-        <Icon name={auto ? 'sparkle' : 'feather'} size={14} />
-      </span>
-      <button type="button" className="ol-word-card-text" onClick={onToggle} title={entry.phrase}>
-        {entry.phrase}
-      </button>
-      {!enabled && <span className="ol-word-card-state">{t('vocab.disabledWord')}</span>}
-      <span className="ol-word-card-hits">{entry.hits}</span>
-      <span className="ol-word-card-actions">
-        <Tooltip content={t('vocab.edit')} placement="top">
-          <button
-            type="button"
-            className="ol-word-card-action"
-            aria-label={t('vocab.edit')}
-            disabled={removing}
-            onClick={onEdit}
-          >
-            <Icon name="pencil" size={14} />
-          </button>
-        </Tooltip>
-        <Tooltip content={t('common.delete')} placement="top">
-          <button
-            type="button"
-            className="ol-word-card-action"
-            aria-label={t('vocab.deleteWord', { phrase: entry.phrase })}
-            disabled={removing}
-            onClick={onRemove}
-          >
-            <Icon name="trash" size={14} />
-          </button>
-        </Tooltip>
-      </span>
-      <input
-        type="checkbox"
-        className="ol-word-card-select"
-        checked={selected}
-        disabled={removing}
-        aria-label={t('vocab.selectWord', { phrase: entry.phrase })}
-        onChange={onSelect}
-      />
     </div>
   );
 }
@@ -536,7 +377,6 @@ interface ModalShellProps {
   children: React.ReactNode;
 }
 
-/** Page-level mini modal: backdrop fade-in + card spring pop-out; closes on Esc or backdrop click. */
 function ModalShell({ title, desc, closing = false, onClose, children }: ModalShellProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -548,6 +388,8 @@ function ModalShell({ title, desc, closing = false, onClose, children }: ModalSh
       width="min(440px, 100%)"
       style={{ padding: 20 }}
       motionVariant="pop"
+      backdrop="blur-only"
+      cardClassName="ol-vocab-dialog"
       labelledBy={titleId}
       describedBy={desc ? descId : undefined}
     >

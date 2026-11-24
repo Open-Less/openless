@@ -103,10 +103,7 @@ export function AndroidAudioEffects({
   return (
     <div style={{ marginTop: 12 }}>
       <p style={{ fontSize: 12, color: 'var(--ol-muted)' }}>
-        {label(
-          'androidEffectsHint',
-          'Android system effects use the microphone session. They apply before the software chain; avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
-        )}
+        {label('androidEffectsHint', 'Uses device echo cancellation, noise reduction and automatic gain.')}
       </p>
       {toggle(
         'androidAecEnabled',
@@ -135,10 +132,7 @@ export function AndroidAudioEffects({
       )}
       <SettingRow
         label={label('spectrum', 'Input / processed spectrum')}
-        desc={label(
-          'spectrumHint',
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
-        )}
+        desc={label('spectrumHint', 'Compares the recording spectrum before and after processing.')}
       >
         <Toggle
           on={monitoring}
@@ -190,7 +184,7 @@ export function AndroidAudioEffects({
             <p style={{ fontSize: 12 }}>
               {label(
                 'spectrumWaiting',
-                'Start a recording with speech enhancement enabled to see the spectrum.',
+                'Waiting for recording',
               )}
             </p>
           )}

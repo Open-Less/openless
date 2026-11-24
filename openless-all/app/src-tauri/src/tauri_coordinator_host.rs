@@ -55,7 +55,7 @@ fn capsule_transcript_rail_position(
     translation_active: bool,
     transcript_visible: bool,
 ) -> Option<CapsuleTranscriptRailPosition> {
-    if !transcript_visible && (!translation_active || style == CapsuleStyle::Siri) {
+    if !transcript_visible && (!translation_active || matches!(style, CapsuleStyle::Siri | CapsuleStyle::Classic)) {
         return None;
     }
     match style {
@@ -75,17 +75,10 @@ fn capsule_transcript_rail_position(
             const BODY_BOTTOM_INSET: f64 = 16.0;
             const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
-            const RAIL_GAP: f64 = 8.0;
-            const BADGE_HEIGHT: f64 = 28.0;
-            const BADGE_GAP: f64 = 8.0;
+            const RAIL_GAP: f64 = 24.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
             let gap = RAIL_GAP;
-            let height = if transcript_visible { RAIL_HEIGHT } else { 0.0 }
-                + if translation_active {
-                    BADGE_HEIGHT + if transcript_visible { BADGE_GAP } else { 0.0 }
-                } else {
-                    0.0
-                };
+            let height = RAIL_HEIGHT;
             let top_offset = body_top - RAIL_GAP - height;
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
@@ -180,14 +173,21 @@ fn capsule_control_hit_rect(
         ),
         CapsuleStyle::Siri => unreachable!(),
     };
-    let _ = transcript_visible;
-    let scale =
-        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     // Windows clips the native input region as well as CSS. Include the language
-    // picker only while translation is active; the transcript remains click-through.
+    // picker (at the top above any transcript rail) only while translation is
+    // active; the transcript itself remains in the click-through rail HWND.
     let picker_visible = style == CapsuleStyle::Classic && translation_active;
     let interactive_width = if picker_visible { 260.0 } else { logical_body_width };
-    let interactive_height = logical_body_height + if picker_visible { 36.0 } else { 0.0 };
+    let interactive_height = if picker_visible {
+        logical_body_height
+            + 24.0
+            + 28.0
+            + if transcript_visible { 52.0 + 8.0 } else { 0.0 }
+    } else {
+        logical_body_height
+    };
+    let scale =
+        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     let body_width = (interactive_width * scale).round() as i32;
     let body_height = (interactive_height * scale).round() as i32;
     let bottom_inset = (logical_bottom_inset * scale).round() as i32;
@@ -410,7 +410,7 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
+pub(crate) fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     show: bool,
 ) -> bool {
@@ -2213,6 +2213,14 @@ impl TauriCapsuleWindow {
     }
 }
 
+#[cfg(not(mobile))]
+pub(crate) fn notify_service_usage_changed(app: &crate::core_adapters::AppHandleSlot) {
+    let app = app.lock().clone();
+    if let Some(app) = app {
+        let _ = app.emit_to("main", "service-usage:changed", ());
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
@@ -2432,8 +2440,22 @@ impl TauriCoordinatorHost {
             .commit_capsule_payload(payload, captured_revision)
     }
 
+    pub(crate) fn expire_terminal_capsule(&self) -> Option<CapsulePayload> {
+        self.capsule.snapshot.lock().expire_terminal_capsule()
+    }
+
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        #[cfg(not(mobile))]
+        if self.ask_owns_capsule() {
+            return;
+        }
+        #[cfg(not(mobile))]
+        if let openless_core::BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
+            if let Some(native) = self.native.lock().as_ref() {
+                native.update_processing_jobs(jobs);
+            }
+        }
         self.capsule.snapshot.lock().record_backend_event(event);
         #[cfg(not(mobile))]
         if crate::desktop_resources::active()
@@ -2451,6 +2473,18 @@ impl TauriCoordinatorHost {
                 native.update_transcript(&session_id, text);
             }
         }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn claim_ask_capsule(&self, session_id: &str) -> u64 {
+        self.capsule.snapshot.lock().claim_ask(session_id)
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn ask_owns_capsule(&self) -> bool {
+        self.app().as_ref()
+            .and_then(|app| app.try_state::<Arc<crate::ask_window::Desktop>>())
+            .is_some_and(|ask| ask.owns_capsule())
     }
 
     pub(crate) fn cache_capsule_display_mode(&self, mode: CapsuleDisplayMode) {
@@ -3006,15 +3040,15 @@ mod tests {
                 classic.top_offset,
                 classic.gap
             ),
-            (460.0, 52.0, 64.0, 8.0)
+            (460.0, 52.0, 48.0, 24.0)
         );
         assert_eq!(
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
-                height: 88.0,
-                top_offset: 28.0,
-                gap: 8.0,
+                height: 52.0,
+                top_offset: 48.0,
+                gap: 24.0,
             })
         );
 
@@ -3042,11 +3076,9 @@ mod tests {
         ] {
             assert_eq!(capsule_transcript_rail_position(style, false, false), None);
         }
-        let classic_badge =
-            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
         assert_eq!(
-            (classic_badge.height, classic_badge.top_offset),
-            (28.0, 88.0)
+            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false),
+            None
         );
         let typeless_badge =
             capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
@@ -3076,6 +3108,24 @@ mod tests {
                 left: 172,
                 right: 288,
                 top: 124,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, false, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 72,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, true, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 12,
                 bottom: 156,
             })
         );

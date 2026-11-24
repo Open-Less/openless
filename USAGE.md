@@ -6,13 +6,23 @@
 
 ### macOS
 
-1. Download `OpenLess_<version>_aarch64.dmg` from [Releases](https://github.com/Open-Less/openless/releases/latest).
+1. Download `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel) from [Releases](https://github.com/Open-Less/openless/releases/latest). Both require macOS 14 or later.
 2. Open the dmg and drag OpenLess.app into the Applications folder.
 3. Double-click to launch.
 
+You can also install the stable version through Homebrew:
+
+```bash
+brew tap Open-Less/openless https://github.com/Open-Less/openless
+brew install --cask openless
+brew update && brew upgrade openless
+```
+
+Published releases follow the [signing and notarization checks](RELEASING.md). Separately delivered Dev builds may use ad-hoc signing.
+
 ### Windows
 
-1. Download `OpenLess_<version>_x64-setup.exe` from [Releases](https://github.com/Open-Less/openless/releases/latest).
+1. Download `OpenLess_<version>_x64-setup.exe` or `OpenLess_<version>_x64_en-US.msi` from [Releases](https://github.com/Open-Less/openless/releases/latest).
 2. Run the installer and follow the prompts.
 3. Launch OpenLess from the Start menu.
 
@@ -20,7 +30,7 @@
 
 Linux runs on a native egui host and does not depend on Tauri or WebKitGTK.
 
-1. No package is shipped with Releases yet: Linux packaging stays paused until the L01–L12 on-device acceptance is complete, so build from source for now (see the build sections in the [README](README.md)).
+1. No package is shipped with Releases yet: Linux packaging stays paused until the L01–L12 on-device acceptance is complete, so build from source for now (see the [cross-platform build guide](openless-all/README.md#shared-backend-and-linux-host)).
 2. Requires glibc ≥ 2.39 (Ubuntu 24.04 or an equivalent distribution).
 3. The global hotkey is provided by the fcitx5 plugin: enable the OpenLess addon in fcitx5 and bind a key. There is no in-app updater and no AppImage.
 
@@ -79,10 +89,7 @@ After the first launch, grant the following in System Settings → Privacy & Sec
 
 ### Entering credentials
 
-If you are new to Volcengine ASR, start with the illustrated walkthrough:  
-[OpenLess Volcengine ASR setup](docs/volcengine-setup.md)
-
-For iFlytek real-time transcription, see [OpenLess iFlytek ASR setup](docs/xfyun-asr.md) (AppID + API Key, Settings → AI & models → Speech recognition channels → iFlytek real-time transcription).
+See the [speech services guide (Chinese)](docs/guides/speech-services.md) for Volcengine, iFlytek, and other providers. iFlytek real-time transcription uses an AppID and API Key from the same iFlytek application.
 
 Open OpenLess → **Settings** and fill in:
 
@@ -135,6 +142,10 @@ Switch the mode from the capsule in the main window or under Settings:
 
 ---
 
+## Ask Anything (desktop)
+
+On macOS or Windows, press the recording shortcut with Space to open Ask Anything. Type a question or dictate into the draft, then send it when ready. Answers expand in the same window. Write and edit requests can deliver to a verified external input target. If OpenLess cannot confirm the write, the result stays available in Ask for manual copying. See the [desktop Ask contract](docs/ask-unified-entry-contract.md) for routing and delivery details.
+
 ## Dictionary
 
 The dictionary improves recognition of specific words (product names, people, jargon).
@@ -150,6 +161,14 @@ The dictionary improves recognition of specific words (product names, people, ja
 Main window → **History** lists every recording, including the raw transcript and the polished result.
 
 ---
+
+## Phone remote input
+
+Enable remote input on your computer, then open the address it displays on your phone. Verify the computer certificate, enter the pairing code and allow microphone access. The [phone remote input guide (Chinese)](docs/guides/remote-input.md) covers certificate setup and recording recovery.
+
+## Encrypted cloud sync
+
+Open Cloud Services in Settings and sign in with GitHub. Review the data categories before turning on encrypted sync. Your settings, registered provider API keys and text history are encrypted on your device before upload. Keep the sync password, and preview any existing cloud snapshot before restoring it on a new device.
 
 ## Changing the hotkey
 

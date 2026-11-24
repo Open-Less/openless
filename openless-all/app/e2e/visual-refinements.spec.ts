@@ -43,8 +43,8 @@ for (const theme of ['dark', 'light'] as const) {
       if (section === '快捷键') {
         const rows = dialog.locator('.ol-shortcut-row');
         await expect(rows.first()).toBeVisible();
-        expect(await rows.count()).toBeGreaterThanOrEqual(9);
-        await expect(dialog.getByText('随便问', { exact: true })).toBeVisible();
+        expect(await rows.count()).toBeGreaterThanOrEqual(8);
+        await expect(dialog.getByText('随便问', { exact: true })).toHaveCount(0);
         const bounds = await rows.evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();

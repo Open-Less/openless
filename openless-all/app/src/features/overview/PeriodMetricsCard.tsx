@@ -58,6 +58,7 @@ export function PeriodMetricsCard({
     >
       <div className="ol-overview-period-controls">
         <Segmented
+          compact
           value={String(period)}
           options={periodOptions}
           onChange={(value) => {
@@ -67,6 +68,7 @@ export function PeriodMetricsCard({
           label={t('overview.period.ariaLabel')}
         />
         <Segmented
+          compact
           value={metric}
           options={metricOptions}
           onChange={onMetricChange}

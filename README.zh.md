@@ -18,6 +18,8 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/Open-Less/openless/releases/latest"><strong>下载</strong></a>
   &nbsp;·&nbsp;
+  <a href="docs/index.md"><strong>文档</strong></a>
+  &nbsp;·&nbsp;
   <a href="README.md">English</a>
   &nbsp;/&nbsp;
   <a href="README.zh.md">中文</a>
@@ -25,8 +27,8 @@
 
 <p align="center">
   <a href="https://github.com/Open-Less/openless/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Open-Less/openless?style=flat-square&color=2c5282" /></a>
-  <a href="https://github.com/Open-Less/openless/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
-  <a href="https://github.com/Open-Less/openless/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
+  <a href="https://github.com/Open-Less/openless"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
 </p>
 
 <p align="center">
@@ -80,7 +82,7 @@
     </td>
     <td align="center" width="170">
       <img src="https://image.bigsong.site/file/1787214963742_b40cd86b033a60bcc8562f7f053c4900.jpg" width="80" height="80" alt="bigsong" /><br/>
-      <strong><a href="https://bigsong.site" target="_blank" rel="noopener">bigsong</a></strong><br/>
+      <strong>bigsong</strong><br/>
       <sub>贡献者 / 测试</sub>
     </td>
   </tr>
@@ -101,18 +103,11 @@
       <sub>贡献者 / Linux 维护者</sub>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="170">
-      <img src="assets/people/jimmy54.png" width="80" height="80" alt="jimmy54" /><br/>
-      <strong><a href="https://github.com/jimmy54" target="_blank" rel="noopener">jimmy54</a></strong><br/>
-      <sub>macOS 打包与开发者账号</sub>
-    </td>
-  </tr>
 </table>
 
-OpenLess 是一个跨平台（macOS、Windows、Linux、Android、iOS 与 HarmonyOS）语音输入应用，是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的全开源替代方案。官网：[openless.top](https://openless.top)。
+OpenLess 是一个跨平台（macOS、Windows、Linux、Android、iOS 与 HarmonyOS）语音输入应用，是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、Lazy、Superwhisper 等商业工具的全开源替代方案。官网：[openless.top](https://openless.top)。
 
-原生 [iOS 应用与键盘](openless-all/ios/README.md) 位于 `openless-all/ios/`，支持中英文输入、语音优先与按住空格两种模式，以及语音翻译；源码构建与个人签名步骤见 iOS 指南。鸿蒙宿主位于 `openless-all/app/harmony/`，仍在适配中：HAP 已可构建，输入法扩展也已接入共享的 ASR/润色管线，但真实联网识别与商店分发仍需真机验收。
+原生 [iOS 应用与键盘](openless-all/ios/README.zh.md) 位于 `openless-all/ios/`，支持中英文输入、语音优先与按住空格两种模式，以及语音翻译；源码构建与个人签名步骤见 iOS 指南。鸿蒙宿主位于 `openless-all/app/harmony/`，仍在适配中：HAP 已可构建，输入法扩展也已接入共享的 ASR/润色管线，但真实联网识别与商店分发仍需真机验收。
 
 把光标放在任意输入框——ChatGPT、Claude、Cursor、Notion、邮件草稿、聊天框——按一个全局快捷键说话。OpenLess 录制音频、转写、按你选择的模式润色，然后把结果插入到光标处。如果插入被阻挡，文本会被复制到剪贴板，你说的话不会丢失。
 
@@ -211,7 +206,11 @@ OpenLess 只做一件事：**把语音变成可用的书面文本——尤其是
 
 ## 稳定性冻结
 
-OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现有功能集的 PR。工作应聚焦于让当前版本更可靠：缺陷修复、回归修复、安全修复、文档、测试、兼容性与发布维护都是受欢迎的。新功能提案与实现 PR 将在稳定性阶段结束前被搁置或关闭。
+OpenLess 现阶段优先修复语音输入的稳定性与体验。录音、转写、历史恢复和最终写入等链路的修复，以及兼容性、测试、文档和小范围体验改进仍可提交。不接收范围外新功能、大规模后端重写或批量功能改动。
+
+当前只保留以下产品工作：优化语音提示词及缓存命中率；支持上一条胶囊处理时启动下一条录音；支持口述期间显式添加文字、链接、截图和附件，并保留它们在口述中的位置；优化热词表与识别准确率。
+
+按新增与删除行数之和计算，超过 1,000 行酌情审查，超过 2,000 至 4,000 行原则上暂缓合并或单独复核。自 2026 年 11 月 21 日起一个月内，超过 4,000 行的 PR 不予合并并关闭，请拆分后再提交。详见[维护公告](https://github.com/Open-Less/openless/issues/1479)。
 
 ## 对比
 
@@ -219,7 +218,7 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 | --- | --- | --- |
 | [Typeless](https://www.typeless.com/) | 闭源 macOS / Windows / iOS，订阅制 | 开源；显式 AI 提示词模式；自带 ASR + LLM；数据与词典留在你的机器上——包括词典从你的纠正中学到的东西，它从不上传，也未经你确认绝不会被加入 |
 | [Wispr Flow](https://wisprflow.ai) | 闭源 macOS / Windows，订阅制 | 开源；自带 ASR + LLM；透明的提示词处理规则 |
-| [Lazy](https://heylazy.com) | 闭源笔记 / 捕获工具 | 不是笔记容器——直接插入到任意输入框 |
+| Lazy | 闭源笔记 / 捕获工具 | 不是笔记容器——直接插入到任意输入框 |
 | [Superwhisper](https://superwhisper.com) | 闭源 macOS，订阅制 | 开源；默认云端 ASR，macOS 与 Windows 上另有实验性的端侧 ASR |
 
 ## 功能现状
@@ -247,87 +246,11 @@ OpenLess 目前处于稳定性阶段，不接受新增产品功能或扩张现�
 
 ## 下载与安装（终端用户）
 
-前往 [Releases](https://github.com/Open-Less/openless/releases) 下载：
-
-- **macOS**（要求 macOS 14 Sonoma 或更新）：`OpenLess_<version>_aarch64.dmg`（Apple Silicon）或 `OpenLess_<version>_x64.dmg`（Intel）。打开后把应用拖到 `/Applications`，**然后在终端执行一次以下命令以绕过 Gatekeeper 的「已损坏」提示**（构建为 ad-hoc 签名，未做 Apple 公证）：
-  ```bash
-  xattr -cr /Applications/OpenLess.app
-  ```
-- **Windows**：`OpenLess_<version>_x64-setup.exe`——运行安装程序。
-- **Android**（正式 APK 在 GitHub Release；调试 APK 走 Actions 产物）：
-  - **手机（推荐）**：`OpenLess_<version>_arm64-v8a.apk`
-  - **较老的 32 位 ARM**：`OpenLess_<version>_armeabi-v7a.apk`
-  - **64 位模拟器**：`OpenLess_<version>_x86_64.apk`
-  - **32 位模拟器**：`OpenLess_<version>_x86.apk`
-  - 应用内更新（设置 → 关于与更新）读取 `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`；Beta 用户需在高级设置中加入 Beta，读取对应的 `.../updates/beta/latest-android-{arch}-beta.json`。
-  - 调试冒烟包：workflow_dispatch 产物中的 `OpenLess-android-debug-{abi}-*.apk`。
-  - 拿不准时，执行 `adb shell getprop ro.product.cpu.abi` 选择匹配的 APK。
-- **Linux**：Tauri/WebView 版本已退役。原生 `eframe` 宿主使用共享的 Core 2.0 服务。在 CI 与真实 Ubuntu 上的音频、输入、安装、升级与回滚验收通过后，共享 Release 会包含 deb/rpm 包与 `SHA256SUMS`。Linux 需要 glibc ≥ 2.39（Ubuntu 24.04 或同级发行版）；没有 AppImage，也没有应用内更新。
-- **HarmonyOS**（适配中）：从同一个 Release 下载 `OpenLess_harmony_arm64.hap`。它是未签名包，供开发者/测试人员通过 DevEco Studio 或 `hdc` 安装；AppGallery 分发包由工作流生成但需人工提交，目前还没有更新流程。本地构建与签名步骤见 `openless-all/app/harmony/README.md`。
-- **iOS**：没有可下载的 IPA。请从源码构建原生应用并用你自己的团队签名——bootstrap、构建与开启键盘的步骤见 [openless-all/ios/README.md](openless-all/ios/README.md)。
-- **macOS（Homebrew）**：
-  ```bash
-  brew tap Open-Less/openless https://github.com/Open-Less/openless
-  brew install --cask openless
-  xattr -cr /Applications/OpenLess.app
-
-  # 升级到最新版本
-  brew update && brew upgrade openless
-  ```
-
-首次启动时，请授予应用请求的权限。
-
-**macOS：**
-1. 授予麦克风权限。
-2. 授予辅助功能权限。
-3. **退出并重新打开应用**——辅助功能权限重启后才生效。
-4. 打开设置，填入你的火山引擎 ASR + Ark 凭据。
-
-**Windows：**
-1. 出现提示时授予麦克风权限。
-2. 打开 设置 → 权限与数据，确认全局快捷键监听已生效。
-3. 在设置中填入你的火山引擎 ASR + Ark 凭据。
-
-完整的终端用户操作说明见 [USAGE.zh.md](USAGE.zh.md)。
+从 [Releases](https://github.com/Open-Less/openless/releases) 下载对应平台和架构的安装包。安装、授权、Homebrew、输入法和首次配置步骤见[使用指南](USAGE.zh.md)。Linux 和 iOS 的构建入口见下文。
 
 ## 从源码构建（开发者）
 
-活跃工作区位于 `openless-all/app/`。`crates/openless-core` 是与框架无关的后端；`src-tauri` 承载 macOS/Windows/Android，`linux-egui` 是原生 Linux 界面及其平台适配层，`harmony/` 是 ArkTS/ArkWeb 宿主加上 `harmony/rust` napi crate，`openless-all/ios/` 是独立的原生 iOS 工程。本地化的 crate（`cpal`、`tauri-runtime-wry`）直接签入 `src-tauri/vendor/`，因此**无需初始化 Git 子模块**。根 Core/Linux 工作区排除了 `src-tauri`，所以它独立的检查不会解析 Tauri 清单。建议先看[文档索引](docs/index.md)、[架构](docs/architecture.md)与[源码结构](docs/structure.md)。
-
-Rust 1.99 是所有源码树（`openless-core`、`src-tauri`、`linux-egui`）的最低支持工具链，推荐使用最新稳定版 Rust。CI 在 macOS 与 Windows 上同时验证 Rust 1.99 与 stable，Linux egui 宿主验证 stable，并同时构建 Android、iOS 与 HarmonyOS 宿主。
-
-```bash
-cd "openless-all/app"
-npm ci
-
-# macOS/Windows/Android：Vite 在 :1420 + Tauri 宿主
-npm run tauri dev
-
-# Android 正式 APK——先跑初始化/脚手架/manifest 链路（src-tauri/gen/android 是生成的），
-# 见 openless-all/README.zh.md 的「Android 构建」
-npm run tauri:android:build:release
-
-# macOS 正式构建（签名、安装、重置 TCC）
-./scripts/build-mac.sh
-INSTALL=0 ./scripts/build-mac.sh   # 只构建，不安装
-
-# HarmonyOS HAP（需要 HarmonyOS Command Line Tools；见 harmony/README.zh.md）
-bash scripts/build-harmony-frontend.sh
-
-# 共享后端与 Linux 宿主/界面（不编译 Tauri/WebKitGTK）
-cargo check -p openless-core
-cargo check -p openless-linux-egui --all-targets
-
-# Tauri 宿主类型检查
-cargo check --manifest-path "src-tauri/Cargo.toml"
-
-# 前端 TypeScript 检查
-npm run build
-```
-
-日志：`~/Library/Logs/OpenLess/openless.log`（macOS）/ `%LOCALAPPDATA%\OpenLess\Logs\openless.log`（Windows）。
-
-**Windows 构建**——MSVC 与 GNU/MinGW 两条路线见 [`openless-all/README.zh.md`](openless-all/README.zh.md)。
+[全平台构建指南](openless-all/README.zh.md)维护各平台的工具链和完整命令。[文档入口](docs/index.md)和[架构与接口调用](docs/architecture.md)提供开发入口。Tauri 的 `cpal`、`tauri-runtime-wry` 已随仓库签入，无需初始化子模块。
 
 ## 贡献流程
 
@@ -383,7 +306,7 @@ Windows:       %APPDATA%\OpenLess\credentials.json
 你需要准备：
 
 - **火山引擎流式 ASR**：APP ID、Access Token、Resource ID。
-- **讯飞实时 ASR（RTASR）**：AppID、API Key。见 [docs/xfyun-asr.md](docs/xfyun-asr.md)。
+- **讯飞实时 ASR（RTASR）**：AppID、API Key。见 [语音服务设置](docs/guides/speech-services.md)。
 - **Ark 润色**：API Key、Model ID、Endpoint。Ark 默认端点为 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`。
 
 ## 提示词处理原则
@@ -442,7 +365,7 @@ SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── open
 ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 ```
 
-`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。见 [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md)。
+`openless-core` 负责稳定的 DTO、错误、语义事件、仓储、凭据契约以及面向宿主的功能接口。仅属于宿主的关注点——IPC、窗口、托盘、权限、更新器、keyring、fcitx5 与打包资源路径——由各适配层实现。旧的 React 命令/事件名保留在 Tauri 兼容适配层；Linux 在进程内直接调用类型化的 Rust 接口。见 [Linux 宿主接口](docs/development/linux.md)。
 
 `v<version>-tauri` / `v<version>-Beta.N-tauri` 工作流在一次 Actions run 中构建 macOS、Windows、Android 与 HarmonyOS 宿主；HarmonyOS 附上未签名 HAP，Android 不再有独立的 tag 触发。Linux egui 打包是独立的手动工作流，在真机验收前保持暂停；验收通过后由管理员把验证过的 deb/rpm 包附到共享 Release。Beta 产物保持 draft 直到管理员发布。Linux 没有 AppImage，也没有应用内更新清单。
 
@@ -470,7 +393,7 @@ ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
 
 [Mermaid 源码](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg)
 
-与这些图示配套的依赖与模块评审见 [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md)。
+[客户端架构图源文件与导出版本](docs/images/client-diagrams/README.md)。
 
 贡献与发布规则见[贡献流程](#贡献流程)与 [Releasing](RELEASING.md)；模块职责与接线见[架构](docs/architecture.md)。
 
@@ -500,11 +423,11 @@ OpenLess 同样认可并感谢 LinuxDo 社区开放、务实、对开发者友�
 
 ## 第三方组件
 
-概览页的年度活动热力图移植自 **Rare UI** 的 [GitHub Activity](https://rareui.com/components/githubactivity)
-组件（Copyright (c) 2026 Swami Malode，MIT + Commons Clause，要求署名）。移植保留上游的布局、
-周/月换算、悬浮提示和可展开面板，只把 GitHub 数据源换成本地听写统计。源码位于
-`openless-all/app/src/components/ui/GitHubActivity.tsx` 与 `github-activity.css`。
-同一署名也出现在「设置 → 关于与更新 → 组件来源」。
+概览页的年度活动卡片改编了 **Rare UI** 的 [GitHub Activity](docs/ATTRIBUTION.md#rare-ui-github-activity)
+日历和可展开面板代码（Copyright (c) 2026 Swami Malode）。听写数据、应用排名与桌面图标由 OpenLess 提供。
+详情见[组件署名与许可](docs/ATTRIBUTION.md)；署名也可在「设置 → 关于与更新 → 组件来源」中查看。
+
+共用密码输入框的眼睛动效改编自 Rare UI 的 [Password Input](docs/ATTRIBUTION.md#rare-ui-password-input)。
 
 ## 许可证
 

@@ -44,6 +44,9 @@ const bridge = {
   inputRegions: [] as any[],
   regionWrites: [] as any[],
   dictationActions: [] as string[],
+  dictationActionArgs: [] as unknown[],
+  captionTraceReads: 0,
+  captionTraceReports: [] as unknown[],
   qaActions: [] as { command: string; args: unknown }[],
   pipelineMode: params.get('pipelineMode') === 'deepseek' ? 'deepseek' : 'traditional',
   hasListener: (event: string) => Boolean(listeners.get(event)?.size),
@@ -99,6 +102,14 @@ window.__TAURI_INTERNALS__ = {
     if (['qa_cancel_turn', 'qa_stop_recording', 'qa_submit_text'].includes(command)) {
       bridge.qaActions.push({ command, args });
     }
+    if (command === 'main_caption_trace_enabled') {
+      bridge.captionTraceReads++;
+      return params.has('captionTrace') && ['capsule', 'capsule-rail'].includes(windowLabel);
+    }
+    if (command === 'report_main_caption_trace') {
+      bridge.captionTraceReports.push(args);
+      return;
+    }
     if (command === 'set_capsule_interactive_regions') {
       bridge.inputRegions = args.rects;
       bridge.regionWrites.push(args.rects);
@@ -110,6 +121,7 @@ window.__TAURI_INTERNALS__ = {
       )
     ) {
       bridge.dictationActions.push(command);
+      bridge.dictationActionArgs.push(args);
       return;
     }
     if (command === 'plugin:event|listen') {

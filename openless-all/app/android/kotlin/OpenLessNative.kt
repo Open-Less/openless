@@ -118,7 +118,6 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeSwitchStylePack()
 
-    @JvmStatic external fun nativeFinalizeQaFromOverlay()
 
     @JvmStatic external fun nativeFinalizeVoiceEditFromOverlay()
 

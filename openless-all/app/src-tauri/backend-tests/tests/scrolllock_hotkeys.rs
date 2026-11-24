@@ -33,9 +33,5 @@ mod hotkey;
 mod combo_hotkey;
 
 #[allow(dead_code)]
-#[path = "../../src/recording_companion.rs"]
-mod recording_companion;
-
-#[allow(dead_code)]
 #[path = "../../src/side_aware_combo.rs"]
 mod side_aware_combo;

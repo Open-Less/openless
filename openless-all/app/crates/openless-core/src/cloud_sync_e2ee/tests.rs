@@ -139,6 +139,7 @@ struct Data {
     generation: AtomicU64,
     changes: tokio::sync::watch::Sender<SyncChange>,
     fail_restore: AtomicBool,
+    materialized_next_export: AtomicBool,
     capture_gate: Mutex<Option<Arc<crate::cloud_sync_e2ee_store::gate::SyncWriteGate>>>,
     export_attempts: AtomicU64,
     custom_origin: Mutex<Option<String>>,
@@ -190,6 +191,7 @@ impl Data {
             generation: AtomicU64::new(1),
             changes,
             fail_restore: AtomicBool::new(false),
+            materialized_next_export: AtomicBool::new(false),
             capture_gate: Mutex::new(None),
             export_attempts: AtomicU64::new(0),
             custom_origin: Mutex::new(None),
@@ -237,6 +239,7 @@ impl SyncServiceData for Data {
             Ok(ExportedDocuments {
                 generation: Revision::new(self.generation.load(Ordering::Acquire)),
                 documents,
+                materialized_preferences: self.materialized_next_export.swap(false, Ordering::AcqRel),
             })
         })
     }
@@ -261,6 +264,7 @@ impl SyncServiceData for Data {
             Ok(ExportedDocuments {
                 generation: Revision::new(generation),
                 documents: desired,
+                materialized_preferences: false,
             })
         })
     }
@@ -562,11 +566,39 @@ impl Server {
 
 struct Fixture {
     service: EncryptedSyncService,
+    events: crate::events::BackendEventPublisher,
     marketplace: Arc<crate::marketplace::MarketplaceService>,
     data: Arc<Data>,
     vault: Arc<Vault>,
     root: std::path::PathBuf,
 }
+
+#[tokio::test]
+async fn materialized_preference_receipt_invalidates_ui_once() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture
+        .data
+        .materialized_next_export
+        .store(true, Ordering::Release);
+    fixture.create(false).await.unwrap();
+    fixture.service.sync_now().await.unwrap();
+    let events = fixture.events.replay_after(0);
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event.kind,
+                crate::events::BackendEventKind::CloudSyncRestoreCompleted(_)
+            ))
+            .count(),
+        1
+    );
+    fixture.service.shutdown().await;
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -617,10 +649,11 @@ impl Fixture {
             local,
             data.clone(),
             vault.clone(),
-            events,
+            events.clone(),
         );
         Self {
             service,
+            events,
             marketplace,
             data,
             vault,
@@ -1001,6 +1034,103 @@ async fn auto_sync_local_retry_cannot_reconcile_a_later_manual_unknown_upload() 
 }
 
 #[tokio::test]
+async fn local_encrypted_sync_keeps_server_opaque_and_merges_upgrade_fields_on_client() {
+    let server = Server::start().await;
+    let first = Fixture::new(&server).await;
+    first.prepare().await;
+    first.create(false).await.unwrap();
+
+    let second = Fixture::new(&server).await;
+    second
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+    let before = second.data.documents.lock().unwrap().clone();
+    assert!(second
+        .service
+        .unlock("WrongPassword!9876".into(), false)
+        .await
+        .is_err());
+    assert_eq!(*second.data.documents.lock().unwrap(), before);
+    assert_eq!(server.state.lock().unwrap().revision, 1);
+    second.service.unlock(PASSWORD.into(), false).await.unwrap();
+    let preview = second.service.preview_restore("1".into()).await.unwrap();
+    second
+        .service
+        .apply_restore(preview.preview_id, RestoreMode::Replace, vec![])
+        .await
+        .unwrap();
+
+    // Simulate an upgraded client introducing both a known and a future setting.
+    first.data.documents.lock().unwrap().documents.extend([
+        LogicalDocument {
+            id: "translationShiftTapCount".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value: json!(3),
+        },
+        LogicalDocument {
+            id: "futureClientOnlySetting".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value: json!({"layout": "private-upgrade-layout", "version": 2}),
+        },
+    ]);
+    first.data.generation.fetch_add(1, Ordering::AcqRel);
+    first.service.sync_now().await.unwrap();
+
+    // The other instance edits an independent field against the common baseline.
+    second.data.edit("private-local-edit-on-second-client");
+    second.service.sync_now().await.unwrap();
+    first.service.sync_now().await.unwrap();
+    for client in [&first, &second] {
+        let documents = client.data.documents.lock().unwrap();
+        for (id, expected) in [
+            ("translationShiftTapCount", json!(3)),
+            (
+                "futureClientOnlySetting",
+                json!({"layout": "private-upgrade-layout", "version": 2}),
+            ),
+            ("futureLayout", json!("private-local-edit-on-second-client")),
+        ] {
+            assert_eq!(
+                documents
+                    .documents
+                    .iter()
+                    .find(|doc| doc.id == id)
+                    .unwrap()
+                    .value,
+                expected
+            );
+        }
+    }
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.revision, 3);
+    assert_eq!(remote.puts.len(), 3);
+    // The fixture server only stores complete opaque snapshots; it has no field merge.
+    for request in &remote.puts {
+        let envelope: Value = serde_json::from_slice(request).unwrap();
+        assert_eq!(envelope["protocolVersion"], 1);
+        assert!(envelope["ciphertext"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()));
+        assert!(envelope.get("documents").is_none());
+        let text = std::str::from_utf8(request).unwrap();
+        for private in [
+            PASSWORD,
+            "sk-private-fixture-key",
+            "translationShiftTapCount",
+            "futureClientOnlySetting",
+            "private-upgrade-layout",
+            "private-local-edit-on-second-client",
+        ] {
+            assert!(!text.contains(private));
+        }
+    }
+}
+
+#[tokio::test]
 async fn create_encrypts_real_data_and_wrong_password_never_changes_local_data() {
     let server = Server::start().await;
     let first = Fixture::new(&server).await;
@@ -1061,6 +1191,75 @@ async fn lost_upload_response_reconciles_one_commit_without_another_put() {
     assert!(status.last_successful_sync_at.is_some());
     assert_eq!(server.state.lock().unwrap().puts.len(), 1);
     assert_eq!(server.state.lock().unwrap().revision, 1);
+}
+
+#[tokio::test]
+async fn sync_now_cancellation_before_commit_does_not_submit_a_write() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(false).await.unwrap();
+    fixture.data.edit("private changes not yet uploaded");
+
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let allow = Arc::new(tokio::sync::Notify::new());
+    server.state.lock().unwrap().delay_metadata = Some((arrived.clone(), allow.clone()));
+    let service = fixture.service.clone();
+    let sync = tokio::spawn(async move { service.sync_now().await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), arrived.notified())
+        .await
+        .unwrap();
+
+    let task = fixture.service.status().task_id.unwrap();
+    let acknowledged = fixture.service.cancel(&task).unwrap();
+    assert_eq!(acknowledged.task_id.as_deref(), Some(task.as_str()));
+    assert_eq!(acknowledged.sync_state, SyncState::Syncing);
+    assert!(!sync.is_finished());
+    allow.notify_one();
+    assert_eq!(sync.await.unwrap().unwrap_err().message, "cancelled");
+    let status = fixture.service.status();
+    assert!(status.task_id.is_none());
+    assert!(status.pending_operation_id.is_none());
+    assert_eq!(status.sync_state, SyncState::Pending);
+    assert_eq!(server.state.lock().unwrap().put_attempts, 1);
+    assert_eq!(
+        fixture.service.cancel(&task).unwrap_err().message,
+        "stale_task"
+    );
+}
+
+#[tokio::test]
+async fn sync_now_cancellation_after_submit_keeps_the_committed_receipt() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(false).await.unwrap();
+    fixture.data.edit("private changes in flight");
+    server.state.lock().unwrap().delay_upload = true;
+    let service = fixture.service.clone();
+    let sync = tokio::spawn(async move { service.sync_now().await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.upload_arrived.notified(),
+    )
+    .await
+    .unwrap();
+
+    let task = fixture.service.status().task_id.unwrap();
+    let acknowledged = fixture.service.cancel(&task).unwrap();
+    assert!(acknowledged.pending_operation_id.is_some());
+    assert_eq!(acknowledged.sync_state, SyncState::Syncing);
+    assert!(!sync.is_finished());
+    server.allow_upload.notify_one();
+    let status = sync.await.unwrap().unwrap();
+    assert_eq!(status.sync_state, SyncState::Ready);
+    assert!(status.task_id.is_none());
+    assert!(status.pending_operation_id.is_none());
+    assert_eq!(status.remote_revision.as_deref(), Some("2"));
+    assert_eq!(status.last_synced_local_generation.as_deref(), Some("2"));
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.put_attempts, 2);
+    assert_eq!(remote.revision, 2);
 }
 
 #[tokio::test]

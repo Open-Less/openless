@@ -44,7 +44,7 @@ pub(crate) fn less_computer_event_replay_after(
     }
 }
 
-async fn dispatch(
+pub(super) async fn dispatch(
     inner: &Arc<Inner>,
     edge: openless_core::DictationHotkeyEdge,
 ) -> Result<openless_core::CliDispatchOutcome, openless_core::BackendError> {
@@ -65,7 +65,25 @@ async fn dispatch(
         }
         return Ok(openless_core::CliDispatchOutcome::Noop);
     }
-    inner.backend.dispatch_dictation_hotkey_edge(edge).await
+    // Preserve FIFO through admission/device release, then let this segment's
+    // result continue in its owned task instead of blocking the hotkey reader.
+    let previous = inner.backend.snapshot().dictation.session_id;
+    let backend = Arc::clone(&inner.backend);
+    let (send, mut receive) = tokio::sync::oneshot::channel();
+    inner.host.spawn(async move {
+        let result = backend.dispatch_dictation_hotkey_edge(edge).await;
+        if let Err(error) = &result { log::warn!("[dictation] hotkey task failed: {error}"); }
+        let _ = send.send(result);
+    });
+    if let Some(id) = previous {
+        tokio::select! {
+                result = &mut receive => return result.unwrap_or_else(|_| Err(openless_core::BackendError::new(
+                    openless_core::BackendErrorCode::Cancelled, "hotkey task stopped"))),
+                _ = inner.backend.wait_for_dictation_submission(id) => return Ok(openless_core::CliDispatchOutcome::Noop),
+        }
+    }
+    receive.await.unwrap_or_else(|_| Err(openless_core::BackendError::new(
+        openless_core::BackendErrorCode::Cancelled, "hotkey task stopped")))
 }
 
 pub(super) async fn handle_pressed_edge(
@@ -73,14 +91,6 @@ pub(super) async fn handle_pressed_edge(
     pressed_at: std::time::Instant,
     press_id: u64,
 ) {
-    if crate::recording_companion::claimed() || inner.qa_context.is_panel_visible() {
-        // Result/recording windows never hijack the recording key into the old
-        // second-stage follow-up flow. Only the explicit companion chord asks.
-        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
-            if crate::recording_companion::claimed() || matches!(qa.phase,
-                openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
-        }
-    }
     match dispatch(
         inner,
         openless_core::DictationHotkeyEdge::Pressed {
@@ -100,11 +110,6 @@ pub(super) async fn handle_released_edge(
     released_at: std::time::Instant,
     press_id: u64,
 ) {
-    if inner.qa_context.is_panel_visible() {
-        if let Ok(qa) = inner.backend.services().qa.snapshot().await {
-            if matches!(qa.phase, openless_core::QaPhase::Recording | openless_core::QaPhase::Thinking | openless_core::QaPhase::AwaitingApproval) { return; }
-        }
-    }
     match dispatch(
         inner,
         openless_core::DictationHotkeyEdge::Released {
@@ -160,7 +165,12 @@ pub(super) async fn cancel_active_session(inner: &Arc<Inner>) -> bool {
             return false;
         }
     }
-    match inner.backend.cancel_active_voice_session(None).await {
+    let result = if let Some(id) = inner.backend.dictation_cancel_target() {
+        inner.backend.cancel_dictation(Some(id)).await
+    } else {
+        inner.backend.cancel_active_voice_session(None).await
+    };
+    match result {
         Ok(()) => {
             inner.host.hide_less_computer_glow();
             true

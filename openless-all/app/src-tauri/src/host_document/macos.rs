@@ -94,8 +94,8 @@ const EDIT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const BASELINE_ANCHOR_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[repr(C)]
-struct OpaqueAxRef(c_void);
-type AxUiElementRef = *mut OpaqueAxRef;
+pub(crate) struct OpaqueAxRef(c_void);
+pub(crate) type AxUiElementRef = *mut OpaqueAxRef;
 type CFStringRef = *const c_void;
 type CFTypeRef = *const c_void;
 type CFAllocatorRef = *const c_void;
@@ -119,8 +119,8 @@ const K_CF_NUMBER_CF_INDEX_TYPE: i32 = 14;
 
 /// Opaque handle for AXObserver.
 #[repr(C)]
-struct OpaqueAxObserver(c_void);
-type AxObserverRef = *mut OpaqueAxObserver;
+pub(crate) struct OpaqueAxObserver(c_void);
+pub(crate) type AxObserverRef = *mut OpaqueAxObserver;
 
 type AxObserverCallback = unsafe extern "C" fn(
     observer: AxObserverRef,
@@ -131,14 +131,14 @@ type AxObserverCallback = unsafe extern "C" fn(
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
-    fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
-    fn AXObserverCreate(
+    pub(crate) fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
+    pub(crate) fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
+    pub(crate) fn AXObserverCreate(
         application: i32,
         callback: AxObserverCallback,
         observer: *mut AxObserverRef,
     ) -> AxError;
-    fn AXObserverAddNotification(
+    pub(crate) fn AXObserverAddNotification(
         observer: AxObserverRef,
         element: AxUiElementRef,
         notification: CFStringRef,
@@ -149,26 +149,26 @@ extern "C" {
         element: AxUiElementRef,
         notification: CFStringRef,
     ) -> AxError;
-    fn AXObserverGetRunLoopSource(observer: AxObserverRef) -> CFRunLoopSourceRef;
-    fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout: f32) -> AxError;
-    fn AXUIElementCopyAttributeValue(
+    pub(crate) fn AXObserverGetRunLoopSource(observer: AxObserverRef) -> CFRunLoopSourceRef;
+    pub(crate) fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout: f32) -> AxError;
+    pub(crate) fn AXUIElementCopyAttributeValue(
         element: AxUiElementRef,
         attribute: CFStringRef,
         value: *mut CFTypeRef,
     ) -> AxError;
-    fn AXUIElementSetAttributeValue(
+    pub(crate) fn AXUIElementSetAttributeValue(
         element: AxUiElementRef,
         attribute: CFStringRef,
         value: CFTypeRef,
     ) -> AxError;
-    fn AXUIElementCopyParameterizedAttributeValue(
+    pub(crate) fn AXUIElementCopyParameterizedAttributeValue(
         element: AxUiElementRef,
         parameterized_attribute: CFStringRef,
         parameter: CFTypeRef,
         value: *mut CFTypeRef,
     ) -> AxError;
-    fn AXValueGetValue(value: AxValueRef, value_type: i32, out: *mut c_void) -> u8;
-    fn AXValueCreate(value_type: i32, value_ptr: *const c_void) -> AxValueRef;
+    pub(crate) fn AXValueGetValue(value: AxValueRef, value_type: i32, out: *mut c_void) -> u8;
+    pub(crate) fn AXValueCreate(value_type: i32, value_ptr: *const c_void) -> AxValueRef;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -404,6 +404,20 @@ unsafe fn copy_selected_range(focused: AxUiElementRef) -> Option<CFRange> {
     (ok != 0).then_some(range)
 }
 
+/// Selection coordinates only: reuse the same gated AX reader as delivery
+/// verification without reading AXValue, selected text or surrounding text.
+pub(crate) fn focused_input_position() -> Option<(u64, u64)> {
+    unsafe {
+        let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate()) else {
+            return None;
+        };
+        let range = copy_selected_range(element);
+        CFRelease(element as CFTypeRef);
+        let range = range.filter(|range| range.location >= 0 && range.length >= 0)?;
+        Some((range.location as u64, range.length as u64))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct VoiceEditTarget {
     element: SendableElement,
@@ -502,27 +516,35 @@ unsafe fn set_voice_edit_selection(element: AxUiElementRef, range: CFRange) -> R
     Ok(())
 }
 
+unsafe fn validate_voice_edit_target(
+    target: &VoiceEditTarget,
+    selection: CFRange,
+) -> Result<SendableElement, String> {
+    let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate()) else {
+        return Err("voiceEditTargetUnavailable".into());
+    };
+    let retained = SendableElement::retained(element);
+    CFRelease(element as CFTypeRef);
+    let element = retained.as_ref();
+    if CFEqual(element as CFTypeRef, target.element.as_ref() as CFTypeRef) == 0 {
+        return Err("voiceEditTargetChanged".into());
+    }
+    if voice_edit_text(element).as_deref() != Some(target.text.as_str())
+        || copy_selected_range(element) != Some(selection)
+    {
+        return Err("voiceEditFieldChanged".into());
+    }
+    Ok(retained)
+}
+
 pub(super) fn apply_voice_edit_target(
     target: &VoiceEditTarget,
     text: &str,
-    insert: impl FnOnce(&str) -> Result<(), String>,
+    insert: impl FnOnce(&str, &mut dyn FnMut() -> bool) -> Result<(), String>,
 ) -> Result<(), String> {
     unsafe {
-        let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate())
-        else {
-            return Err("voiceEditTargetUnavailable".into());
-        };
-        let retained = SendableElement::retained(element);
-        CFRelease(element as CFTypeRef);
+        let retained = validate_voice_edit_target(target, target.selection_utf16)?;
         let element = retained.as_ref();
-        if CFEqual(element as CFTypeRef, target.element.as_ref() as CFTypeRef) == 0 {
-            return Err("voiceEditTargetChanged".into());
-        }
-        if voice_edit_text(element).as_deref() != Some(target.text.as_str())
-            || copy_selected_range(element) != Some(target.selection_utf16)
-        {
-            return Err("voiceEditFieldChanged".into());
-        }
         let range = if target.selection_utf16.length > 0 {
             target.selection_utf16
         } else {
@@ -534,33 +556,14 @@ pub(super) fn apply_voice_edit_target(
         super::write_with_selection_recovery(
             || {
                 set_voice_edit_selection(element, range)?;
-                let GatedElement::Ready(current) =
-                    focused_element_passing_the_gate(voice_edit_gate())
-                else {
-                    return Err("voiceEditTargetChanged".into());
-                };
-                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
-                CFRelease(current as CFTypeRef);
-                if !same {
-                    return Err("voiceEditTargetChanged".into());
-                }
-                if voice_edit_text(element).as_deref() != Some(target.text.as_str()) {
-                    return Err("voiceEditFieldChanged".into());
-                }
-                insert(text)
+                validate_voice_edit_target(target, range)?;
+                // The predicate only reads the prepared range; never reselect after waiting.
+                insert(text, &mut || {
+                    validate_voice_edit_target(target, range).is_ok()
+                })
             },
             || {
-                let GatedElement::Ready(current) =
-                    focused_element_passing_the_gate(voice_edit_gate())
-                else {
-                    return;
-                };
-                let same = CFEqual(current as CFTypeRef, element as CFTypeRef) != 0;
-                CFRelease(current as CFTypeRef);
-                if same
-                    && voice_edit_text(element).as_deref() == Some(target.text.as_str())
-                    && copy_selected_range(element) == Some(range)
-                {
+                if validate_voice_edit_target(target, range).is_ok() {
                     let _ = set_voice_edit_selection(element, target.selection_utf16);
                 }
             },
