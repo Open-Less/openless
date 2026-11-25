@@ -196,7 +196,15 @@ impl openless_core::RecordingArchive for HistoryWavArchive {
         &self,
     ) -> futures_util::future::BoxFuture<'static, Result<Vec<u8>, openless_core::BackendError>>
     {
-        self.read_pcm_range(0, self.len as usize)
+        let Ok(len) = usize::try_from(self.len) else {
+            return Box::pin(async {
+                Err(openless_core::BackendError::new(
+                    openless_core::BackendErrorCode::Persistence,
+                    "recording archive exceeds addressable size",
+                ))
+            });
+        };
+        self.read_pcm_range(0, len)
     }
     fn read_pcm_range(
         &self,
@@ -205,14 +213,17 @@ impl openless_core::RecordingArchive for HistoryWavArchive {
     ) -> futures_util::future::BoxFuture<'static, Result<Vec<u8>, openless_core::BackendError>>
     {
         let file = self.file.clone();
-        let start = self.offset + offset;
-        let valid = offset <= self.len && len as u64 <= self.len - offset;
+        let start = (offset.is_multiple_of(2)
+            && len.is_multiple_of(2)
+            && offset <= self.len
+            && len as u64 <= self.len - offset)
+            .then(|| self.offset.checked_add(offset))
+            .flatten();
         Box::pin(async move {
-            let read = tokio::task::spawn_blocking(move || {
+            let read = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
                 use std::io::{Read, Seek, SeekFrom};
-                if !valid {
-                    return Err(std::io::Error::other("PCM range out of bounds"));
-                }
+                let start =
+                    start.ok_or_else(|| std::io::Error::other("PCM range out of bounds"))?;
                 let mut file = file
                     .lock()
                     .map_err(|_| std::io::Error::other("archive lock poisoned"))?;
@@ -278,6 +289,9 @@ mod archive_tests {
             .read_pcm_range(u64::from(pcm_len) - 2, 4)
             .await
             .is_err());
+        assert!(archive.read_pcm_range(1, 2).await.is_err());
+        assert!(archive.read_pcm_range(0, 3).await.is_err());
+        assert!(archive.read_pcm_range(u64::MAX - 1, 2).await.is_err());
         file.set_len(44).unwrap();
         assert!(archive
             .read_pcm_range(u64::from(pcm_len) - 4, 4)

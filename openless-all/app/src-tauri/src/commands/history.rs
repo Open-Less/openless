@@ -150,6 +150,7 @@ pub async fn read_audio_recording(session_id: String) -> Result<String, String> 
         return Err("invalid session id".into());
     }
     let path = existing_recording_path(&session_id)?;
+    let _lease = crate::persistence::acquire_recording_archive_lease(&path);
     let data = tokio::fs::read(&path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "recording not found".into()
@@ -208,6 +209,7 @@ pub async fn export_audio_recording(
 
     tokio::task::spawn_blocking(move || -> Result<String, String> {
         let src = existing_recording_path(&session_id)?;
+        let _lease = crate::persistence::acquire_recording_archive_lease(&src);
 
         if configured_directory.is_empty() {
             let file_path = app

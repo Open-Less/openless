@@ -373,7 +373,7 @@ pub(crate) struct WavArchiveStatus {
 }
 
 impl WavArchiveStatus {
-    fn record_error(&self, message: impl Into<String>) {
+    pub(crate) fn record_error(&self, message: impl Into<String>) {
         let mut slot = self.error.lock();
         if slot.is_none() {
             *slot = Some(message.into());
@@ -450,8 +450,14 @@ impl WavArchiveWriter {
                         .filter(|&next| next <= self.max_queue_bytes)
                 });
         if reserved.is_err() {
+            const MIB: usize = 1024 * 1024;
+            let limit = if self.max_queue_bytes.is_multiple_of(MIB) {
+                format!("{} MiB", self.max_queue_bytes / MIB)
+            } else {
+                format!("{} bytes", self.max_queue_bytes)
+            };
             self.status
-                .record_error("wav archive queue exceeded 32 MiB limit");
+                .record_error(format!("wav archive queue exceeded {limit} limit"));
             if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
                 log::warn!(
                     "[recorder] wav archive queue full ({} bytes limit); dropping further archive frames",

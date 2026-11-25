@@ -668,34 +668,69 @@ impl Qwen3RealtimeASR {
     }
 
     fn finish_with_partial_or_error(&self, error: Qwen3ASRError) {
-        let has_partial = {
-            let mut st = self.state.lock();
-            if st.send_error.is_none() {
-                st.send_error = Some(error.clone());
-            }
-            !st.completed_segments.is_empty() || !st.partial_text.trim().is_empty()
-        };
-        if has_partial {
-            // Consistent with Bailian / Volcengine: on short-session break with an
-            // existing partial, salvage it via await_final_result while preserving
-            // st.send_error for coverage/long-recording checks.
-            self.finish_success();
-        } else {
-            self.finish_error(error);
-        }
+        self.resolve_partial_or_error(error, false);
     }
 
     fn record_send_failure(&self, error: Qwen3ASRError) {
-        {
+        self.resolve_partial_or_error(error, true);
+    }
+
+    fn resolve_partial_or_error(&self, error: Qwen3ASRError, clear_scratch: bool) {
+        let (tx, outcome, started_failed) = {
             let mut st = self.state.lock();
             if st.send_error.is_none() {
                 st.send_error = Some(error.clone());
             }
             st.send_tx.take();
-            st.pending_audio.clear();
-            st.audio_scratch.clear();
+            if clear_scratch {
+                st.pending_audio.clear();
+                st.audio_scratch.clear();
+            }
+            let has_partial =
+                !st.completed_segments.is_empty() || !st.partial_text.trim().is_empty();
+            let started_failed =
+                if !has_partial && !st.session_started && st.session_start_error.is_none() {
+                    st.session_start_error = Some(error.to_string());
+                    true
+                } else {
+                    false
+                };
+            if st.session_finished {
+                (None, None, started_failed)
+            } else {
+                st.session_finished = true;
+                if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                    let _ = cancel_tx.send(true);
+                }
+                let tx = st.final_tx.take();
+                let outcome = if has_partial {
+                    let mut segments = std::mem::take(&mut st.completed_segments);
+                    if !st.partial_text.is_empty() {
+                        segments.push(std::mem::take(&mut st.partial_text));
+                    }
+                    let text = join_segments(&segments);
+                    let duration_ms = if st.bytes_received > 0 {
+                        st.bytes_received / BYTES_PER_MS
+                    } else {
+                        st.start
+                            .map(|start| start.elapsed().as_millis() as u64)
+                            .unwrap_or_default()
+                    };
+                    Ok(RawTranscript { text, duration_ms })
+                } else {
+                    Err(error)
+                };
+                (tx, Some(outcome), started_failed)
+            }
+        };
+        if started_failed {
+            self.session_started.notify_waiters();
         }
-        self.finish_with_partial_or_error(error);
+        if let (Some(tx), Some(outcome)) = (tx, outcome) {
+            let _ = tx.send(outcome);
+        }
+        self.session_finished.notify_waiters();
+        self.close_on_runtime();
     }
 
     fn finish_error(&self, error: Qwen3ASRError) {

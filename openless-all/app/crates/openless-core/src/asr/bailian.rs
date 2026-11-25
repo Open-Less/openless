@@ -708,36 +708,61 @@ impl BailianRealtimeASR {
     }
 
     fn finish_with_partial_or_error(&self, error: BailianASRError) {
-        let has_partial = {
-            let mut st = self.state.lock();
-            if st.send_error.is_none() {
-                st.send_error = Some(error.clone());
-            }
-            !st.last_result_text.trim().is_empty()
-                || !st.final_segments.is_empty()
-                || !st.partial_segments.is_empty()
-        };
-        if has_partial {
-            // Consistent with Volcengine: when the connection breaks on a short session
-            // with an existing partial, keep it available via await_final_result while
-            // retaining st.send_error for coverage/long-recording checks.
-            self.finish_success();
-        } else {
-            self.finish_error(error);
-        }
+        self.resolve_partial_or_error(error, false);
     }
 
     fn record_send_failure(&self, error: BailianASRError) {
-        {
+        self.resolve_partial_or_error(error, true);
+    }
+
+    fn resolve_partial_or_error(&self, error: BailianASRError, clear_scratch: bool) {
+        let (tx, outcome) = {
             let mut st = self.state.lock();
             if st.send_error.is_none() {
                 st.send_error = Some(error.clone());
             }
             st.send_tx.take();
-            st.pending_audio.clear();
-            st.audio_scratch.clear();
+            if clear_scratch {
+                st.pending_audio.clear();
+                st.audio_scratch.clear();
+            }
+            if st.task_finished {
+                (None, None)
+            } else {
+                st.task_finished = true;
+                if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                    let _ = cancel_tx.send(true);
+                }
+                let has_partial = !st.last_result_text.trim().is_empty()
+                    || !st.final_segments.is_empty()
+                    || !st.partial_segments.is_empty();
+                let tx = st.final_tx.take();
+                let outcome = if has_partial {
+                    let text = if st.final_segments.is_empty() {
+                        st.last_result_text.clone()
+                    } else {
+                        let segments: Vec<String> = st.final_segments.values().cloned().collect();
+                        merge_segments(&segments)
+                    };
+                    let duration_ms = if st.bytes_received > 0 {
+                        st.bytes_received / BYTES_PER_MS
+                    } else {
+                        st.start
+                            .map(|start| start.elapsed().as_millis() as u64)
+                            .unwrap_or_default()
+                    };
+                    Ok(RawTranscript { text, duration_ms })
+                } else {
+                    Err(error)
+                };
+                (tx, Some(outcome))
+            }
+        };
+        if let (Some(tx), Some(outcome)) = (tx, outcome) {
+            let _ = tx.send(outcome);
         }
-        self.finish_with_partial_or_error(error);
+        self.task_started.notify_waiters();
+        self.close_on_runtime();
     }
 
     fn finish_error(&self, error: BailianASRError) {
@@ -1690,5 +1715,28 @@ mod tests {
         );
         shutdown.notify_waiters();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn record_send_failure_preserves_partial_across_concurrent_cancel() {
+        let asr = create_test_asr();
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut st = asr.state.lock();
+            st.task_started = true;
+            st.last_result_text = "百炼前缀".into();
+            st.final_tx = Some(tx);
+        }
+        *asr.final_rx.lock() = Some(rx);
+
+        asr.record_send_failure(BailianASRError::SendFailed("broken".into()));
+        asr.cancel();
+
+        let transcript = asr
+            .await_final_result()
+            .await
+            .expect("partial transcript must survive concurrent cancel");
+        assert_eq!(transcript.text, "百炼前缀");
+        assert!(!asr.is_stream_complete());
     }
 }

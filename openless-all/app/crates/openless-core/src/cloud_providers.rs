@@ -277,9 +277,9 @@ where
         }
         let salvaged = timeout_transcription(Duration::from_secs(120), await_final)
             .await
-            .map_err(|_| mapped.clone())?;
+            .map_err(|_| mapped.clone().retryable(true))?;
         if salvaged.text.trim().is_empty() {
-            return Err(mapped);
+            return Err(mapped.retryable(true));
         }
         return Ok(salvaged);
     }
@@ -4726,6 +4726,22 @@ mod tests {
         .await
         .unwrap_err();
         assert!(empty_failed.message.contains("finish ack dropped"));
+        assert!(empty_failed.retryable);
+
+        // Short session where salvage await fails (e.g. concurrent cancel) must stay retryable.
+        let await_failed = finalize_streaming_transcript(
+            "test-asr",
+            false,
+            false,
+            (32_000, 32_000),
+            Err("finish ack dropped"),
+            || {},
+            async { Err::<crate::asr::RawTranscript, _>("no final result") },
+        )
+        .await
+        .unwrap_err();
+        assert!(await_failed.message.contains("finish ack dropped"));
+        assert!(await_failed.retryable);
 
         // Silence with complete coverage is still allowed for connection checks.
         let silent_ok = finalize_streaming_transcript::<&str, _>(

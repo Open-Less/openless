@@ -760,25 +760,8 @@ impl VolcengineStreamingASR {
         self.signal_error(VolcengineASRError::NoFinalResult);
     }
 
-    fn stop_send_worker(&self) {
-        let mut st = self.state.lock();
-        st.send_tx = None;
-        if let Some(tx) = st.cancel_tx.as_ref() {
-            let _ = tx.send(true);
-        }
-    }
-
     fn record_send_failure(&self, err: VolcengineASRError) {
-        {
-            let mut st = self.state.lock();
-            if st.send_error.is_none() {
-                st.send_error = Some(err.clone());
-            }
-            st.is_connected = false;
-            st.send_tx = None;
-            st.pending_audio.clear();
-        }
-        self.fallback_to_partial_or_error(err);
+        self.resolve_with_partial_or_error(err, true);
     }
 
     // ---- internals ----
@@ -982,33 +965,49 @@ impl VolcengineStreamingASR {
     /// `last_partial_text` to guarantee "at least no loss of already-recognized
     /// speech".
     fn fallback_to_partial_or_error(&self, err: VolcengineASRError) {
-        let (partial, duration_ms) = {
+        self.resolve_with_partial_or_error(err, false);
+    }
+
+    fn resolve_with_partial_or_error(&self, err: VolcengineASRError, clear_pending: bool) {
+        let (tx, outcome, partial_chars) = {
             let mut st = self.state.lock();
             if st.send_error.is_none() {
                 st.send_error = Some(err.clone());
             }
-            (
-                st.last_partial_text.clone(),
-                st.start
-                    .map(|s| s.elapsed().as_millis() as u64)
-                    .unwrap_or(0),
-            )
+            st.is_connected = false;
+            st.send_tx = None;
+            if clear_pending {
+                st.pending_audio.clear();
+            }
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
+            let partial = st.last_partial_text.clone();
+            let duration_ms = st
+                .start
+                .map(|s| s.elapsed().as_millis() as u64)
+                .unwrap_or(0);
+            let tx = st.final_tx.take();
+            if !partial.is_empty() {
+                let chars = partial.chars().count();
+                (
+                    tx,
+                    Ok(RawTranscript {
+                        text: partial,
+                        duration_ms,
+                    }),
+                    Some(chars),
+                )
+            } else {
+                (tx, Err(err.clone()), None)
+            }
         };
-        if !partial.is_empty() {
-            log::warn!(
-                "[asr] {}; 使用 partial 兜底（{} 字）",
-                err,
-                partial.chars().count()
-            );
-            self.signal_success(RawTranscript {
-                text: partial,
-                duration_ms,
-            });
-        } else {
-            self.signal_error(err);
+        if let Some(chars) = partial_chars {
+            log::warn!("[asr] {}; 使用 partial 兜底（{} 字）", err, chars);
         }
-        self.state.lock().is_connected = false;
-        self.stop_send_worker();
+        if let Some(tx) = tx {
+            let _ = tx.send(outcome);
+        }
     }
 }
 
@@ -1754,5 +1753,37 @@ mod tests {
 
         shutdown.notify_waiters();
         server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn record_send_failure_preserves_partial_across_concurrent_cancel() {
+        let asr = VolcengineStreamingASR::new(
+            VolcengineCredentials {
+                service: VolcengineService::Standard,
+                auth_mode: VolcengineAuthMode::AppIdToken,
+                app_id: "app".into(),
+                access_token: "token".into(),
+                resource_id: VolcengineCredentials::default_resource_id().into(),
+            },
+            Vec::new(),
+        );
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut st = asr.state.lock();
+            st.is_connected = true;
+            st.last_partial_text = "已识别前缀".into();
+            st.final_tx = Some(tx);
+        }
+        *asr.final_rx.lock() = Some(rx);
+
+        asr.record_send_failure(VolcengineASRError::ConnectionFailed("broken".into()));
+        asr.cancel();
+
+        let transcript = asr
+            .await_final_result()
+            .await
+            .expect("partial transcript must survive concurrent cancel");
+        assert_eq!(transcript.text, "已识别前缀");
+        assert!(!asr.is_stream_complete());
     }
 }

@@ -582,49 +582,92 @@ impl XfyunStreamingASR {
     /// otherwise error — consistent with the Volcengine / Bailian policy of "not
     /// losing recognized text when the server disconnects before final".
     fn finish_with_partial_or_error(&self, error: XfyunASRError) {
-        let has_partial = {
-            let st = self.state.lock();
-            !st.last_result_text.trim().is_empty() || !st.partial_segments.is_empty()
-        };
-        if has_partial {
-            self.finish_success();
-        } else {
-            self.finish_error(error);
-        }
+        self.finish_with_partial_or_error_inner(error, false);
     }
 
-    fn finish_success(&self) {
-        let (tx, text, duration_ms) = {
-            let mut st = self.state.lock();
-            if st.finished {
-                return;
-            }
-            st.finished = true;
-            st.pending_audio.clear();
-            st.send_tx = None;
-            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
-                let _ = cancel_tx.send(true);
-            }
-            let text = if st.final_segments.is_empty() {
-                st.last_result_text.clone()
-            } else {
-                let segments: Vec<String> = st.final_segments.values().cloned().collect();
-                super::mimo::join_transcript_chunks(&segments)
-            };
-            let audio_bytes = st.bytes_written.max(st.bytes_received);
-            let duration_ms = if audio_bytes > 0 {
-                audio_bytes / BYTES_PER_MS
-            } else {
-                st.start
-                    .map(|start| start.elapsed().as_millis() as u64)
-                    .unwrap_or_default()
-            };
-            (st.final_tx.take(), text, duration_ms)
-        };
-        if let Some(tx) = tx {
-            let _ = tx.send(Ok(RawTranscript { text, duration_ms }));
+    fn finish_with_partial_or_error_inner(&self, error: XfyunASRError, is_send_failure: bool) {
+        enum Outcome {
+            AlreadyFinished,
+            Partial {
+                tx: Option<oneshot::Sender<Result<RawTranscript, XfyunASRError>>>,
+                text: String,
+                duration_ms: u64,
+            },
+            Error {
+                tx: Option<oneshot::Sender<Result<RawTranscript, XfyunASRError>>>,
+                error: XfyunASRError,
+            },
         }
-        self.close_writer();
+        // Resolve state, send_error, finished flag, and final_tx in one critical section so
+        // concurrent cancel() cannot intercept final_tx ahead of partial salvage.
+        let outcome = {
+            let mut st = self.state.lock();
+            if is_send_failure && st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
+            if st.finished {
+                st.send_tx = None;
+                if is_send_failure {
+                    st.pending_audio.clear();
+                }
+                Outcome::AlreadyFinished
+            } else {
+                st.finished = true;
+                st.pending_audio.clear();
+                st.send_tx = None;
+                if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                    let _ = cancel_tx.send(true);
+                }
+                let has_partial =
+                    !st.last_result_text.trim().is_empty() || !st.partial_segments.is_empty();
+                let tx = st.final_tx.take();
+                if has_partial {
+                    let text = if st.final_segments.is_empty() {
+                        st.last_result_text.clone()
+                    } else {
+                        let segments: Vec<String> = st.final_segments.values().cloned().collect();
+                        super::mimo::join_transcript_chunks(&segments)
+                    };
+                    let audio_bytes = st.bytes_written.max(st.bytes_received);
+                    let duration_ms = if audio_bytes > 0 {
+                        audio_bytes / BYTES_PER_MS
+                    } else {
+                        st.start
+                            .map(|start| start.elapsed().as_millis() as u64)
+                            .unwrap_or_default()
+                    };
+                    Outcome::Partial {
+                        tx,
+                        text,
+                        duration_ms,
+                    }
+                } else {
+                    Outcome::Error { tx, error }
+                }
+            }
+        };
+        match outcome {
+            Outcome::AlreadyFinished => {}
+            Outcome::Partial {
+                tx,
+                text,
+                duration_ms,
+            } => {
+                if let Some(tx) = tx {
+                    let _ = tx.send(Ok(RawTranscript { text, duration_ms }));
+                }
+                self.close_writer();
+            }
+            Outcome::Error { tx, error } => {
+                if let Some(handshake_tx) = self.handshake_tx.lock().take() {
+                    let _ = handshake_tx.send(Err(error.clone()));
+                }
+                if let Some(tx) = tx {
+                    let _ = tx.send(Err(error));
+                }
+                self.close_writer();
+            }
+        }
     }
 
     fn signal_error(&self, error: XfyunASRError) {
@@ -646,15 +689,7 @@ impl XfyunStreamingASR {
     }
 
     fn record_send_failure(&self, error: XfyunASRError) {
-        {
-            let mut st = self.state.lock();
-            if st.send_error.is_none() {
-                st.send_error = Some(error.clone());
-            }
-            st.send_tx = None;
-            st.pending_audio.clear();
-        }
-        self.finish_with_partial_or_error(error);
+        self.finish_with_partial_or_error_inner(error, true);
     }
 
     fn finish_error(&self, error: XfyunASRError) {

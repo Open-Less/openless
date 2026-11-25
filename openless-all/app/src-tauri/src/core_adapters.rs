@@ -3493,7 +3493,7 @@ struct TauriRecordingArchive {
     path: Arc<Mutex<PathBuf>>,
     available: Arc<AtomicBool>,
     status: Option<crate::recorder::WavArchiveStatus>,
-    lease: Arc<Mutex<crate::persistence::RecordingArchiveLease>>,
+    lease: Arc<Mutex<Option<crate::persistence::RecordingArchiveLease>>>,
 }
 
 impl TauriRecordingArchive {
@@ -3507,8 +3507,24 @@ impl TauriRecordingArchive {
             path: Arc::new(Mutex::new(path)),
             available: Arc::new(AtomicBool::new(available)),
             status,
-            lease: Arc::new(Mutex::new(lease)),
+            lease: Arc::new(Mutex::new(Some(lease))),
         }
+    }
+
+    fn checked_archive_path(&self) -> Result<PathBuf, BackendError> {
+        if let Some(error) = self.write_error() {
+            return Err(BackendError::new(
+                BackendErrorCode::Persistence,
+                format!("recording archive write failed: {error}"),
+            ));
+        }
+        if !self.available.load(Ordering::Acquire) {
+            return Err(BackendError::new(
+                BackendErrorCode::Persistence,
+                "longRecordingArchiveIncomplete",
+            ));
+        }
+        Ok(self.path.lock().clone())
     }
 }
 
@@ -3518,37 +3534,27 @@ impl RecordingArchive for TauriRecordingArchive {
     }
 
     fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
-        let path = self.path.lock().clone();
+        let checked = self.checked_archive_path();
         Box::pin(async move {
-            use tokio::io::AsyncReadExt;
-            let read = async {
-                let mut file = tokio::fs::File::open(path).await?;
-                let size = file.metadata().await?.len();
-                let mut header = [0; 44];
-                file.read_exact(&mut header).await?;
-                Ok::<_, std::io::Error>((size, header))
-            }
+            let path = checked?;
+            let lease = crate::persistence::acquire_recording_archive_lease(&path);
+            tauri::async_runtime::spawn_blocking(move || {
+                let _lease = lease;
+                let mut file = std::fs::File::open(&path).map_err(|error| {
+                    BackendError::new(
+                        BackendErrorCode::Persistence,
+                        format!("read dictation archive header: {error}"),
+                    )
+                })?;
+                openless_core::audio::canonical_archive_pcm_len(&mut file)
+            })
             .await
             .map_err(|error| {
                 BackendError::new(
                     BackendErrorCode::Persistence,
-                    format!("read dictation archive header: {error}"),
+                    format!("join dictation archive header task: {error}"),
                 )
-            })?;
-            let (size, header) = read;
-            let pcm_bytes = u64::from(u32::from_le_bytes(header[40..44].try_into().unwrap()));
-            if &header[..4] != b"RIFF"
-                || &header[8..12] != b"WAVE"
-                || &header[36..40] != b"data"
-                || size != 44 + pcm_bytes
-                || !pcm_bytes.is_multiple_of(2)
-            {
-                return Err(BackendError::new(
-                    BackendErrorCode::Persistence,
-                    "longRecordingArchiveIncomplete",
-                ));
-            }
-            Ok(pcm_bytes)
+            })?
         })
     }
 
@@ -3561,70 +3567,64 @@ impl RecordingArchive for TauriRecordingArchive {
         offset: u64,
         len: usize,
     ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
-        let path = self.path.lock().clone();
-        let lease = crate::persistence::acquire_recording_archive_lease(&path);
+        let checked = self.checked_archive_path();
         Box::pin(async move {
-            use tokio::io::{AsyncReadExt, AsyncSeekExt};
-            let _lease = lease;
-            let read = async {
-                let mut file = tokio::fs::File::open(path).await?;
-                file.seek(std::io::SeekFrom::Start(
-                    44u64
-                        .checked_add(offset)
-                        .ok_or_else(|| std::io::Error::other("PCM offset overflow"))?,
-                ))
-                .await?;
-                let mut pcm = vec![0; len];
-                file.read_exact(&mut pcm).await?;
-                Ok::<_, std::io::Error>(pcm)
-            }
-            .await;
-            read.map_err(|error| {
+            let path = checked?;
+            let lease = crate::persistence::acquire_recording_archive_lease(&path);
+            tauri::async_runtime::spawn_blocking(move || {
+                let _lease = lease;
+                let mut file = std::fs::File::open(&path).map_err(|error| {
+                    BackendError::new(
+                        BackendErrorCode::Persistence,
+                        format!("read recording PCM range: {error}"),
+                    )
+                })?;
+                openless_core::audio::read_canonical_archive_pcm_range(&mut file, offset, len)
+            })
+            .await
+            .map_err(|error| {
                 BackendError::new(
                     BackendErrorCode::Persistence,
-                    format!("read recording PCM range: {error}"),
+                    format!("join recording PCM range task: {error}"),
                 )
-            })
+            })?
         })
     }
 
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
-        let path = self.path.lock().clone();
+        let checked = self.checked_archive_path();
         Box::pin(async move {
+            let path = checked?;
+            let lease = crate::persistence::acquire_recording_archive_lease(&path);
             let wav = tokio::fs::read(&path).await.map_err(|error| {
                 BackendError::new(
                     BackendErrorCode::Persistence,
                     format!("read dictation recording archive: {error}"),
                 )
             })?;
-            if wav.len() <= 44
-                || &wav[..4] != b"RIFF"
-                || &wav[8..12] != b"WAVE"
-                || !(wav.len() - 44).is_multiple_of(2)
-            {
-                return Err(BackendError::new(
-                    BackendErrorCode::Persistence,
-                    "dictation recording archive is not canonical PCM WAV",
-                ));
-            }
-            Ok(wav[44..].to_vec())
+            drop(lease);
+            openless_core::audio::decode_dictation_wav(&wav).map(ToOwned::to_owned)
         })
     }
 
     fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let path = self.path.lock().clone();
         let available = Arc::clone(&self.available);
+        let lease = Arc::clone(&self.lease);
         Box::pin(async move {
             if !available.load(Ordering::Acquire) {
+                *lease.lock() = None;
                 return Ok(());
             }
             match tokio::fs::remove_file(&path).await {
                 Ok(()) => {
                     available.store(false, Ordering::Release);
+                    *lease.lock() = None;
                     Ok(())
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     available.store(false, Ordering::Release);
+                    *lease.lock() = None;
                     Ok(())
                 }
                 Err(error) => {
@@ -3670,7 +3670,7 @@ impl RecordingArchive for TauriRecordingArchive {
                     )
                 })?;
             *path.lock() = target;
-            *lease.lock() = target_lease;
+            *lease.lock() = Some(target_lease);
             Ok(())
         })
     }
@@ -3704,7 +3704,7 @@ impl RecordingArchive for TauriRecordingArchive {
                     )
                 })?;
             *path.lock() = target;
-            *lease.lock() = target_lease;
+            *lease.lock() = Some(target_lease);
             Ok(())
         })
     }
@@ -6053,6 +6053,104 @@ mod tests {
         backend.cancel_dictation(Some(next)).await.unwrap();
         drop(backend);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tauri_recording_archive_validates_bounds_headers_and_releases_lease_on_discard() {
+        use openless_core::RecordingArchive;
+        use std::io::Write;
+
+        let dir =
+            std::env::temp_dir().join(format!("openless-tauri-archive-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.wav");
+        let valid_wav = openless_core::audio::encode_dictation_wav(&[1, 2, 3, 4, 5, 6]).unwrap();
+        std::fs::write(&path, &valid_wav).unwrap();
+
+        let status = crate::recorder::WavArchiveStatus::default();
+        let lease = crate::persistence::acquire_recording_archive_lease(&path);
+        let archive = Arc::new(TauriRecordingArchive::new(
+            path.clone(),
+            true,
+            Some(status),
+            lease,
+        ));
+        assert!(crate::persistence::is_recording_archive_leased(&path));
+        assert_eq!(archive.pcm_byte_len().await.unwrap(), 6);
+        assert_eq!(
+            archive.read_pcm_range(2, 4).await.unwrap(),
+            vec![3, 4, 5, 6]
+        );
+        assert_eq!(archive.read_pcm().await.unwrap(), vec![1, 2, 3, 4, 5, 6]);
+
+        assert!(archive.read_pcm_range(1, 2).await.is_err());
+        assert!(archive.read_pcm_range(0, 3).await.is_err());
+        assert!(archive.read_pcm_range(4, 4).await.is_err());
+
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(&[0, 0]).unwrap();
+        }
+        assert!(archive.pcm_byte_len().await.is_err());
+        assert!(archive.read_pcm_range(0, 4).await.is_err());
+        assert!(archive.read_pcm().await.is_err());
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(46)
+            .unwrap();
+        assert!(archive.pcm_byte_len().await.is_err());
+        assert!(archive.read_pcm_range(0, 2).await.is_err());
+
+        let mut bad_fmt = valid_wav.clone();
+        bad_fmt[24..28].copy_from_slice(&8_000u32.to_le_bytes());
+        std::fs::write(&path, &bad_fmt).unwrap();
+        assert!(archive.pcm_byte_len().await.is_err());
+        assert!(archive.read_pcm_range(0, 4).await.is_err());
+        assert!(archive.read_pcm().await.is_err());
+
+        std::fs::write(&path, &valid_wav).unwrap();
+        archive.discard().await.unwrap();
+        assert!(!archive.is_available());
+        assert!(!path.exists());
+        assert!(!crate::persistence::is_recording_archive_leased(&path));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tauri_recording_archive_fails_closed_when_write_error_latched() {
+        use openless_core::RecordingArchive;
+
+        let dir = std::env::temp_dir().join(format!(
+            "openless-tauri-archive-err-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("faulty.wav");
+        std::fs::write(
+            &path,
+            openless_core::audio::encode_dictation_wav(&[1, 2, 3, 4]).unwrap(),
+        )
+        .unwrap();
+
+        let status = crate::recorder::WavArchiveStatus::default();
+        let lease = crate::persistence::acquire_recording_archive_lease(&path);
+        let archive = TauriRecordingArchive::new(path.clone(), true, Some(status.clone()), lease);
+        status.record_error("disk full");
+
+        assert_eq!(archive.write_error().as_deref(), Some("disk full"));
+        assert!(archive.pcm_byte_len().await.is_err());
+        assert!(archive.read_pcm_range(0, 4).await.is_err());
+        assert!(archive.read_pcm().await.is_err());
+
+        archive.discard().await.unwrap();
+        assert!(!crate::persistence::is_recording_archive_leased(&path));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

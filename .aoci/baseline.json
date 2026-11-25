@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-24T11:55:26Z",
+  "updated_at": "2026-11-25T04:37:25Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -161,9 +161,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "25eb580b913f74891bcefb08bf1ac1ceec34a536192e6004e5e71c98b1f8b7ce",
-      "size": 771632,
-      "normalized_sha256": "25eb580b913f74891bcefb08bf1ac1ceec34a536192e6004e5e71c98b1f8b7ce"
+      "sha256": "cc05341b71a17c1e322e65cce0e39fbda53d13da5cde45a973e11d3973cc594f",
+      "size": 771412,
+      "normalized_sha256": "cc05341b71a17c1e322e65cce0e39fbda53d13da5cde45a973e11d3973cc594f"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -414,9 +414,9 @@
     },
     "docs/development/long-recording.md": {
       "role": "index",
-      "sha256": "ee3a5a5ee07fa6458a3c520663ddb1b951dde0c2aeefbb7d49baf4b90ae055af",
-      "size": 6415,
-      "normalized_sha256": "ee3a5a5ee07fa6458a3c520663ddb1b951dde0c2aeefbb7d49baf4b90ae055af"
+      "sha256": "34726b2c2602a8e7921ed41ab713ff4a18a26f167881513a1eaf005238745a9f",
+      "size": 6558,
+      "normalized_sha256": "34726b2c2602a8e7921ed41ab713ff4a18a26f167881513a1eaf005238745a9f"
     },
     "docs/development/official-style-packs.md": {
       "role": "index",
@@ -2102,9 +2102,9 @@
     },
     "openless-all/app/crates/openless-core/src/asr/bailian.rs": {
       "role": "index",
-      "sha256": "2e1ebfbf0002454c783ab69981f19f2d5ed7daa3f4fce11b576211f69eaba927",
-      "size": 63194,
-      "normalized_sha256": "2e1ebfbf0002454c783ab69981f19f2d5ed7daa3f4fce11b576211f69eaba927"
+      "sha256": "d04e75a1d00a4695582309a7012dc9b72967f0577b58c4a108046abff33af92e",
+      "size": 65024,
+      "normalized_sha256": "d04e75a1d00a4695582309a7012dc9b72967f0577b58c4a108046abff33af92e"
     },
     "openless-all/app/crates/openless-core/src/asr/dashscope_multimodal.rs": {
       "role": "index",
@@ -2222,15 +2222,15 @@
     },
     "openless-all/app/crates/openless-core/src/asr/qwen_realtime.rs": {
       "role": "index",
-      "sha256": "b1cad5d206eee4080520242d9954d96784c963b89f0108d7d16e25bf748bd9e5",
-      "size": 51986,
-      "normalized_sha256": "b1cad5d206eee4080520242d9954d96784c963b89f0108d7d16e25bf748bd9e5"
+      "sha256": "a8b0463d2fcf85134177266a62360fafd6df7417ddea348cf9ff740848a3ca7e",
+      "size": 53474,
+      "normalized_sha256": "a8b0463d2fcf85134177266a62360fafd6df7417ddea348cf9ff740848a3ca7e"
     },
     "openless-all/app/crates/openless-core/src/asr/stepfun_realtime.rs": {
       "role": "index",
-      "sha256": "c39cc25dd81638e417f917cd9c509e4f630051349f09a77e5f7b6c30e6a0448d",
-      "size": 71758,
-      "normalized_sha256": "c39cc25dd81638e417f917cd9c509e4f630051349f09a77e5f7b6c30e6a0448d"
+      "sha256": "a0e97c073456f0c34c5ba4de51bb87febe5678506bb64cb9962a936ce6173e85",
+      "size": 73235,
+      "normalized_sha256": "a0e97c073456f0c34c5ba4de51bb87febe5678506bb64cb9962a936ce6173e85"
     },
     "openless-all/app/crates/openless-core/src/asr/tencent_cloud.rs": {
       "role": "index",
@@ -2246,9 +2246,9 @@
     },
     "openless-all/app/crates/openless-core/src/asr/volcengine.rs": {
       "role": "index",
-      "sha256": "d211e1032b0f9b042d22b1059e9fdbb59eba1d444c4001643f0b216ebd0ac8b4",
-      "size": 68332,
-      "normalized_sha256": "d211e1032b0f9b042d22b1059e9fdbb59eba1d444c4001643f0b216ebd0ac8b4"
+      "sha256": "c27557439ee4c78bcce38da4a755a51a1718b031b6efc6ece221bb346630c07a",
+      "size": 69665,
+      "normalized_sha256": "c27557439ee4c78bcce38da4a755a51a1718b031b6efc6ece221bb346630c07a"
     },
     "openless-all/app/crates/openless-core/src/asr/wav.rs": {
       "role": "index",
@@ -2264,9 +2264,9 @@
     },
     "openless-all/app/crates/openless-core/src/asr/xfyun.rs": {
       "role": "index",
-      "sha256": "3b15b61b07522dcefaef38dfd6304b7300293f5fb18064dd1bf3769dfcbd41c0",
-      "size": 54285,
-      "normalized_sha256": "3b15b61b07522dcefaef38dfd6304b7300293f5fb18064dd1bf3769dfcbd41c0"
+      "sha256": "cd2feb5e64e5ddb3740e6d26b9b743c400df8357ad8449cdab703e68c5f70677",
+      "size": 55906,
+      "normalized_sha256": "cd2feb5e64e5ddb3740e6d26b9b743c400df8357ad8449cdab703e68c5f70677"
     },
     "openless-all/app/crates/openless-core/src/assistant.rs": {
       "role": "index",
@@ -2366,9 +2366,9 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_providers.rs": {
       "role": "index",
-      "sha256": "a7ff008f8296584a730747bcfd2a0dc8ef08fbbdef4df32d38d17b71c75f9e74",
-      "size": 188066,
-      "normalized_sha256": "a7ff008f8296584a730747bcfd2a0dc8ef08fbbdef4df32d38d17b71c75f9e74"
+      "sha256": "a2f1a1fbf113e6d269dc23fdecbbcbb319002c8038554507fcfdd41f56464481",
+      "size": 188682,
+      "normalized_sha256": "a2f1a1fbf113e6d269dc23fdecbbcbb319002c8038554507fcfdd41f56464481"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync.rs": {
       "role": "index",
@@ -7901,15 +7901,15 @@
     },
     "openless-all/app/src-tauri/src/commands/history.rs": {
       "role": "index",
-      "sha256": "2e13860b2b5b7d06ef0f4446b56152b8ceca8f652cd3140ec55dd28961632b3a",
-      "size": 13648,
-      "normalized_sha256": "2e13860b2b5b7d06ef0f4446b56152b8ceca8f652cd3140ec55dd28961632b3a"
+      "sha256": "aff1f3cd0b30b5a4ecb8922c57e766823bbd14408112acc189c9c14a54209fd6",
+      "size": 13805,
+      "normalized_sha256": "aff1f3cd0b30b5a4ecb8922c57e766823bbd14408112acc189c9c14a54209fd6"
     },
     "openless-all/app/src-tauri/src/commands/history_retranscription.rs": {
       "role": "index",
-      "sha256": "7205947c99c3f1c51f3c07656974229d7223200803dc203b2fdde60e52413e23",
-      "size": 10515,
-      "normalized_sha256": "7205947c99c3f1c51f3c07656974229d7223200803dc203b2fdde60e52413e23"
+      "sha256": "6a9754d2edaa16ad2c284240d0ad3a838ee922147b616561f4a93fc1db2f00c3",
+      "size": 11167,
+      "normalized_sha256": "6a9754d2edaa16ad2c284240d0ad3a838ee922147b616561f4a93fc1db2f00c3"
     },
     "openless-all/app/src-tauri/src/commands/hotkeys.rs": {
       "role": "index",
@@ -8063,9 +8063,9 @@
     },
     "openless-all/app/src-tauri/src/core_adapters.rs": {
       "role": "index",
-      "sha256": "d26eaa2b0dd60172caa3ce165160c56e36e9e40976a7b61ff4ae74814b806e43",
-      "size": 266214,
-      "normalized_sha256": "d26eaa2b0dd60172caa3ce165160c56e36e9e40976a7b61ff4ae74814b806e43"
+      "sha256": "8a27f396d36a28b1caf7ea46bf23d0b91eb85b372991a947a76a3c98f784eb7a",
+      "size": 270268,
+      "normalized_sha256": "8a27f396d36a28b1caf7ea46bf23d0b91eb85b372991a947a76a3c98f784eb7a"
     },
     "openless-all/app/src-tauri/src/correction.rs": {
       "role": "index",
@@ -8435,9 +8435,9 @@
     },
     "openless-all/app/src-tauri/src/recorder.rs": {
       "role": "index",
-      "sha256": "d1544d4c8761dda58d9757ad3ae482bf65fb08771c2e37290f7d212ab5e50076",
-      "size": 200590,
-      "normalized_sha256": "d1544d4c8761dda58d9757ad3ae482bf65fb08771c2e37290f7d212ab5e50076"
+      "sha256": "c706c9235c0893dab1fcbdc883e09897fa59cef581856c61cf9988ea2840cccf",
+      "size": 200881,
+      "normalized_sha256": "c706c9235c0893dab1fcbdc883e09897fa59cef581856c61cf9988ea2840cccf"
     },
     "openless-all/app/src-tauri/src/recorder/android_capture.rs": {
       "role": "index",
