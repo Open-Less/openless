@@ -893,28 +893,44 @@ function AsrAdvancedOptions({
   const [enableItn, setEnableItn] = useState(true);
   const [enableDdc, setEnableDdc] = useState(false);
   const [enableNonstream, setEnableNonstream] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
   const [error, setError] = useState('');
+  const hydratedRef = useRef(false);
+  const providerRef = useRef(provider);
+  const lastPersistedConfigRef = useRef<AdvancedAsrConfig>(parseAdvancedAsrConfig(null));
   const latestConfigRef = useRef<AdvancedAsrConfig>(parseAdvancedAsrConfig(null));
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSavesRef = useRef(0);
 
+  const applyConfigToUi = useCallback((config: AdvancedAsrConfig) => {
+    setVerboseJson(config.verboseJson);
+    setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
+    setEnableItn(config.enableItn);
+    setEnableDdc(config.enableDdc);
+    setEnableNonstream(config.enableNonstream);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
+    providerRef.current = provider;
+    hydratedRef.current = false;
+    setHydrated(false);
     setStatus('idle');
     setError('');
-    latestConfigRef.current = parseAdvancedAsrConfig(null);
+    const defaults = parseAdvancedAsrConfig(null);
+    lastPersistedConfigRef.current = defaults;
+    latestConfigRef.current = defaults;
     void (async () => {
       try {
         const raw = await readCredential('asr.advanced_config', provider);
         if (cancelled) return;
         const config = parseAdvancedAsrConfig(raw);
+        lastPersistedConfigRef.current = config;
         latestConfigRef.current = config;
-        setVerboseJson(config.verboseJson);
-        setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
-        setEnableItn(config.enableItn);
-        setEnableDdc(config.enableDdc);
-        setEnableNonstream(config.enableNonstream);
+        hydratedRef.current = true;
+        setHydrated(true);
+        applyConfigToUi(config);
       } catch (err) {
         if (!cancelled) {
           setStatus('error');
@@ -925,7 +941,7 @@ function AsrAdvancedOptions({
     return () => {
       cancelled = true;
     };
-  }, [provider]);
+  }, [applyConfigToUi, provider]);
 
   const parseChunkDraft = (draft: string): number | null => {
     const value = Number(draft);
@@ -940,6 +956,8 @@ function AsrAdvancedOptions({
     enableDdc?: boolean;
     enableNonstream?: boolean;
   }) => {
+    if (!hydratedRef.current) return;
+    const targetProvider = provider;
     onUserMutation?.();
     setStatus('saving');
     setError('');
@@ -955,30 +973,36 @@ function AsrAdvancedOptions({
       enableNonstream: partial.enableNonstream ?? prev.enableNonstream,
     };
     latestConfigRef.current = next;
-    setVerboseJson(next.verboseJson);
-    setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
-    setEnableItn(next.enableItn);
-    setEnableDdc(next.enableDdc);
-    setEnableNonstream(next.enableNonstream);
+    applyConfigToUi(next);
 
     pendingSavesRef.current += 1;
     const queued = saveQueueRef.current
       .catch(() => {})
       .then(async () => {
-        await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
+        await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), targetProvider);
+        if (providerRef.current === targetProvider) {
+          lastPersistedConfigRef.current = next;
+        }
       });
     saveQueueRef.current = queued;
 
     try {
       await queued;
       pendingSavesRef.current -= 1;
-      if (pendingSavesRef.current === 0) {
+      if (providerRef.current === targetProvider && pendingSavesRef.current === 0) {
         setStatus('idle');
       }
     } catch (err) {
       pendingSavesRef.current -= 1;
-      setStatus('error');
-      setError(err instanceof Error ? err.message : String(err));
+      if (providerRef.current === targetProvider) {
+        if (pendingSavesRef.current === 0) {
+          const snapshot = lastPersistedConfigRef.current;
+          latestConfigRef.current = snapshot;
+          applyConfigToUi(snapshot);
+        }
+        setStatus('error');
+        setError(err instanceof Error ? err.message : String(err));
+      }
     }
   };
 
@@ -1002,7 +1026,11 @@ function AsrAdvancedOptions({
           label={t('settings.providers.asrAdvancedEnableItnLabel')}
           desc={t('settings.providers.asrAdvancedEnableItnHint')}
         >
-          <Toggle on={enableItn} onToggle={(next) => void save({ enableItn: next })} />
+          <Toggle
+            on={enableItn}
+            disabled={!hydrated}
+            onToggle={(next) => void save({ enableItn: next })}
+          />
         </SettingRow>
       ) : resolvedType === 'volcengine' ? (
         <>
@@ -1010,7 +1038,11 @@ function AsrAdvancedOptions({
             label={t('settings.providers.asrAdvancedEnableDdcLabel')}
             desc={t('settings.providers.asrAdvancedEnableDdcHint')}
           >
-            <Toggle on={enableDdc} onToggle={(next) => void save({ enableDdc: next })} />
+            <Toggle
+              on={enableDdc}
+              disabled={!hydrated}
+              onToggle={(next) => void save({ enableDdc: next })}
+            />
           </SettingRow>
           <SettingRow
             label={t('settings.providers.asrAdvancedEnableNonstreamLabel')}
@@ -1018,6 +1050,7 @@ function AsrAdvancedOptions({
           >
             <Toggle
               on={enableNonstream}
+              disabled={!hydrated}
               onToggle={(next) => void save({ enableNonstream: next })}
             />
           </SettingRow>
@@ -1028,7 +1061,11 @@ function AsrAdvancedOptions({
             label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
             desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
           >
-            <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
+            <Toggle
+              on={verboseJson}
+              disabled={!hydrated}
+              onToggle={(next) => void save({ verboseJson: next })}
+            />
           </SettingRow>
           <SettingRow
             label={t('settings.providers.asrAdvancedChunkLabel')}
@@ -1040,7 +1077,7 @@ function AsrAdvancedOptions({
               step={1000}
               value={chunkDraft}
               placeholder="0"
-              disabled={status === 'saving'}
+              disabled={!hydrated || status === 'saving'}
               onChange={(e) => setChunkDraft(e.target.value)}
               onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
               onKeyDown={(e) => {
