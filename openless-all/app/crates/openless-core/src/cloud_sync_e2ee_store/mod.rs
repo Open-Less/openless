@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
+use crate::cloud_sync_e2ee_documents::registry::{preference_field, PreferenceClass};
 use crate::cloud_sync_e2ee_documents::{
     ConflictChoice, DocumentError, DocumentKind, DocumentResult, ExportedDocuments, RestoreBackend,
     RestoreContext, RestoreLease, SecretJson, SyncScope, ValidatedSyncDocuments,
@@ -244,8 +245,35 @@ impl CoreSyncStore {
 
     pub async fn export_scope(&self, scope: SyncScope) -> DocumentResult<ExportedDocuments> {
         self.validate_local_scope(&scope)?;
-        let _metadata = self.inner.metadata.lock().await;
-        self.capture_readonly(&scope).await
+        let (captured, promote) = {
+            let _metadata = self.inner.metadata.lock().await;
+            let state = state::ScopeState::decode(
+                &scope,
+                self.inner.extensions.read_scope(scope.clone()).await?,
+            )?;
+            let promote = state.retained_documents.iter().any(|doc| {
+                doc.kind == DocumentKind::Preferences
+                    && preference_field(&doc.id)
+                        .is_some_and(|field| field.class == PreferenceClass::Portable)
+            });
+            (self.capture_readonly(&scope).await?, promote)
+        };
+        if !promote {
+            return Ok(captured);
+        }
+        // An older client kept these values encrypted instead of applying them.
+        // Reuse the normal preflight, journal, runtime fence and readback rather
+        // than copying them into native files outside the restore transaction.
+        let context = RestoreContext {
+            scope,
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            observed_revision: captured.documents.observed_revision(),
+            local_generation: captured.generation,
+            target_device: self.device(),
+        };
+        let mut applied = self.restore_scope(captured.documents, context).await?;
+        applied.materialized_preferences = true;
+        Ok(applied)
     }
 
     pub async fn restore_scope(

@@ -455,6 +455,7 @@ fn validate_snapshot(snapshot: &CloudSyncSnapshot) -> Result<(), BackendError> {
 }
 
 fn validated_native_packs(payload: &CloudSyncPayload) -> Result<Vec<StylePack>, BackendError> {
+    let builtins = crate::style_packs::builtin_style_packs();
     payload
         .style_packs
         .iter()
@@ -466,7 +467,9 @@ fn validated_native_packs(payload: &CloudSyncPayload) -> Result<Vec<StylePack>, 
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
                 || (pack.kind == StylePackKind::Builtin
-                    && pack.id != crate::builtin_style_pack_id(pack.base_mode))
+                    && !builtins.iter().any(|builtin| {
+                        builtin.id == pack.id && builtin.base_mode == pack.base_mode
+                    }))
                 || (pack.kind == StylePackKind::Imported && pack.id.starts_with("builtin."))
             {
                 return Err(invalid_remote());
@@ -806,6 +809,73 @@ mod encrypted_gate_tests {
             assert_eq!(gate.generation().unwrap(), generation);
         }
     }
+    #[test]
+    fn legacy_builtin_catalogue_preserves_canonical_content_and_rejects_forgery() {
+        let temp = Temp::new();
+        let repositories = BackendRepositories::open(&temp.0).unwrap();
+        let sync = service(repositories.clone(), true);
+        let mut payload = sync.capture(CloudSyncUiPreferences::default()).unwrap();
+        let intent = crate::style_packs::builtin_intent_pack();
+        assert_eq!(
+            payload.style_packs.len(),
+            crate::style_packs::builtin_style_packs().len()
+        );
+        payload.preferences.active_style_pack_id = Some(intent.id.clone());
+        let canonical = payload
+            .style_packs
+            .iter_mut()
+            .find(|pack| pack.id == intent.id)
+            .unwrap();
+        canonical.prompt = "user-edited canonical prompt".into();
+        sync.restore_local(&payload).unwrap();
+        assert_eq!(
+            repositories.preferences.get().active_style_pack_id,
+            intent.id
+        );
+        assert!(repositories
+            .style_packs
+            .list()
+            .unwrap()
+            .iter()
+            .any(|pack| pack.id == intent.id && pack.prompt == "user-edited canonical prompt"));
+
+        let before = std::fs::read(temp.0.join("style-packs.json")).unwrap();
+        for (kind, id, mode) in [
+            (
+                StylePackKind::Builtin,
+                "unknown.canonical",
+                intent.base_mode,
+            ),
+            (
+                StylePackKind::Builtin,
+                "builtin.raw",
+                crate::PolishMode::Formal,
+            ),
+            (StylePackKind::Builtin, "../escape", intent.base_mode),
+            (StylePackKind::Imported, "builtin.forged", intent.base_mode),
+        ] {
+            let mut forged = payload.clone();
+            let mut pack = payload
+                .style_packs
+                .iter()
+                .find(|pack| pack.id == intent.id)
+                .unwrap()
+                .clone();
+            pack.id = id.into();
+            pack.kind = kind;
+            pack.base_mode = mode;
+            forged.style_packs = vec![pack];
+            forged.preferences.active_style_pack_id = Some(id.into());
+            forged.preferences.selection_polish_style_pack_id = Some(id.into());
+            assert!(validated_native_packs(&forged).is_err());
+            assert!(sync.restore_local(&forged).is_err());
+            assert_eq!(
+                std::fs::read(temp.0.join("style-packs.json")).unwrap(),
+                before
+            );
+        }
+    }
+
     #[test]
     fn legacy_restore_commits_the_shared_gate_generation() {
         let temp = Temp::new();

@@ -334,14 +334,6 @@ test('channel sorting waits for a slow knob transition to finish', async ({ page
   await expect(control).toHaveAttribute('data-test-slide', 'transitionend');
 });
 
-test('the Selection Ask history switch slides', async ({ page }) => {
-  await page.getByRole('button', { name: '工具', exact: true }).click();
-  await page.getByRole('button', { name: '随便问', exact: true }).click();
-  const main = page.locator('main');
-  await expect(main.getByRole('switch').first()).toBeVisible();
-  expect(await exerciseVisibleSwitches(main, 'selectionAsk')).toBeGreaterThan(0);
-});
-
 test('toggling a switch never moves its neighbours', async ({ page }) => {
   const dialog = await openSettings(page);
   await openMicrophoneSettings(dialog);

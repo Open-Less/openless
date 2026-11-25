@@ -579,14 +579,21 @@ fn voice_intent_cancel_pending_asr_rejects_late_transcript_and_never_composes() 
         send(h, json!({"operation":"cancel","clientSessionID":client})),
         0
     );
-    loop {
+    // The cancelled event may precede the finish owner's native cleanup.
+    // Acknowledge that cleanup before expecting its admission to be released.
+    let mut cancelled = false;
+    let mut speech_cancelled = false;
+    while !cancelled || !speech_cancelled {
         let event = next(c);
         assert_ne!(event["kind"], "completed");
         if event["kind"] == "nativeRequest" {
+            assert_eq!(event["operation"], "speechCancel", "{event}");
+            assert!(!speech_cancelled, "native ASR must be cancelled only once");
+            speech_cancelled = true;
             reply(h, &event, Value::Null);
         }
         if event["kind"] == "cancelled" {
-            break;
+            cancelled = true;
         }
     }
     let bytes = serde_json::to_vec(&json!({"requestID":pending["requestID"],"ok":true,

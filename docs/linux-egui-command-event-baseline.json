@@ -7,7 +7,7 @@
     "commands": "openless-all/app/src-tauri/src/lib.rs app_invoke_handler_* macros",
     "reactEvents": "openless-all/app/src/**/*.ts openless-all/app/src/**/*.tsx",
     "tauriEvents": "openless-all/app/src-tauri/src/**/*.rs",
-    "coreContract": "docs/linux-egui-backend-contract.md"
+    "coreContract": "openless-all/app/contract/backend-2.0.json"
   },
   "platformDecision": {
     "windows": "tauri",

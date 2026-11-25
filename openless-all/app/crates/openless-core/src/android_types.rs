@@ -54,12 +54,12 @@ pub enum AndroidOverlayCancelSwipeDirection {
 #[serde(rename_all = "snake_case")]
 pub enum AndroidOverlayGestureAction {
     #[default]
+    #[serde(alias = "qa")]
     None,
     QuickNote,
     Translation,
     StylePack,
     Cancel,
-    Qa,
     VoiceEdit,
 }
 
@@ -78,7 +78,7 @@ impl Default for AndroidOverlayGestureActions {
             up: AndroidOverlayGestureAction::Cancel,
             down: AndroidOverlayGestureAction::None,
             left: AndroidOverlayGestureAction::Translation,
-            right: AndroidOverlayGestureAction::Qa,
+            right: AndroidOverlayGestureAction::None,
         }
     }
 }

@@ -184,6 +184,7 @@ impl PreparedTranscription for PreparedCloudTranscription {
                 asr_call_label,
                 language: preparation.context.asr.language.clone(),
                 finished: AtomicBool::new(false),
+                pcm_bytes: AtomicU64::new(0),
                 task_spawner,
             }) as Arc<dyn TranscriptionSession>)
         })
@@ -211,6 +212,7 @@ struct CloudTranscriptionSession {
     asr_call_label: crate::AsrCallLabel,
     language: Option<String>,
     finished: AtomicBool,
+    pcm_bytes: AtomicU64,
     task_spawner: Arc<dyn TaskSpawner>,
 }
 
@@ -247,6 +249,8 @@ impl TranscriptionEngine for SharedCloudTranscriptionEngine {
 
 impl AudioConsumer for CloudTranscriptionSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        self.pcm_bytes
+            .fetch_add(pcm.len() as u64, Ordering::Relaxed);
         match &self.kind {
             CloudTranscriptionSessionKind::Volcengine(provider) => provider.consume_pcm_chunk(pcm),
             CloudTranscriptionSessionKind::Whisper(provider) => provider.consume_pcm_chunk(pcm),
@@ -293,12 +297,27 @@ impl TranscriptionSession for CloudTranscriptionSession {
         }
         let kind = self.kind.clone();
         let task_spawner = Arc::clone(&self.task_spawner);
+        let long_recording =
+            crate::long_recording::duration_ms(self.pcm_bytes.load(Ordering::Acquire))
+                > crate::long_recording::THRESHOLD_MS;
         Box::pin(async move {
             let transcript = match kind {
                 CloudTranscriptionSessionKind::Volcengine(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sender_result = provider.send_last_frame().await;
+                    if long_recording {
+                        if let Err(error) = sender_result {
+                            provider.cancel();
+                            return Err(map_asr_error(error));
+                        }
+                    }
+                    if sender_result.is_err() {
+                        // Stop the transport. A result already handed off by the
+                        // receiver remains available through its oneshot channel.
+                        provider.cancel();
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await?
+                        .await
+                        .map_err(|error| sender_result.err().map(map_asr_error).unwrap_or(error))?
                 }
                 CloudTranscriptionSessionKind::Whisper(provider) => {
                     let timeout = crate::provider_rules::whisper_transcribe_timeout(
@@ -346,22 +365,34 @@ impl TranscriptionSession for CloudTranscriptionSession {
                     provider.finish().await.map_err(map_asr_error)?
                 }
                 CloudTranscriptionSessionKind::Bailian(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
                 CloudTranscriptionSessionKind::QwenRealtime(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
                 CloudTranscriptionSessionKind::StepfunRealtime(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
                 CloudTranscriptionSessionKind::Xfyun(provider) => {
-                    let _ = provider.send_last_frame().await;
+                    let sent = provider.send_last_frame().await;
+                    if long_recording {
+                        sent.map_err(map_asr_error)?;
+                    }
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
@@ -1316,6 +1347,7 @@ async fn run_cloud_polish(
     } else {
         context.polish.style_system_prompt.clone()
     };
+    let style_system_prompt = context.with_input_scene_prefix(style_system_prompt);
     let stream = PolishStreamPublisher::new(
         Arc::clone(&partials),
         Arc::clone(&cancellation),
@@ -1326,80 +1358,96 @@ async fn run_cloud_polish(
     );
     let on_delta = |delta: &str| stream.publish(delta);
     let should_cancel = || stream.should_cancel();
-    let result = match &provider {
-        CloudPolisherProvider::OpenAi(provider @ crate::polish::ActiveLLMProvider::Codex(_))
-            if !context.polish.translation_active =>
-        {
-            provider
-                .polish(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                )
-                .await
+    let result = if context.polish.selection_input {
+        let (system, user) = context.effective_polish_prompts(&raw_text);
+        match &provider {
+            CloudPolisherProvider::OpenAi(provider) => {
+                provider
+                    .selection_streaming(system, user, on_delta, should_cancel)
+                    .await
+            }
+            CloudPolisherProvider::Gemini(provider) => {
+                provider
+                    .selection_streaming(system, user, on_delta, should_cancel)
+                    .await
+            }
         }
-        CloudPolisherProvider::OpenAi(provider) => {
-            provider
-                .polish_streaming(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                    on_delta,
-                    should_cancel,
-                )
-                .await
-        }
-        CloudPolisherProvider::Gemini(provider) if !context.polish.translation_active => {
-            provider
-                .polish(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                )
-                .await
-        }
-        CloudPolisherProvider::Gemini(provider) => {
-            provider
-                .polish_streaming(
-                    &raw_text,
-                    context.polish.mode,
-                    &context.polish.hotwords,
-                    &style_system_prompt,
-                    &context.polish.working_languages,
-                    context.polish.chinese_script_preference,
-                    context.polish.output_language_preference,
-                    context.polish.front_app.as_deref(),
-                    context.polish.cursor_context.as_deref(),
-                    &prior_turns,
-                    context.polish.edit_plan_input,
-                    on_delta,
-                    should_cancel,
-                )
-                .await
+    } else {
+        match &provider {
+            CloudPolisherProvider::OpenAi(
+                provider @ crate::polish::ActiveLLMProvider::Codex(_),
+            ) if !context.polish.translation_active => {
+                provider
+                    .polish(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                    )
+                    .await
+            }
+            CloudPolisherProvider::OpenAi(provider) => {
+                provider
+                    .polish_streaming(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                        on_delta,
+                        should_cancel,
+                    )
+                    .await
+            }
+            CloudPolisherProvider::Gemini(provider) if !context.polish.translation_active => {
+                provider
+                    .polish(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                    )
+                    .await
+            }
+            CloudPolisherProvider::Gemini(provider) => {
+                provider
+                    .polish_streaming(
+                        &raw_text,
+                        context.polish.mode,
+                        &context.polish.hotwords,
+                        &style_system_prompt,
+                        &context.polish.working_languages,
+                        context.polish.chinese_script_preference,
+                        context.polish.output_language_preference,
+                        context.polish.front_app.as_deref(),
+                        context.polish.cursor_context.as_deref(),
+                        &prior_turns,
+                        context.polish.edit_plan_input,
+                        on_delta,
+                        should_cancel,
+                    )
+                    .await
+            }
         }
     };
     if let Some(error) = stream.take_error() {
@@ -1417,6 +1465,12 @@ async fn run_cloud_polish(
                 llm_call_label: None,
             },
             None => {
+                if context.polish.selection_input {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "llmResponseIncomplete",
+                    ));
+                }
                 log::warn!(
                     "[cloud-provider] polish+translate response missing markers; using plain translation"
                 );
@@ -3076,6 +3130,20 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn omni_scene_precedes_style_and_preserves_translation() {
+        let mut context = crate::DictationContext::default();
+        context.polish.input_scene_prefix = Some("当前应用：Frozen target".into());
+        context.polish.style_system_prompt = "SELECTED-STYLE".into();
+        for translation in [false, true] {
+            context.polish.translation_active = translation;
+            let prompt = super::build_omni_prompt(&context);
+            assert!(prompt.starts_with("当前应用：Frozen target\n\nSELECTED-STYLE"));
+            assert_eq!(prompt.matches("当前应用：").count(), 1);
+            assert_eq!(prompt.contains("# 翻译"), translation);
+        }
+    }
+
+    #[test]
     fn native_search_is_exclusive_to_the_deepseek_pipeline() {
         use super::*;
         use crate::shared_types::PipelineMode;
@@ -3103,7 +3171,7 @@ mod tests {
             PipelineMode::Traditional
         ));
         let search = crate::web_search::WebSearchConfig::default();
-        assert!(crate::web_search::backend_prompt(&search, false).contains("Bing"));
+        assert!(crate::web_search::backend_prompt(&search, false).contains("FreeSerp"));
         assert!(crate::web_search::backend_prompt(&search, true).contains("DeepSeek 原生"));
     }
 
@@ -3348,7 +3416,7 @@ mod tests {
                 format!("{:X}\r\n{data}\r\n", data.len())
             };
             let end = if gemini {
-                ""
+                "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n"
             } else {
                 match format {
                     LlmRequestFormat::ChatCompletions => "data: [DONE]\n\n",
@@ -3644,6 +3712,71 @@ mod tests {
             assert_eq!(error.code, BackendErrorCode::Provider);
             assert!(!error.retryable, "{error:?}");
             assert!(error.details.is_none());
+        }
+    }
+
+    /// Explicit, neutral, bounded official-provider acceptance; never a normal CI gate.
+    #[tokio::test]
+    #[ignore = "paid official DeepSeek calls; manual opt-in and DEEPSEEK_API_KEY required"]
+    async fn style_live_official_deepseek() {
+        use crate::style_packs::{builtin_intent_pack, builtin_style_pack_for_mode, StylePack};
+        let key = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY is required");
+        assert!(!key.trim().is_empty(), "DEEPSEEK_API_KEY is required");
+        let credentials = Arc::new(crate::InMemoryCredentialStore::default());
+        for (account, value) in [(LLM_API_KEY_ACCOUNT, key.as_str()), (LLM_ENDPOINT_ACCOUNT, crate::deepseek_suite::ENDPOINT)] {
+            credentials.write(CredentialKey::new(CredentialNamespace::Llm, Some("deepseek".into()), account).unwrap(), crate::SecretValue::new(value)).await.unwrap();
+        }
+        drop(key);
+        let polisher = SharedCloudTextPolisher::new(credentials);
+        let intent = builtin_intent_pack();
+        let structured = builtin_style_pack_for_mode(crate::PolishMode::Structured);
+        let custom = StylePack {
+            id: "live.custom-question".into(),
+            prompt: "整理本轮口述，保留原意、问句、未决事项和语气，只输出整理正文；不回答问题、不补事实或方案。".into(),
+            ..StylePack::default()
+        };
+        let long = "请整理图书馆网站的改版需求，先讨论，不要直接实施。文档页需要清楚的目录和保留原来的链接。首页视频和介绍文字也都要整理，所以范围是整个官网。页面内查看，不跳转，保持当前内容展示。".repeat(12)
+            + "最后补充：保留 English API、OpenLess 和 v2.0.2 的原写法，移动端与大字号也要可读；离线与实时更新还没决定，两种要求先保留。这样安排合适吗？";
+        let cases = [
+            ("scope", &intent, false, "我想优化官网文档。后来想了想，首页视频和文字也都要一起整理，范围应该是整个官网内容。不要跳转，保持在当前页面展示。这样可以吗？", "整体范围应为官网内容，保留页面内展示/不跳转，末尾仍是问题"),
+            ("replace", &structured, false, "约周三，不对，改周四下午", "只留周四下午，不保留周三"),
+            ("alternatives", &intent, false, "周三或周四都可以", "保留周三和周四两个选项"),
+            ("retract", &structured, false, "请增加导出按钮，算了，撤回导出按钮。搜索框和原来的深色主题都要保留。", "不增加导出按钮；保留搜索框与深色主题"),
+            ("simple_builtin_translation", &intent, true, "今晚吃面条，饭后去散步。", "英语自然表达两个日常事项，不加模板与事实"),
+            ("question_custom_translation", &custom, true, "这个方案可以吗？我只是想讨论，暂时不要实施。", "英语问句仍为问句，保留讨论/暂不实施，不替用户回答"),
+            ("unresolved", &intent, false, "必须离线使用，但也必须实时从服务器获取更新，我还没有决定怎么取舍。", "保留两项冲突要求和未决状态，不给折中方案"),
+            ("long", &structured, false, long.as_str(), "整体官网范围前置；所有独有约束、例外、术语、未决冲突与问句保留，只去重复"),
+        ];
+        crate::polish::live_acceptance::begin();
+        for (case, pack, translate, input, expectation) in cases.into_iter().take(if std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some() { 1 } else { 8 }) {
+            let mut prefs = crate::UserPreferences::default();
+            prefs.translation_target_language = "English".into();
+            prefs.working_languages = vec!["简体中文".into()];
+            let mut invocation = crate::ProviderInvocation::for_provider("deepseek");
+            invocation.model = Some(crate::deepseek_suite::MODEL.into());
+            let context = DictationContext::capture(&prefs, pack,
+                crate::dictation_context::DictationProviderInvocations::new(crate::ProviderInvocation::for_provider("fixture-asr"), invocation, crate::ProviderInvocation::for_provider("unused")),
+                Vec::new(), Vec::new(), &crate::DictationStartOptions { translation_requested: translate, ..Default::default() });
+            let _ = crate::polish::live_acceptance::take_model();
+            let result = polisher.polish(SessionId::new(), Arc::new(context), input.into(), Arc::new(IgnoreTextStreamSink)).await;
+            if let Err(error) = &result {
+                println!("LIVE_STYLE {}", serde_json::json!({"case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
+                    "channel":"official DeepSeek acceptance (not verified user Ark channel)", "requested_model":crate::deepseek_suite::MODEL,
+                    "response_model":crate::polish::live_acceptance::take_model(), "style_id":pack.id, "translation":translate,
+                    "input":input, "output":null, "error_code":format!("{:?}",error.code), "expected_semantics":expectation,
+                    "semantic_review":"not evaluated: provider request failed; remaining cases not run"}));
+            }
+            let result = result.unwrap_or_else(|error| panic!("{case}: official request failed, code={:?}", error.code));
+            println!("LIVE_STYLE {}", serde_json::json!({
+                "case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
+                "channel":"official DeepSeek acceptance (not verified user Ark channel)",
+                "requested_model":crate::deepseek_suite::MODEL,
+                "response_model":crate::polish::live_acceptance::take_model(),
+                "style_id":pack.id,"translation":translate,"input":input,
+                "source_output":result.source_text,"output":result.text,
+                "expected_semantics":expectation,"semantic_review":"pending human/agent review; transport success is not semantic pass"
+            }));
+            assert!(!result.text.trim().is_empty(), "{case}: empty output");
         }
     }
 

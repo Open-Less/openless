@@ -348,6 +348,23 @@ pub trait SelectionRuntimeAdapter: Send + Sync {
         session_id: SessionId,
         supplied_text: Option<String>,
     ) -> BoxFuture<'static, Result<SelectionCapture, BackendError>>;
+    /// Copy the already-persisted complete original before any model or write.
+    /// Failure must abort the operation. Returns an opaque clipboard ownership
+    /// revision when the host has one. Supplied-text-only preview hosts may
+    /// return None without clipboard access, but must never replace an external
+    /// selection; their original remains in the same history record.
+    fn protect_original(
+        &self,
+        _session_id: SessionId,
+        _text: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "selectionOriginalCopyFailed",
+            ))
+        })
+    }
     fn apply(
         &self,
         session_id: SessionId,
@@ -678,6 +695,9 @@ pub struct SelectionVoiceApplyTicket {
     pub session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_session_id: Option<SessionId>,
+    /// Opaque host clipboard ownership revision, never a text digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_clipboard_revision: Option<u64>,
     pub source_text: String,
     pub replacement_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -872,6 +892,9 @@ pub struct QaActivity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QaSnapshot {
+    /// Independent of the turn phase: a waiting composer is open but idle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub panel_open: bool,
     pub phase: QaPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<QaActivity>,
@@ -899,6 +922,7 @@ pub struct QaSnapshot {
 impl Default for QaSnapshot {
     fn default() -> Self {
         Self {
+            panel_open: false,
             phase: QaPhase::Idle,
             activity: None,
             session_id: None,
@@ -1038,6 +1062,10 @@ pub trait QaRuntimeAdapter: Send + Sync {
 }
 
 pub trait QaApi: Send + Sync {
+    fn ask_history_sink(&self) -> Option<Arc<crate::ask::AskHistorySink>> {
+        None
+    }
+
     /// Bind restore admission before the service is exposed to runtime callers.
     /// Legacy custom services remain source compatible, but conservatively do
     /// not report restore-safe idleness until they implement both methods.

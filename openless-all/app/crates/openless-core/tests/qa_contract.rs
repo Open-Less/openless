@@ -19,6 +19,7 @@ struct FixtureQaRuntime {
     prepared_sessions: Mutex<Vec<SessionId>>,
     prepared_selection_edits: Mutex<Vec<(SessionId, SelectionCapture, String)>>,
     recording_sessions: Mutex<Vec<SessionId>>,
+    record_start_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     bound_selection_targets: Mutex<Vec<(SessionId, SessionId)>>,
     emit_approval: AtomicBool,
     emit_web_activity: AtomicBool,
@@ -49,6 +50,7 @@ impl Default for FixtureQaRuntime {
             prepared_sessions: Mutex::new(Vec::new()),
             prepared_selection_edits: Mutex::new(Vec::new()),
             recording_sessions: Mutex::new(Vec::new()),
+            record_start_gate: Mutex::new(None),
             bound_selection_targets: Mutex::new(Vec::new()),
             emit_approval: AtomicBool::new(false),
             emit_web_activity: AtomicBool::new(false),
@@ -126,7 +128,9 @@ impl QaRuntimeAdapter for FixtureQaRuntime {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         self.recording_sessions.lock().unwrap().push(session_id);
         let selection = self.selection.lock().unwrap().clone();
+        let gate = self.record_start_gate.lock().unwrap().clone();
         Box::pin(async move {
+            if let Some(gate) = gate { gate.acquire().await.unwrap().forget(); }
             progress.publish(session_id, QaProgress::SelectionCaptured(selection))?;
             progress.publish(session_id, QaProgress::RecordingLevel(1.5))?;
             Ok(())
@@ -366,11 +370,15 @@ async fn synchronous_dismiss_cannot_reset_or_hide_a_concurrent_reopen() {
                     "second question"
                 );
             }
-            "show" => assert_eq!(snapshot, QaSnapshot::default()),
+            "show" => {
+                assert!(snapshot.panel_open);
+                assert_eq!(snapshot.phase, QaPhase::Idle);
+                assert!(snapshot.session_id.is_none());
+            }
             _ => assert_eq!(snapshot.phase, QaPhase::Recording),
         }
         if entry == "recording" {
-            assert_eq!(host.actions().last(), Some(&HostAction::HideQa));
+            assert_eq!(host.actions().last(), Some(&HostAction::ShowQa));
             qa.stop_recording(snapshot.session_id.unwrap())
                 .await
                 .unwrap();
@@ -431,7 +439,7 @@ async fn dismiss_cleanup_cannot_hide_a_panel_reopened_without_a_turn() {
     dismiss.await.unwrap();
 
     assert_eq!(host.actions(), reopened_actions);
-    assert_eq!(qa.snapshot().await.unwrap(), QaSnapshot::default());
+    assert_eq!(qa.snapshot().await.unwrap(), QaSnapshot { panel_open: true, ..Default::default() });
     let _ = std::fs::remove_dir_all(data_dir);
 }
 
@@ -679,6 +687,32 @@ async fn qa_voice_and_dictation_share_the_core_voice_lease() {
 }
 
 #[tokio::test]
+async fn voice_question_opens_before_native_capture_is_ready_and_stops_after_startup() {
+    let runtime = Arc::new(FixtureQaRuntime::responding("answer"));
+    *runtime.recorded_text.lock().unwrap() = "Spoken question".into();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *runtime.record_start_gate.lock().unwrap() = Some(gate.clone());
+    let host = Arc::new(openless_core::testing::RecordingHostActions::default());
+    let (backend, data_dir) = backend_with_host(runtime.clone(), host.clone());
+    let qa = &backend.services().qa;
+    let mut start = std::pin::pin!(qa.start_question());
+    assert!(futures_util::poll!(start.as_mut()).is_pending());
+    let snapshot = qa.snapshot().await.unwrap();
+    assert!(snapshot.panel_open);
+    assert_eq!(snapshot.phase, QaPhase::Recording);
+    assert_eq!(host.actions(), vec![HostAction::ShowQa]);
+    assert!(runtime.requests.lock().unwrap().is_empty());
+    let mut stop = std::pin::pin!(qa.stop_recording(snapshot.session_id.unwrap()));
+    assert!(futures_util::poll!(stop.as_mut()).is_pending());
+    assert!(runtime.requests.lock().unwrap().is_empty());
+    gate.add_permits(1);
+    start.await.unwrap();
+    stop.await.unwrap();
+    assert_eq!(runtime.requests.lock().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn showing_qa_is_a_host_action_without_starting_a_turn() {
     let runtime = Arc::new(FixtureQaRuntime::responding("unused"));
     let host = Arc::new(openless_core::testing::RecordingHostActions::default());
@@ -703,7 +737,7 @@ async fn showing_qa_is_a_host_action_without_starting_a_turn() {
     assert_eq!(host.actions(), vec![HostAction::ShowQa]);
     assert_eq!(
         backend.services().qa.snapshot().await.unwrap(),
-        openless_core::QaSnapshot::default()
+        QaSnapshot { panel_open: true, ..Default::default() }
     );
     backend.services().qa.dismiss().await.unwrap();
     assert_eq!(host.actions(), vec![HostAction::ShowQa, HostAction::HideQa]);
@@ -743,13 +777,9 @@ async fn a_failed_show_action_does_not_claim_a_turn_or_start_the_runtime() {
         QaSnapshot::default()
     );
     assert!(runtime.prepared_sessions.lock().unwrap().is_empty());
-    backend.services().qa.start_question().await.unwrap();
-    assert_eq!(
-        backend.services().qa.snapshot().await.unwrap().phase,
-        QaPhase::Recording
-    );
-    assert_eq!(runtime.recording_sessions.lock().unwrap().len(), 1);
-    backend.services().qa.cancel(None).await.unwrap();
+    assert_eq!(backend.services().qa.start_question().await.unwrap_err().code, BackendErrorCode::Platform);
+    assert_eq!(backend.services().qa.snapshot().await.unwrap(), QaSnapshot::default());
+    assert!(runtime.recording_sessions.lock().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(data_dir);
 }
 
@@ -1364,6 +1394,7 @@ fn qa_snapshot_resync_uses_the_same_complete_wire_contract_as_live_events() {
     let session_id = SessionId::new();
     let session_text = session_id.to_string();
     let event = QaStateEvent::from_snapshot(&QaSnapshot {
+        panel_open: true,
         activity: None,
         phase: QaPhase::AwaitingApproval,
         session_id: Some(session_id),
@@ -1383,6 +1414,7 @@ fn qa_snapshot_resync_uses_the_same_complete_wire_contract_as_live_events() {
     });
 
     assert_eq!(event.kind, QaStateKind::AwaitingApproval);
+    assert_eq!(event.panel_open, Some(true));
     assert_eq!(event.session_id.as_deref(), Some(session_text.as_str()));
     assert_eq!(event.messages.as_ref().unwrap()[0].content, "ready");
     assert_eq!(event.approval_token.as_deref(), Some("approval-1"));

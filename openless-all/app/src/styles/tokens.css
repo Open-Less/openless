@@ -14,6 +14,8 @@
   --ol-button-radius: 12px;
   --ol-bubble-radius: var(--ol-radius);
   --ol-input-ink: var(--ol-ink);
+  --ol-field-bg: var(--ol-select-trigger-bg);
+  --ol-field-icon-size: 36px;
   /* 白底哲学：霜感玻璃改为近实色，纯白渐变到 zinc-50。 */
   --ol-frost-bg: linear-gradient(161deg, #ffffff 0%, #fafafa 100%);
   /* Shared palette（shadcn zinc） */
@@ -260,6 +262,7 @@
 }
 
 [data-ol-theme='dark'] {
+  --ol-field-bg: #26262a;
   --ol-font-weight-offset: -40;
   --ol-font-weight-regular: 360;
   --ol-font-weight-bold: 660;
@@ -384,8 +387,8 @@
   --ol-pill-selected-bg: linear-gradient(180deg, rgba(59, 130, 246, 0.95), rgba(37, 99, 235, 0.92));
   --ol-pill-selected-ink: #f4f7fb;
   --ol-pill-selected-border: rgba(147, 197, 253, 0.44);
-  --ol-select-trigger-bg: color-mix(in srgb, var(--ol-ink) 6%, transparent);
-  --ol-select-popover-bg: #202024;
+  --ol-select-trigger-bg: var(--ol-field-bg);
+  --ol-select-popover-bg: var(--ol-field-bg);
   --ol-select-popover-border: rgba(226, 232, 240, 0.12);
   --ol-select-popover-shadow:
     0 18px 42px -16px rgba(0, 0, 0, 0.62), 0 0 0 0.5px rgba(226, 232, 240, 0.08);

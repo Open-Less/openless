@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('release_mirror', Path(__file__).with_name('mirror-release.py'))
 mirror = importlib.util.module_from_spec(spec)
@@ -78,5 +79,73 @@ class MirrorTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.generate()
         with self.assertRaises(ValueError):
             mirror.generate_manifests(self.directory, self.tag, 'stable', '', self.output, lambda *_: None)
+
+    def test_each_file_uses_its_own_bounded_copy_with_visible_progress(self):
+        with mock.patch.object(mirror.subprocess, 'run') as run:
+            mirror.copy_files(self.directory, 'oss:fixture/releases/tag', 'public, immutable', 600)
+        self.assertEqual(run.call_count, len(self.names))
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertEqual(command[:2], ['rclone', 'copyto'])
+            self.assertEqual(command[3], f'oss:fixture/releases/tag/{Path(command[2]).name}')
+            self.assertIn('--checksum', command)
+            self.assertEqual(command[command.index('--stats-log-level') + 1], 'NOTICE')
+            self.assertEqual(command[command.index('--s3-upload-cutoff') + 1], '8Mi')
+            self.assertEqual(command[command.index('--s3-chunk-size') + 1], '8Mi')
+            self.assertEqual(command[command.index('--s3-upload-concurrency') + 1], '4')
+            self.assertNotIn('--s3-disable-checksum', command)
+            self.assertTrue(call.kwargs['check'])
+            self.assertGreater(call.kwargs['timeout'], 0)
+            self.assertLessEqual(call.kwargs['timeout'], mirror.FILE_TRANSFER_SECONDS)
+
+    def test_slow_large_upload_receives_a_size_based_but_bounded_budget(self):
+        self.assertEqual(mirror.transfer_timeout_seconds(4694), 300)
+        self.assertGreater(mirror.transfer_timeout_seconds(147390849), 1800)
+        self.assertLessEqual(mirror.transfer_timeout_seconds(147390849), mirror.MAX_FILE_TRANSFER_SECONDS)
+        self.assertEqual(mirror.transfer_timeout_seconds(10 * 1024**3), mirror.MAX_FILE_TRANSFER_SECONDS)
+
+    def test_phase_budget_still_caps_a_large_file(self):
+        with mock.patch.object(mirror.time, 'monotonic', side_effect=[0] + [59] * len(self.names)), mock.patch.object(mirror, 'transfer_timeout_seconds', return_value=2400), mock.patch.object(mirror.subprocess, 'run') as run:
+            mirror.copy_files(self.directory, 'oss:fixture', 'public', 60)
+        self.assertTrue(all(call.kwargs['timeout'] <= 1 for call in run.call_args_list))
+
+    def test_all_payloads_finish_before_any_rolling_manifest_upload(self):
+        self.save_index()
+        self.generate()
+        with mock.patch.object(mirror.subprocess, 'run') as run:
+            mirror.publish_verified_release(self.directory, self.output, 'oss:fixture', self.tag, 'beta')
+        destinations = [call.args[0][3] for call in run.call_args_list]
+        first_manifest = next(i for i, name in enumerate(destinations) if '/updates/' in name)
+        self.assertEqual(first_manifest, len(list(self.directory.iterdir())))
+        self.assertTrue(all('/releases/' in name for name in destinations[:first_manifest]))
+        self.assertTrue(all('/updates/beta/' in name for name in destinations[first_manifest:]))
+
+    def test_payload_timeout_never_starts_rolling_uploads(self):
+        self.save_index()
+        self.generate()
+        failure = mirror.subprocess.TimeoutExpired(['rclone', 'copyto'], 300)
+        with mock.patch.object(mirror.subprocess, 'run', side_effect=failure) as run:
+            with self.assertRaises(mirror.subprocess.TimeoutExpired):
+                mirror.publish_verified_release(self.directory, self.output, 'oss:fixture', self.tag, 'beta')
+        self.assertEqual(run.call_count, 1)
+        self.assertNotIn('/updates/', run.call_args.args[0][3])
+
+    def test_exhausted_phase_budget_does_not_start_another_request(self):
+        with mock.patch.object(mirror.time, 'monotonic', side_effect=[0, 61]), mock.patch.object(mirror.subprocess, 'run') as run:
+            with self.assertRaises(TimeoutError):
+                mirror.copy_files(self.directory, 'oss:fixture', 'public', 60)
+        run.assert_not_called()
+
+    def test_beta_recovery_does_not_select_stable_or_drafts(self):
+        release = lambda tag, pre, published, draft=False: dict(tag_name=tag, prerelease=pre, published_at=published, draft=draft)
+        releases = [release('v2.0.2-tauri', False, '2026-11-20'),
+            release('v2.0.3-Beta.2-tauri', True, '2026-11-22'),
+            release('v2.0.3-Beta.3-tauri', True, '2026-11-23'),
+            release('v2.0.3-Beta.4-tauri', True, '2026-11-24', True)]
+        selected = mirror.select_releases(releases, 'beta')
+        self.assertEqual(list(selected), ['beta'])
+        self.assertEqual(selected['beta']['tag_name'], 'v2.0.3-Beta.3-tauri')
+        self.assertEqual(set(mirror.select_releases(releases)), {'stable', 'beta'})
+        with self.assertRaises(ValueError): mirror.select_releases(releases, 'unknown')
 
 if __name__ == '__main__': unittest.main()

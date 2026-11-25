@@ -569,6 +569,15 @@ fn find_balanced_json_object_end(raw: &str, start: usize) -> Option<usize> {
 }
 
 pub fn apply_edit_plan(draft: &str, plan: &EditPlan) -> Result<String, EditApplyError> {
+    apply_plan(draft, plan, false)
+}
+
+/// Selection replacement text must remain complete, regardless of its length.
+pub(crate) fn apply_selection_edit_plan(draft: &str, plan: &EditPlan) -> Result<String, EditApplyError> {
+    apply_plan(draft, plan, true)
+}
+
+fn apply_plan(draft: &str, plan: &EditPlan, complete_rewrite: bool) -> Result<String, EditApplyError> {
     if draft.is_empty() {
         return Err(EditApplyError::EmptyDraft);
     }
@@ -581,7 +590,9 @@ pub fn apply_edit_plan(draft: &str, plan: &EditPlan) -> Result<String, EditApply
 
     let mut current = draft.to_string();
     for op in &plan.operations {
-        validate_operation_size(op)?;
+        if !(complete_rewrite && matches!(op, EditOperation::FullRewrite { .. })) {
+            validate_operation_size(op)?;
+        }
         current = apply_operation(&current, op)?;
     }
     Ok(current)
@@ -746,6 +757,19 @@ fn contains_nested_quantifiers(pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_full_rewrite_preserves_complete_text_without_relaxing_operands() {
+        let text = format!(" \t{} MIDDLE {}\n ", "中".repeat(9000), "😀".repeat(9000));
+        let mut plan = EditPlan {
+            operations: vec![EditOperation::FullRewrite { text: text.clone() }],
+            summary: None,
+        };
+        assert_eq!(apply_selection_edit_plan("original", &plan).unwrap(), text);
+        assert_eq!(apply_edit_plan("original", &plan), Err(EditApplyError::OperationTooLarge));
+        plan.operations = vec![EditOperation::LiteralReplace { find: "original".into(), replace: text }];
+        assert_eq!(apply_selection_edit_plan("original", &plan), Err(EditApplyError::OperationTooLarge));
+    }
 
     #[test]
     fn literal_replace_masks_credentials() {

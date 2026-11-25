@@ -154,7 +154,8 @@ for (const [scale, factor] of [
     const body = long.locator('.ol-dialog-body');
     const lastLine = long.getByTestId('long-detail-end');
     const cancel = long.getByRole('button', { name: 'Keep unchanged' });
-    await expect.poll(() => body.evaluate((node) => node.scrollHeight - node.clientHeight))
+    await expect
+      .poll(() => body.evaluate((node) => node.scrollHeight - node.clientHeight))
       .toBeGreaterThan(0);
     await expect(lastLine).not.toBeInViewport();
     await expect(cancel).toBeInViewport();
@@ -222,7 +223,8 @@ test('warnings wait for acknowledgment and success notifications only show statu
   await page.getByRole('button', { name: 'Show feedback' }).click();
   await expect(page.getByRole('status')).toHaveText('Status only');
   const icon = page.locator('.ol-notification-icon');
-  await expect(icon).toHaveCSS('background-color', 'rgb(59, 130, 246)');
+  await expect(icon).toHaveAttribute('data-tone', 'success');
+  await expect(icon).toHaveCSS('background-color', 'rgb(48, 209, 88)');
   await page.locator('.ol-notification-close').click();
   await expect(page.getByRole('status')).toHaveCount(0);
 });
