@@ -439,6 +439,26 @@ impl ModelCatalog {
                 ],
             },
         );
+        let fourier_sherpa =
+            LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "oruk-fourier-2b-int8")
+                .expect("built-in Sherpa Fourier model id");
+        add(
+            LocalAsrRuntime::SherpaOnnx,
+            "oruk-fourier-2b-int8",
+            "oruk/oruk-fourier-2b",
+            None,
+            "Oruk Fourier 2B INT8 (English · CC BY-NC 4.0)",
+            fourier_sherpa
+                .sherpa_family()
+                .expect("Sherpa model family")
+                .as_str(),
+            fourier_sherpa
+                .sherpa_execution_mode()
+                .expect("Sherpa execution mode")
+                .as_str(),
+            &["en"],
+            ModelFileSelector::Pinned(oruk_fourier_2b_sherpa_files()),
+        );
         entries.extend(crate::experimental_asr::catalog_entries());
         Self { entries }
     }
@@ -481,6 +501,115 @@ fn exact(files: &[(&str, &str)]) -> ModelFileSelector {
             })
             .collect(),
     )
+}
+
+/// Revision-pinned Sherpa-ONNX INT8 bundle for `oruk/oruk-fourier-2b`
+/// (opt-in English ASR, CC BY-NC 4.0 non-commercial license).
+///
+/// Repo-root `config.json` is listed LAST and saved as `hf_config.json` (preserving
+/// `tokenizer/config.json`) so sequential downloads only register a completed
+/// Hugging Face Hub download after all weight and tokenizer files verify cleanly.
+fn oruk_fourier_2b_sherpa_files() -> Vec<ModelFile> {
+    const BASE: &str =
+        "https://huggingface.co/oruk/oruk-fourier-2b/resolve/3fda023e157ce7986f137f76fcf326ed6e08fa73";
+    [
+        (
+            "onnx/sherpa-int8/conv_frontend.onnx",
+            "conv_frontend.onnx",
+            48_080_440,
+            "19ddcb711237bba84f7aa385ce7c63320bcb736ce8888299064036d57a774bd9",
+        ),
+        (
+            "onnx/sherpa-int8/encoder.int8.onnx",
+            "encoder.int8.onnx",
+            1_670_820,
+            "61255ca9e30a52c0d1da59ade9327792f08e32849cb1570da19be9ed6760cef9",
+        ),
+        (
+            "onnx/sherpa-int8/encoder.int8.onnx.data",
+            "encoder.int8.onnx.data",
+            306_487_296,
+            "a11a260308504627190fbf662478eec9ff95cb36b3387f257892f6fb8886e8a1",
+        ),
+        (
+            "onnx/sherpa-int8/decoder.int8.onnx",
+            "decoder.int8.onnx",
+            5_393_503,
+            "d252adc96e55aa858876896e20783a357fda4c38e216d5be1c7b42bf73c86e8b",
+        ),
+        (
+            "onnx/sherpa-int8/decoder.int8.onnx.data",
+            "decoder.int8.onnx.data",
+            2_032_082_944,
+            "4625b41d68653f974af294b6ef5539c36e32d0477d0a2262a9157e275a09433f",
+        ),
+        (
+            "onnx/sherpa-int8/tokenizer/vocab.json",
+            "tokenizer/vocab.json",
+            3_080_118,
+            "97dfe4fe392c23cda68fe01c60babe50a57c894fc0cf44d02c4048ad283499c3",
+        ),
+        (
+            "onnx/sherpa-int8/tokenizer/merges.txt",
+            "tokenizer/merges.txt",
+            1_671_853,
+            "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+        ),
+        (
+            "onnx/sherpa-int8/tokenizer/tokenizer.json",
+            "tokenizer/tokenizer.json",
+            11_429_377,
+            "bd2a97b55c8f7f9c328c73ee9b9178771037e9f566dfca8e238a063d41cbac92",
+        ),
+        (
+            "onnx/sherpa-int8/tokenizer/tokenizer_config.json",
+            "tokenizer/tokenizer_config.json",
+            10_386,
+            "e8f0641c46b7c259b8d4a34097471dab636bd5d5062f480ed7c97a3d3b3981ee",
+        ),
+        (
+            "onnx/sherpa-int8/tokenizer/config.json",
+            "tokenizer/config.json",
+            2_072,
+            "9306077f32e1989f6128d12a0e471a3bd612389dbd5bff81305b8f558fee9901",
+        ),
+        (
+            "config.json",
+            "hf_config.json",
+            2_479,
+            "5bc1d99c141fc866b61efca97dcbc6412a38db25ff0934c38bf7b46fa09485a2",
+        ),
+    ]
+    .into_iter()
+    .map(|(remote_path, local_path, size_bytes, sha256)| ModelFile {
+        path: local_path.into(),
+        url: format!("{BASE}/{remote_path}"),
+        size_bytes,
+        sha256: Some(sha256.into()),
+    })
+    .collect()
+}
+
+fn pinned_files_for_mirror(
+    target: &LocalAsrTarget,
+    files: &[ModelFile],
+    mirror: crate::local_asr_catalog::LocalAsrMirror,
+) -> Vec<ModelFile> {
+    let rewrite_hf_mirror = target.runtime == LocalAsrRuntime::SherpaOnnx
+        && target.model_id() == "oruk-fourier-2b-int8"
+        && mirror == crate::local_asr_catalog::LocalAsrMirror::HfMirror;
+    files
+        .iter()
+        .map(|file| {
+            let mut file = file.clone();
+            if rewrite_hf_mirror {
+                if let Some(rest) = file.url.strip_prefix("https://huggingface.co/") {
+                    file.url = format!("https://hf-mirror.com/{rest}");
+                }
+            }
+            file
+        })
+        .collect()
 }
 
 fn entry_is_complete(entry: &ModelCatalogEntry, directory: &Path) -> bool {
@@ -772,13 +901,13 @@ impl ModelStore {
             .find(target.runtime, target.model_id())
             .ok_or_else(|| invalid("unknown local ASR model"))?;
         let files = match &entry.selector {
-            ModelFileSelector::Pinned(files) => files
-                .iter()
+            ModelFileSelector::Pinned(files) => pinned_files_for_mirror(&target, files, mirror)
+                .into_iter()
                 .map(|file| LocalAsrRemoteFile {
-                    path: file.url.clone(),
-                    local_path: Some(file.path.clone()),
+                    path: file.url,
+                    local_path: Some(file.path),
                     size_bytes: file.size_bytes,
-                    sha256: file.sha256.clone(),
+                    sha256: file.sha256,
                 })
                 .collect(),
             ModelFileSelector::Native => {
@@ -880,9 +1009,11 @@ impl ModelStore {
         }
         let (cancelled, _active_guard) = self.begin_active_download(&target)?;
         let manifest = match entry.selector.clone() {
-            ModelFileSelector::Pinned(files) => {
-                ModelManifest::new(target.clone(), &entry.repository, files)
-            }
+            ModelFileSelector::Pinned(files) => ModelManifest::new(
+                target.clone(),
+                &entry.repository,
+                pinned_files_for_mirror(&target, &files, mirror),
+            ),
             ModelFileSelector::Native => unreachable!("native selector returned above"),
             ModelFileSelector::Archive {
                 url,
@@ -4161,5 +4292,246 @@ mod tests {
         assert_eq!(store.models_root_dir(), current);
         assert!(!next.join(MODEL_RELOCATION_JOURNAL).exists());
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn oruk_fourier_2b_catalog_pins_hf_urls_and_root_config_last() {
+        let root =
+            std::env::temp_dir().join(format!("openless-fourier-catalog-{}", uuid::Uuid::new_v4()));
+        let store = ModelStore::new(ModelStoreConfig::new(root.clone()).unwrap()).unwrap();
+        assert_eq!(
+            LocalAsrRuntime::SherpaOnnx.default_model(),
+            "sense-voice-small-zh"
+        );
+
+        let target =
+            LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "oruk-fourier-2b-int8").unwrap();
+        assert_eq!(
+            target.sherpa_family(),
+            Some(crate::SherpaModelFamily::Qwen3Asr)
+        );
+        assert_eq!(
+            target.sherpa_execution_mode(),
+            Some(crate::LocalAsrExecutionMode::Offline)
+        );
+
+        let entry = store
+            .catalog()
+            .find(LocalAsrRuntime::SherpaOnnx, "oruk-fourier-2b-int8")
+            .expect("oruk-fourier-2b-int8 catalog entry");
+        assert_eq!(entry.repository, "oruk/oruk-fourier-2b");
+        assert_eq!(entry.modelscope_repository, None);
+        assert_eq!(entry.languages, vec!["en".to_string()]);
+        assert!(entry.display_name.contains("English"));
+        assert!(entry.display_name.contains("CC BY-NC 4.0"));
+
+        let hf_info = store
+            .remote_info(target.clone(), crate::LocalAsrMirror::Huggingface)
+            .await
+            .unwrap();
+        assert_eq!(hf_info.files.len(), 11);
+        assert_eq!(hf_info.total_bytes, 2_409_911_288);
+        for file in &hf_info.files {
+            assert!(
+                file.path.starts_with(
+                    "https://huggingface.co/oruk/oruk-fourier-2b/resolve/3fda023e157ce7986f137f76fcf326ed6e08fa73/"
+                ),
+                "unexpected URL: {}",
+                file.path
+            );
+            assert_eq!(file.sha256.as_ref().map(String::len), Some(64));
+        }
+        let local_paths: Vec<&str> = hf_info
+            .files
+            .iter()
+            .filter_map(|file| file.local_path.as_deref())
+            .collect();
+        assert!(local_paths.contains(&"encoder.int8.onnx.data"));
+        assert!(local_paths.contains(&"decoder.int8.onnx.data"));
+        assert!(local_paths.contains(&"tokenizer/config.json"));
+
+        let last = hf_info.files.last().expect("pinned files non-empty");
+        assert_eq!(
+            last.path,
+            "https://huggingface.co/oruk/oruk-fourier-2b/resolve/3fda023e157ce7986f137f76fcf326ed6e08fa73/config.json"
+        );
+        assert_eq!(last.local_path.as_deref(), Some("hf_config.json"));
+        assert_eq!(last.size_bytes, 2_479);
+        assert_eq!(
+            last.sha256.as_deref(),
+            Some("5bc1d99c141fc866b61efca97dcbc6412a38db25ff0934c38bf7b46fa09485a2")
+        );
+
+        let mirror_info = store
+            .remote_info(target, crate::LocalAsrMirror::HfMirror)
+            .await
+            .unwrap();
+        assert_eq!(mirror_info.files.len(), 11);
+        assert!(mirror_info.files.iter().all(|file| {
+            file.path.starts_with(
+                "https://hf-mirror.com/oruk/oruk-fourier-2b/resolve/3fda023e157ce7986f137f76fcf326ed6e08fa73/",
+            )
+        }));
+
+        // Existing pinned entries must not have their URLs rewritten under HfMirror.
+        let exp_target = crate::experimental_asr::ExperimentalAsrModel::SenseVoice.target();
+        let exp_mirror_info = store
+            .remote_info(exp_target, crate::LocalAsrMirror::HfMirror)
+            .await
+            .unwrap();
+        assert!(!exp_mirror_info.files.is_empty());
+        assert!(exp_mirror_info
+            .files
+            .iter()
+            .all(|file| file.path.starts_with("https://huggingface.co/csukuangfj/")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn oruk_fourier_2b_fetches_root_config_last_and_deletes_cleanly() {
+        struct RecordingTransport {
+            payloads: HashMap<String, Vec<u8>>,
+            fail_url: Option<String>,
+            requested: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl ModelTransport for RecordingTransport {
+            fn request(
+                &self,
+                request: ModelTransportRequest,
+            ) -> BoxFuture<'static, Result<ModelTransportResponse, BackendError>> {
+                self.requested
+                    .lock()
+                    .expect("requested lock")
+                    .push(request.url.clone());
+                if self.fail_url.as_deref() == Some(request.url.as_str()) {
+                    return Box::pin(async {
+                        Err(BackendError::new(
+                            BackendErrorCode::Provider,
+                            "simulated failure",
+                        ))
+                    });
+                }
+                let data = self
+                    .payloads
+                    .get(&request.url)
+                    .cloned()
+                    .expect("fixture payload");
+                let total = data.len() as u64;
+                let (start, end) = request.range.unwrap_or((0, total - 1));
+                let slice = data[start as usize..=end as usize].to_vec();
+                Box::pin(async move {
+                    Ok(ModelTransportResponse {
+                        status: 206,
+                        metadata: ModelHttpMetadata {
+                            content_length: Some(slice.len() as u64),
+                            content_range: Some(ModelContentRange { start, end, total }),
+                            link: None,
+                        },
+                        bytes: slice,
+                    })
+                })
+            }
+        }
+
+        let target =
+            LocalAsrTarget::parse(LocalAsrRuntime::SherpaOnnx, "oruk-fourier-2b-int8").unwrap();
+        let mut payloads = HashMap::new();
+        let fixture_files: Vec<ModelFile> = oruk_fourier_2b_sherpa_files()
+            .into_iter()
+            .enumerate()
+            .map(|(idx, file)| {
+                let bytes = format!("fixture-{idx}-{}", file.path).into_bytes();
+                let digest = hex::encode(Sha256::digest(&bytes));
+                payloads.insert(file.url.clone(), bytes.clone());
+                ModelFile {
+                    path: file.path,
+                    url: file.url,
+                    size_bytes: bytes.len() as u64,
+                    sha256: Some(digest),
+                }
+            })
+            .collect();
+        let root_config_url = fixture_files.last().unwrap().url.clone();
+        let fail_before_last = fixture_files[fixture_files.len() - 2].url.clone();
+        let entry = ModelCatalogEntry {
+            target: target.clone(),
+            repository: "oruk/oruk-fourier-2b".into(),
+            modelscope_repository: None,
+            display_name: "Oruk Fourier 2B INT8 (English · CC BY-NC 4.0)".into(),
+            family: "qwen3_asr".into(),
+            mode: "offline".into(),
+            languages: vec!["en".into()],
+            selector: ModelFileSelector::Pinned(fixture_files),
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "openless-fourier-download-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut config = ModelStoreConfig::new(root.clone()).unwrap();
+        config.max_retries = 0;
+
+        // 1. Failing before the last file must never request repo-root config.json.
+        let failed_requests = Arc::new(Mutex::new(Vec::new()));
+        let failing_store = ModelStore::with_transport(
+            config.clone(),
+            Arc::new(RecordingTransport {
+                payloads: payloads.clone(),
+                fail_url: Some(fail_before_last),
+                requested: Arc::clone(&failed_requests),
+            }),
+        )
+        .with_test_catalog(vec![entry.clone()]);
+        assert!(failing_store
+            .download_target(target.clone(), crate::LocalAsrMirror::Huggingface)
+            .await
+            .is_err());
+        assert!(
+            !failed_requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|url| url == &root_config_url),
+            "failed download must not fetch repo-root config.json"
+        );
+        assert!(!failing_store.is_installed(&target).unwrap());
+        failing_store.cleanup_incomplete(&target).unwrap();
+
+        // 2. Full download requests repo-root config.json last, keeps tokenizer/config.json intact,
+        //    and delete_model removes the entire model directory cleanly.
+        let ok_requests = Arc::new(Mutex::new(Vec::new()));
+        let ok_store = ModelStore::with_transport(
+            config,
+            Arc::new(RecordingTransport {
+                payloads,
+                fail_url: None,
+                requested: Arc::clone(&ok_requests),
+            }),
+        )
+        .with_test_catalog(vec![entry]);
+        let status = ok_store
+            .download_target(target.clone(), crate::LocalAsrMirror::Huggingface)
+            .await
+            .unwrap();
+        assert!(status.ready);
+        assert!(ok_store.is_installed(&target).unwrap());
+        assert_eq!(ok_requests.lock().unwrap().last(), Some(&root_config_url));
+
+        let model_dir = ok_store.model_dir(&target).unwrap();
+        assert!(model_dir.join("encoder.int8.onnx.data").is_file());
+        assert!(model_dir.join("decoder.int8.onnx.data").is_file());
+        assert!(model_dir.join("tokenizer/config.json").is_file());
+        assert!(model_dir.join("hf_config.json").is_file());
+        assert_ne!(
+            std::fs::read(model_dir.join("tokenizer/config.json")).unwrap(),
+            std::fs::read(model_dir.join("hf_config.json")).unwrap()
+        );
+
+        ok_store.delete_model(&target).unwrap();
+        assert!(!model_dir.exists());
+        assert!(!root.join(staging_dir_name(&target)).exists());
+        assert!(!ok_store.is_installed(&target).unwrap());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

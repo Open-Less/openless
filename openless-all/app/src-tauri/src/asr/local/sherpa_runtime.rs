@@ -1336,6 +1336,21 @@ mod tests {
         assert_eq!(chunks[1].len(), 32_000 * 30);
         assert_eq!(chunks[2].len(), 32_000 * 5);
 
+        let fourier = sherpa_target("oruk-fourier-2b-int8").unwrap();
+        assert_eq!(
+            fourier.sherpa_family(),
+            Some(openless_core::SherpaModelFamily::Qwen3Asr)
+        );
+        assert_eq!(
+            fourier.sherpa_execution_mode(),
+            Some(openless_core::LocalAsrExecutionMode::Offline)
+        );
+        let fourier_chunks = sherpa_offline_chunks(&fourier, &pcm);
+        assert_eq!(fourier_chunks.len(), 3);
+        assert_eq!(fourier_chunks[0].len(), 32_000 * 30);
+        assert_eq!(fourier_chunks[1].len(), 32_000 * 30);
+        assert_eq!(fourier_chunks[2].len(), 32_000 * 5);
+
         let sense_voice = sherpa_target("sense-voice-small-zh").unwrap();
         assert_eq!(
             sherpa_offline_chunks(&sense_voice, &pcm),

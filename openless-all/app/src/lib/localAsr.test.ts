@@ -1,4 +1,16 @@
-import { LOCAL_ASR_KEEP_LOADED_OPTIONS, isLocalAsrModelSupportedOnOs } from './localAsr';
+import {
+  LOCAL_ASR_KEEP_LOADED_OPTIONS,
+  SHERPA_ONNX_ASR_MODELS,
+  isLocalAsrModelSupportedOnOs,
+} from './localAsr';
+import { de } from '../i18n/de';
+import { en } from '../i18n/en';
+import { es } from '../i18n/es';
+import { fr } from '../i18n/fr';
+import { ja } from '../i18n/ja';
+import { ko } from '../i18n/ko';
+import { zhCN } from '../i18n/zh-CN';
+import { zhTW } from '../i18n/zh-TW';
 
 function assertEqual(actual: boolean, expected: boolean, name: string) {
   if (actual !== expected) {
@@ -28,4 +40,16 @@ assertEqual(
 const keepLoadedSeconds = LOCAL_ASR_KEEP_LOADED_OPTIONS.map((option) => option.seconds);
 if (JSON.stringify(keepLoadedSeconds) !== JSON.stringify([0, 60, 300, 1800, 86400])) {
   throw new Error(`unexpected keep-loaded options: ${keepLoadedSeconds.join(', ')}`);
+}
+
+const fourierOption = SHERPA_ONNX_ASR_MODELS.find((m) => m.alias === 'oruk-fourier-2b-int8');
+if (!fourierOption) {
+  throw new Error('oruk-fourier-2b-int8 missing from SHERPA_ONNX_ASR_MODELS');
+}
+for (const [locale, bundle] of Object.entries({ en, zhCN, zhTW, ja, ko, de, es, fr })) {
+  const label = bundle.localAsr.sherpaModelOrukFourier2B;
+  const desc = bundle.localAsr.sherpaModelOrukFourier2BDesc;
+  if (!label || !desc || !desc.includes('CC BY-NC 4.0')) {
+    throw new Error(`missing or incomplete Oruk Fourier 2B i18n entry in ${locale}`);
+  }
 }

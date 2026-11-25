@@ -484,7 +484,8 @@ export type SherpaOnnxModelAlias =
   | 'whisper-small-multi'
   | 'whisper-large-v3-multi'
   | 'zipformer-bilingual-zh-en-streaming'
-  | 'qwen3-asr-0.6b-int8';
+  | 'qwen3-asr-0.6b-int8'
+  | 'oruk-fourier-2b-int8';
 
 export type SherpaOnnxMirror = 'huggingface' | 'hf-mirror' | 'github-release';
 
@@ -542,6 +543,11 @@ export const SHERPA_ONNX_ASR_MODELS: SherpaOnnxModelOption[] = [
     labelKey: 'localAsr.sherpaModelQwen3',
     descKey: 'localAsr.sherpaModelQwen3Desc',
   },
+  {
+    alias: 'oruk-fourier-2b-int8',
+    labelKey: 'localAsr.sherpaModelOrukFourier2B',
+    descKey: 'localAsr.sherpaModelOrukFourier2BDesc',
+  },
 ];
 
 export function getSherpaOnnxAsrStatus(): Promise<SherpaOnnxAsrStatus> {
@@ -598,6 +604,13 @@ export function getSherpaOnnxAsrCatalog(): Promise<SherpaOnnxCatalogModel[]> {
       cached: false,
       downloadedBytes: 0,
       fileSizeMb: 700,
+    },
+    {
+      alias: 'oruk-fourier-2b-int8' as const,
+      displayName: 'Oruk Fourier 2B INT8 (English · CC BY-NC 4.0)',
+      cached: false,
+      downloadedBytes: 0,
+      fileSizeMb: 2298,
     },
   ]);
 }

@@ -2579,6 +2579,9 @@ export const zhCN = {
     sherpaModelQwen3: 'Qwen3-ASR 0.6B INT8',
     sherpaModelQwen3Desc:
       '转换后的 sherpa-onnx Qwen3-ASR 模型，支持多语言识别与更强的长上下文能力。',
+    sherpaModelOrukFourier2B: 'Oruk Fourier 2B INT8（仅英文）',
+    sherpaModelOrukFourier2BDesc:
+      '可选英文专用 Qwen3-ASR INT8 模型（约 2.24 GiB，CC BY-NC 4.0 非商业许可）。',
     modelSelectTitle: '本机模型',
     modelSelectDesc: '查看下载状态、管理文件，或加载模型进行测试。',
     modelSelectPlaceholder: '选择已下载的模型…',

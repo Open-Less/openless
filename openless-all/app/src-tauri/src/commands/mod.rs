@@ -547,6 +547,7 @@ mod tests {
             validate_sherpa_model_alias(crate::asr::local::sherpa::DEFAULT_MODEL_ALIAS).is_ok()
         );
         assert!(validate_sherpa_model_alias("qwen3-asr-0.6b-int8").is_ok());
+        assert!(validate_sherpa_model_alias("oruk-fourier-2b-int8").is_ok());
         assert!(
             validate_sherpa_model_alias(crate::asr::local::sherpa::DEFAULT_ONLINE_MODEL_ALIAS)
                 .is_ok()
