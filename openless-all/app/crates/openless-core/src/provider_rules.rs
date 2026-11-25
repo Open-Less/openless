@@ -13,6 +13,7 @@ use crate::errors::{BackendError, BackendErrorCode};
 
 pub const OPENAI_COMPATIBLE_ASR_PROVIDER_ID: &str = "openai-compatible";
 pub const ZENMUX_ASR_PROVIDER_ID: &str = "zenmux";
+pub const VOLCENGINE_ASR_PROVIDER_ID: &str = "volcengine";
 
 const BAILIAN_PROVIDER_ID: &str = "bailian";
 const QWEN3_REALTIME_PROVIDER_ID: &str = "bailian-qwen3-realtime";
@@ -36,6 +37,7 @@ const ASR_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("minimax", "asrMinimax"),
     ("groq", "asrGroq"),
     ("whisper", "asrWhisper"),
+    ("deepseek", "deepseek"),
     ("openrouter", "asrOpenrouter"),
     ("orcarouter", "orcarouter"),
     ("zenmux", "asrZenmux"),
@@ -375,6 +377,7 @@ fn static_models(kind: ProviderKind, provider_type: &str) -> &'static [&'static 
         (ProviderKind::Asr, "gemini") => GEMINI_MODELS,
         (ProviderKind::Asr, "elevenlabs") => &[crate::asr::elevenlabs::DEFAULT_MODEL],
         (ProviderKind::Asr, "minimax") => &["asr-1.0"],
+        (ProviderKind::Asr, "deepseek") => &["deepseek-asr"],
         (ProviderKind::Llm, crate::polish::CODEX_OAUTH_PROVIDER_ID) => &[
             crate::polish::CODEX_DEFAULT_MODEL,
             "gpt-5.3-codex",
@@ -584,6 +587,7 @@ pub fn default_asr_endpoint(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("https://api.minimaxi.com/v1"),
         "groq" => Some("https://api.groq.com/openai/v1"),
         "whisper" => Some("https://api.openai.com/v1"),
+        "deepseek" => Some("https://api.deepseek.com/v1"),
         "openrouter" => Some("https://openrouter.ai/api/v1"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_ENDPOINT),
         "zenmux" => Some("https://zenmux.ai/api/v1"),
@@ -609,6 +613,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
         "minimax" => Some("asr-1.0"),
         "groq" => Some("whisper-large-v3-turbo"),
         "whisper" => Some("whisper-1"),
+        "deepseek" => Some("deepseek-asr"),
         "openrouter" => Some("openai/whisper-large-v3-turbo"),
         "orcarouter" => Some(crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL),
         "zenmux" => Some(crate::asr::whisper::ZENMUX_DEFAULT_MODEL),
@@ -648,7 +653,8 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
 pub fn default_llm_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "ark" => Some("deepseek-v3-2"),
-        "deepseek" | "opencode" => Some("deepseek-v4-flash"),
+        "deepseek" => Some("deepseek-flash"),
+        "opencode" => Some("deepseek-v4-flash"),
         "siliconflow" => Some("Qwen/Qwen2.5-7B-Instruct"),
         "atlascloud" => Some("qwen/qwen3.5-flash"),
         "openai" | "cometapi" => Some("gpt-4o"),
@@ -842,7 +848,8 @@ pub fn is_tencent_cloud_provider(id: &str) -> bool {
 pub fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper"
+        "deepseek"
+            | "whisper"
             | "siliconflow"
             | "zhipu"
             | "groq"
@@ -1048,6 +1055,8 @@ pub struct AdvancedAsrConfig {
     pub verbose_json: bool,
     pub chunk_duration_ms: Option<u64>,
     pub enable_itn: bool,
+    pub enable_ddc: bool,
+    pub enable_nonstream: bool,
 }
 
 impl Default for AdvancedAsrConfig {
@@ -1056,6 +1065,8 @@ impl Default for AdvancedAsrConfig {
             verbose_json: false,
             chunk_duration_ms: None,
             enable_itn: true,
+            enable_ddc: false,
+            enable_nonstream: false,
         }
     }
 }
@@ -1086,11 +1097,22 @@ pub fn parse_advanced_asr_config(raw: Option<&str>) -> AdvancedAsrConfig {
             .get("enableItn")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true),
+        enable_ddc: value
+            .get("enableDdc")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        enable_nonstream: value
+            .get("enableNonstream")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
 pub fn advanced_asr_config_for(provider_id: &str, raw: Option<&str>) -> AdvancedAsrConfig {
-    if provider_id != OPENAI_COMPATIBLE_ASR_PROVIDER_ID && provider_id != ZENMUX_ASR_PROVIDER_ID {
+    if provider_id != OPENAI_COMPATIBLE_ASR_PROVIDER_ID
+        && provider_id != ZENMUX_ASR_PROVIDER_ID
+        && provider_id != VOLCENGINE_ASR_PROVIDER_ID
+    {
         return AdvancedAsrConfig::default();
     }
     parse_advanced_asr_config(raw)
@@ -1103,6 +1125,7 @@ const DEFAULT_BATCH_ASR_CHUNK_MS: u64 = 600_000;
 
 pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) -> Option<u64> {
     match provider_id {
+        "deepseek" => Some(120_000),
         "zhipu" | "openrouter" | "zenmux" => Some(30_000),
         // Preserve the custom provider's "0/blank = send the whole clip" setting.
         OPENAI_COMPATIBLE_ASR_PROVIDER_ID => advanced.chunk_duration_ms,
@@ -1114,6 +1137,7 @@ pub fn batch_asr_chunk_limit_ms(provider_id: &str, advanced: AdvancedAsrConfig) 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrRequestFormat {
+    DeepSeek,
     Multipart,
     OpenRouterJson,
     ZenMuxJson,
@@ -1121,6 +1145,7 @@ pub enum AsrRequestFormat {
 
 pub fn whisper_request_format(provider_id: &str) -> AsrRequestFormat {
     match provider_id {
+        "deepseek" => AsrRequestFormat::DeepSeek,
         "openrouter" => AsrRequestFormat::OpenRouterJson,
         "zenmux" => AsrRequestFormat::ZenMuxJson,
         _ => AsrRequestFormat::Multipart,
@@ -1305,6 +1330,14 @@ mod tests {
         assert!(parsed.verbose_json);
         assert_eq!(parsed.chunk_duration_ms, Some(30_000));
         assert!(!parsed.enable_itn);
+        assert!(!parsed.enable_ddc);
+        assert!(!parsed.enable_nonstream);
+        let volc = advanced_asr_config_for(
+            VOLCENGINE_ASR_PROVIDER_ID,
+            Some(r#"{"enableDdc":true,"enableNonstream":true}"#),
+        );
+        assert!(volc.enable_ddc);
+        assert!(volc.enable_nonstream);
         assert_eq!(
             advanced_asr_config_for("whisper", Some(r#"{"verboseJson":true}"#)),
             AdvancedAsrConfig::default()

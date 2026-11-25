@@ -10,6 +10,14 @@ assert.deepEqual(browser.strategy.matrix.browser, ['chromium', 'webkit']);
 assert.equal(browser.strategy['fail-fast'], false);
 assert.ok(browser.steps.some((s) => s.run?.includes('--project=${{ matrix.browser }}')));
 assert.ok(browser.steps.some((s) => s.with?.name === 'ui-motion-failure-${{ matrix.browser }}'));
+const acceptance = browser.steps.find(
+  (s) => s.with?.name === 'ui-acceptance-${{ matrix.browser }}',
+);
+assert.equal(acceptance?.uses, 'actions/upload-artifact@v4');
+assert.equal(acceptance?.if, 'always()');
+assert.equal(acceptance?.with.path, 'openless-all/app/test-results/**/acceptance-*.png');
+assert.equal(acceptance?.with['retention-days'], 7);
+assert.equal(acceptance?.with['if-no-files-found'], 'ignore');
 const gate = workflow.jobs['ui-motion'];
 assert.deepEqual(gate.needs, ['changes', 'ui-motion-browsers']);
 assert.equal(gate.name, 'UI motion (Chromium + WebKit)');

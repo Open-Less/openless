@@ -294,7 +294,7 @@ impl InputBackend for NativeInput {
     type Delivery = KeyboardDelivery;
 
     fn restore_target(&mut self) -> bool {
-        crate::selection::reactivate_selection_insertion_target(&self.target)
+        crate::selection::reactivate_dictation_insertion_target(&self.target)
     }
 
     fn capture_delivery(&mut self) -> Option<Self::Delivery> {

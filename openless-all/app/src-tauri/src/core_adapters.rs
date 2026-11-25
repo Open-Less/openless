@@ -141,6 +141,8 @@ pub(crate) fn backend_dependencies(
     #[cfg(target_os = "windows")]
     {
         let prefs = preferences.get();
+        warm_hub.set_capture_paused(0,
+            prefs.voice_activation_enabled && prefs.voice_activation_hotkey_linked);
         warm_hub.configure(
             crate::recorder::warm_capture_enabled(prefs.low_latency_dictation_enabled, false),
             (!prefs.microphone_device_name.trim().is_empty())
@@ -347,7 +349,10 @@ pub(crate) fn backend_dependencies(
     dependencies.services.platform =
         Arc::new(TauriPlatformApi::new(Arc::clone(&app), hotkey_status));
     dependencies.services.host_context = Arc::new(TauriHostContextAdapter::default());
-    dependencies.services.edit_observation = Arc::new(TauriEditObservationAdapter::default());
+    dependencies.services.edit_observation = Arc::new(TauriEditObservationAdapter {
+        app: Arc::clone(&app),
+        watcher: Mutex::new(None),
+    });
     dependencies.services.experimental_asr = experimental_asr;
     dependencies.local_asr_runtime = Some(local_asr_runtime);
     #[cfg(not(mobile))]
@@ -1116,6 +1121,15 @@ trait SelectionPlatformBridge: Send + Sync {
         ),
         BackendError,
     >;
+    fn protect_original(
+        &self,
+        target: &crate::selection::SelectionInsertionTarget,
+        text: &str,
+    ) -> Result<(), BackendError> {
+        crate::selection::protect_selection_original(target, text).map_err(|_| {
+            BackendError::new(BackendErrorCode::Platform, "selectionOriginalCopyFailed")
+        })
+    }
     fn apply(
         &self,
         target: &crate::selection::SelectionInsertionTarget,
@@ -1209,48 +1223,19 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         reactivate: bool,
     ) -> Result<InsertOutcome, BackendError> {
         if reactivate && !crate::selection::reactivate_selection_insertion_target(target) {
-            return Err(BackendError::new(
-                BackendErrorCode::Platform,
-                "selectionPolishTargetUnavailable",
-            ));
-        }
-        if crate::selection::is_truncated_selection_stand_in(source_text) {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                "selectionPolishSelectionTooLong",
-            ));
+            return crate::selection::selection_result_fallback(target, replacement_text);
         }
         let validation = crate::selection::validate_selection_insertion_target(target, source_text);
-        if let Some(code) = validation.error_code() {
-            let error_code = match validation {
-                crate::selection::SelectionInsertionTargetValidation::TargetUnavailable => {
-                    BackendErrorCode::Platform
-                }
-                crate::selection::SelectionInsertionTargetValidation::TargetChanged
-                | crate::selection::SelectionInsertionTargetValidation::SelectionChanged => {
-                    BackendErrorCode::Cancelled
-                }
-                crate::selection::SelectionInsertionTargetValidation::Valid => unreachable!(),
-            };
-            return Err(BackendError::new(error_code, code));
-        }
-        // Final line of defense right before pasting: during validate's simulate_copy fallback
-        // the foreground focus may have jumped away (if the other app happens to expose the same
-        // text, the text comparison lets it through). Re-check that the app captured at capture
-        // time is still foreground; if not, refuse.
-        #[cfg(target_os = "macos")]
-        if !crate::selection::selection_target_still_front(target) {
-            return Err(BackendError::new(
-                BackendErrorCode::Cancelled,
-                "selectionPolishTargetChanged",
-            ));
+        if validation.error_code().is_some() {
+            return crate::selection::selection_result_fallback(target, replacement_text);
         }
         let preferences = self.preferences()?;
-        map_insert_status(crate::insertion::TextInserter::new().insert(
+        crate::selection::insert_selection_result(
+            target,
+            source_text,
             replacement_text,
-            preferences.restore_clipboard_after_paste,
             preferences.paste_shortcut,
-        ))
+        )
     }
 }
 
@@ -1292,13 +1277,20 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
         let bridge = Arc::clone(&self.bridge);
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
-            let (capture, target) = bridge.capture()?;
+            let (capture, target) = tauri::async_runtime::spawn_blocking(move || bridge.capture())
+                .await
+                .map_err(|error| {
+                    BackendError::new(BackendErrorCode::Platform, error.to_string())
+                })??;
             let mut targets = targets.lock();
             if targets.contains_key(&session_id) {
                 return Err(BackendError::new(
                     BackendErrorCode::Busy,
                     "selection target is already registered for this session",
                 ));
+            }
+            for target in targets.values() {
+                target.target.cancelled.store(true, Ordering::Release);
             }
             targets.clear();
             targets.insert(
@@ -1309,6 +1301,28 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                 },
             );
             Ok(capture)
+        })
+    }
+
+    fn protect_original(
+        &self,
+        session_id: SessionId,
+        text: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        let bridge = Arc::clone(&self.bridge);
+        let target = self
+            .targets
+            .lock()
+            .get(&session_id)
+            .map(|target| target.target.clone())
+            .unwrap_or_default();
+        Box::pin(async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                bridge.protect_original(&target, &text)?;
+                Ok(*target.original_clipboard.lock())
+            })
+            .await
+            .map_err(|error| BackendError::new(BackendErrorCode::Platform, error.to_string()))?
         })
     }
 
@@ -1327,12 +1341,16 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
                     "selection target is no longer active",
                 )
             })?;
-            bridge.apply(
-                &target.target,
-                &source_text,
-                &replacement_text,
-                target.preview,
-            )
+            tauri::async_runtime::spawn_blocking(move || {
+                bridge.apply(
+                    &target.target,
+                    &source_text,
+                    &replacement_text,
+                    target.preview,
+                )
+            })
+            .await
+            .map_err(|error| BackendError::new(BackendErrorCode::Platform, error.to_string()))?
         })
     }
 
@@ -1374,7 +1392,9 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
-            targets.lock().remove(&session_id);
+            if let Some(target) = targets.lock().remove(&session_id) {
+                target.target.cancelled.store(true, Ordering::Release);
+            }
             Ok(())
         })
     }
@@ -1972,6 +1992,10 @@ impl TauriVoiceActivationRuntime {
 
 #[cfg(target_os = "windows")]
 impl openless_core::VoiceActivationRuntime for TauriVoiceActivationRuntime {
+    fn set_capture_paused(&self, revision: u64, paused: bool) {
+        self.warm_hub.set_capture_paused(revision, paused);
+    }
+
     fn configure(
         &self,
         config: VoiceActivationConfig,
@@ -3422,6 +3446,41 @@ impl RecordingArchive for TauriRecordingArchive {
         self.available.load(Ordering::Acquire)
     }
 
+    fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+        let path = self.path.lock().clone();
+        Box::pin(async move {
+            use tokio::io::AsyncReadExt;
+            let read = async {
+                let mut file = tokio::fs::File::open(path).await?;
+                let size = file.metadata().await?.len();
+                let mut header = [0; 44];
+                file.read_exact(&mut header).await?;
+                Ok::<_, std::io::Error>((size, header))
+            }
+            .await
+            .map_err(|error| {
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    format!("read dictation archive header: {error}"),
+                )
+            })?;
+            let (size, header) = read;
+            let pcm_bytes = u64::from(u32::from_le_bytes(header[40..44].try_into().unwrap()));
+            if &header[..4] != b"RIFF"
+                || &header[8..12] != b"WAVE"
+                || &header[36..40] != b"data"
+                || size != 44 + pcm_bytes
+                || !pcm_bytes.is_multiple_of(2)
+            {
+                return Err(BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "longRecordingArchiveIncomplete",
+                ));
+            }
+            Ok(pcm_bytes)
+        })
+    }
+
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
         let path = self.path.lock().clone();
         Box::pin(async move {
@@ -3930,7 +3989,67 @@ pub(crate) struct TauriTextInserter {
 }
 
 #[derive(Default)]
+pub(crate) struct VocabPlacementState {
+    targets: Mutex<
+        crate::vocab_card_placement::TargetHandoff<
+            SessionId,
+            crate::selection::SelectionInsertionTarget,
+        >,
+    >,
+    anchors: Mutex<crate::vocab_card_placement::AnchorRegistry>,
+    observed_targets: Mutex<Vec<(u64, crate::selection::SelectionInsertionTarget)>>,
+}
+
+impl VocabPlacementState {
+    fn remember_target(
+        &self,
+        session: SessionId,
+        target: crate::selection::SelectionInsertionTarget,
+    ) {
+        self.targets.lock().remember(session, target);
+    }
+
+    fn take_target(
+        &self,
+        session: SessionId,
+    ) -> Option<crate::selection::SelectionInsertionTarget> {
+        self.targets.lock().take(session)
+    }
+
+    fn begin(&self, id: u64, target: Option<&crate::selection::SelectionInsertionTarget>) {
+        let mut targets = self.observed_targets.lock();
+        targets.retain(|(key, _)| *key != id);
+        if let Some(target) = target {
+            targets.push((id, target.clone()));
+        }
+        if targets.len() > 8 {
+            targets.remove(0);
+        }
+        self.anchors.lock().begin(id);
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn source_is_current(&self, id: u64) -> bool {
+        self.observed_targets
+            .lock()
+            .iter()
+            .find(|(key, _)| *key == id)
+            .is_some_and(|(_, target)| {
+                crate::selection::selection_insertion_target_is_current(target)
+            })
+    }
+
+    pub(crate) fn snapshot(&self, id: u64) -> Option<crate::vocab_card_placement::AnchorSnapshot> {
+        self.anchors.lock().get(id)
+    }
+
+    pub(crate) fn retain(&self, ids: &[u64]) {
+        self.anchors.lock().retain(ids);
+    }
+}
+
 struct TauriEditObservationAdapter {
+    app: AppHandleSlot,
     watcher: Mutex<Option<crate::host_document::EditWatcher>>,
 }
 
@@ -3940,15 +4059,54 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
         typed_text: String,
         sink: Arc<dyn EditObservationSink>,
     ) -> Result<(), BackendError> {
+        let app = self.app.lock().clone();
+        let state = app
+            .as_ref()
+            .and_then(|app| app.try_state::<VocabPlacementState>());
+        let observation_id = sink.observation_id();
+        let target = sink
+            .session_id()
+            .and_then(|session| state.as_ref()?.take_target(session));
+        if let (Some(state), Some(id)) = (state.as_ref(), observation_id) {
+            state.begin(id, target.as_ref());
+        }
+        drop(state);
+        let update_app = app.clone();
         *self.watcher.lock() = crate::host_document::watch_for_edits(
             typed_text,
             sink.observation_duration(),
-            move |edit| sink.publish(edit),
+            target,
+            move |edit, snapshot| {
+                if let (Some(app), Some(id)) = (update_app.as_ref(), observation_id) {
+                    if let Some(state) = app.try_state::<VocabPlacementState>() {
+                        let mut anchors = state.anchors.lock();
+                        match snapshot {
+                            Some(snapshot) => {
+                                anchors.update(id, snapshot);
+                            }
+                            None => anchors.invalidate(id),
+                        }
+                    }
+                }
+                sink.publish(edit)
+            },
+            move || {
+                if let (Some(app), Some(id)) = (app.as_ref(), observation_id) {
+                    if let Some(state) = app.try_state::<VocabPlacementState>() {
+                        state.anchors.lock().invalidate(id);
+                    }
+                }
+            },
         );
         Ok(())
     }
 
     fn disarm(&self) {
+        if let Some(app) = self.app.lock().as_ref() {
+            if let Some(state) = app.try_state::<VocabPlacementState>() {
+                state.anchors.lock().stop();
+            }
+        }
         *self.watcher.lock() = None;
     }
 }
@@ -4119,12 +4277,13 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
+    fn defer_preparation_until_stop(&self) -> bool { true }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let insertion_target = crate::selection::capture_selection_insertion_target();
         #[cfg(target_os = "windows")]
         let ime_target = crate::windows_ime_target::capture_ime_submit_target();
         #[cfg(target_os = "macos")]
-        // Legacy macOS composition preferences must not start AX range capture.
+        // Retired AX composition does not capture or retain document text.
         let live_capture = None;
         Some(CapturedTextTarget {
             inserter: Arc::new(Self {
@@ -4150,18 +4309,24 @@ impl CoreTextInserter for TauriTextInserter {
         #[cfg(target_os = "macos")]
         let live_capture = self.live_capture.clone();
         #[cfg(target_os = "windows")]
-        let ime_target = self
-            .ime_target
-            .or_else(crate::windows_ime_target::capture_ime_submit_target);
+        let ime_target = if insertion_target.is_some() {
+            self.ime_target
+        } else {
+            crate::windows_ime_target::capture_ime_submit_target()
+        };
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
-            // Retain the target captured before context/credential awaits in
-            // the insertion resource. Every later write must reactivate it; a
-            // failed restore becomes an explicit error instead of typing into
-            // whichever application happens to be focused at the end.
+            // Keep the stable capture-time target while preparing native resources
+            // only when this session owns Core's ordered finalization.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
+            #[cfg(target_os = "windows")]
+            if let Some(handle) = app.lock().as_ref() {
+                if let Some(state) = handle.try_state::<VocabPlacementState>() {
+                    state.remember_target(session_id, insertion_target.clone());
+                }
+            }
             #[cfg(target_os = "macos")]
             let (app_handle, mut previous_input_source, streaming_ready) = {
                 let app_handle = app.lock().clone().ok_or_else(|| {
@@ -4171,7 +4336,8 @@ impl CoreTextInserter for TauriTextInserter {
                     )
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
-                    context.uses_llm_polisher()
+                    context.insertion.streaming
+                        && context.uses_llm_polisher()
                         && !context.insertion.composition_input
                         && openless_core::streaming_insert::streaming_insert_eligible(
                         context.insertion.streaming,
@@ -4662,14 +4828,12 @@ impl TauriTextInsertionSession {
     }
 
     fn restore_insertion_target(&self) -> Result<(), BackendError> {
-        crate::selection::reactivate_selection_insertion_target(&self.insertion_target)
+        crate::selection::reactivate_dictation_insertion_target(&self.insertion_target)
             .then_some(())
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::Platform,
-                    "original text insertion target is unavailable",
-                )
-            })
+            .ok_or_else(|| BackendError::new(
+                BackendErrorCode::Platform,
+                "original text insertion target is unavailable",
+            ))
     }
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
@@ -4911,8 +5075,8 @@ impl TauriTextInsertionSession {
                                         })
                             },
                             || {
-                                crate::insertion::TextInserter::new()
-                                    .insert(&text, restore, shortcut)
+                                let inserter = crate::insertion::TextInserter::new();
+                                inserter.insert_guarded(&text, restore, shortcut, None, || true)
                             },
                         )
                     })
@@ -4937,9 +5101,16 @@ impl TauriTextInsertionSession {
             let restore = self.context.insertion.restore_clipboard_after_paste;
             let shortcut = self.context.insertion.paste_shortcut;
             tauri::async_runtime::spawn_blocking(move || {
-                map_insert_status(
-                    crate::insertion::TextInserter::new().insert(&text, restore, shortcut),
-                )
+                // Stable ordinary paste treats successful dispatch as delivery on macOS.
+                // Keep the shared clipboard lease and restore protection for every app path.
+                let status = crate::insertion::TextInserter::new().insert(&text, restore, shortcut);
+                #[cfg(target_os = "macos")]
+                let status = if status == crate::types::InsertStatus::PasteSent {
+                    crate::types::InsertStatus::Inserted
+                } else {
+                    status
+                };
+                map_insert_status(status)
             })
             .await
             .map_err(|error| {
@@ -5076,13 +5247,9 @@ fn replace_unwritten_target<T>(
 impl TextInsertionSession for TauriTextInsertionSession {
     fn supports_streaming(&self) -> bool {
         #[cfg(target_os = "macos")]
-        {
-            self.streaming_ready
-        }
+        { self.streaming_ready }
         #[cfg(not(target_os = "macos"))]
-        {
-            cfg!(target_os = "windows")
-        }
+        { cfg!(target_os = "windows") }
     }
 
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
@@ -5450,7 +5617,10 @@ mod mac_insertion_lifecycle_tests {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_unicode_fallback(context: &DictationContext, text: &str) -> crate::types::InsertStatus {
+fn windows_unicode_fallback(
+    context: &DictationContext,
+    text: &str,
+) -> crate::types::InsertStatus {
     let inserter = crate::insertion::TextInserter::new();
     let status = inserter.insert_via_unicode_keystrokes(
         text,
@@ -5458,7 +5628,7 @@ fn windows_unicode_fallback(context: &DictationContext, text: &str) -> crate::ty
             newline_mode: context.insertion.windows_sendinput_newline_mode,
         },
     );
-    if status == crate::types::InsertStatus::Inserted || !context.insertion.allow_non_tsf_fallback {
+    if matches!(status, crate::types::InsertStatus::Inserted | crate::types::InsertStatus::PasteSent) || !context.insertion.allow_non_tsf_fallback {
         status
     } else {
         inserter.copy_fallback(text)
@@ -5490,6 +5660,11 @@ impl TauriHostContextAdapter {
 }
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
+    #[cfg(not(mobile))]
+    fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
+        crate::selection::input_app_for_target(self.target.as_ref()?)
+    }
+
     fn capture(
         &self,
         include_cursor: bool,
@@ -5591,17 +5766,16 @@ impl HostActions for TauriHostActions {
         match action {
             HostAction::ShowMain | HostAction::FocusMain => crate::show_main_window(&app),
             HostAction::ShowDictationFeedback | HostAction::HideDictationFeedback => {}
-            HostAction::ShowSelectionPreview => crate::show_selection_polish_preview(&app),
-            HostAction::HideSelectionPreview => crate::hide_selection_polish_preview(&app),
+            HostAction::ShowSelectionPreview => {
+                return Err(BackendError::new(BackendErrorCode::Unsupported, "Selection polish preview is unavailable"));
+            }
+            HostAction::HideSelectionPreview => {}
             HostAction::ShowQa => {
-                self.qa_context.set_voice_surface_active(true);
-                self.qa_context.prepare_show();
-                crate::show_qa_window(&app, "idle");
+                return Err(BackendError::new(BackendErrorCode::Unsupported, "Ask is unavailable"));
             }
             HostAction::HideQa => {
                 self.qa_context.set_voice_surface_active(false);
                 self.qa_context.clear();
-                crate::hide_qa_window(&app);
             }
             HostAction::ShowLessComputer => {
                 crate::show_less_computer_window(&app).map_err(map_tauri_error)?;

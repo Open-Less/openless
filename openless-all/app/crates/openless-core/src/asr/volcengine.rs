@@ -220,6 +220,8 @@ pub struct VolcengineStreamingASR {
     credentials: VolcengineCredentials,
     task_spawner: Arc<dyn TaskSpawner>,
     hotwords: Vec<DictionaryHotword>,
+    enable_ddc: bool,
+    enable_nonstream: bool,
     state: ParkingMutex<SyncState>,
     /// Guards the WebSocket write half so concurrent `send` calls serialize.
     /// Stored as Arc so spawned send tasks can hold their own clone — independent
@@ -255,6 +257,8 @@ impl VolcengineStreamingASR {
             credentials,
             task_spawner,
             hotwords,
+            enable_ddc: false,
+            enable_nonstream: false,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
             final_rx: ParkingMutex::new(None),
@@ -263,6 +267,16 @@ impl VolcengineStreamingASR {
             send_done: Arc::new(Notify::new()),
             partial_sink: ParkingMutex::new(None),
         }
+    }
+
+    pub fn with_enable_ddc(mut self, enable_ddc: bool) -> Self {
+        self.enable_ddc = enable_ddc;
+        self
+    }
+
+    pub fn with_enable_nonstream(mut self, enable_nonstream: bool) -> Self {
+        self.enable_nonstream = enable_nonstream;
+        self
     }
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
@@ -323,7 +337,7 @@ impl VolcengineStreamingASR {
                     log::error!("[asr] audio frame seq={} send 失败: {}", seq, e);
                 }
                 if pending_for_worker.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    notify_for_worker.notify_waiters();
+                    notify_for_worker.notify_one();
                 }
             }
         }));
@@ -528,16 +542,14 @@ impl VolcengineStreamingASR {
         // Wait for all fire-and-forget sends to complete. Otherwise the final frame
         // (NegativeSequence) could reach the server before the tail chunks, which are
         // then treated as data after "stream ended" and dropped = tail sentence lost.
-        // An 800ms cap avoids waiting forever on an extreme network.
-        let drain_deadline = Instant::now() + std::time::Duration::from_millis(800);
+        // A stalled writer must fail instead of overtaking queued audio.
+        let drain_deadline = Instant::now() + CONNECT_TIMEOUT;
         while self.pending_sends.load(Ordering::SeqCst) > 0 {
             let remaining = drain_deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                log::warn!(
-                    "[asr] send_last_frame: pending {} 帧未发送完，超时强制继续",
-                    self.pending_sends.load(Ordering::SeqCst)
-                );
-                break;
+                return Err(VolcengineASRError::ConnectionFailed(
+                    "Timed out draining the audio queue".into(),
+                ));
             }
             // notified() returns a future; wrapped in timeout -> wait for sends to
             // drain or time out.
@@ -661,6 +673,12 @@ impl VolcengineStreamingASR {
             "show_utterances": true,
             "enable_speaker_info": true,
         });
+        if self.enable_ddc {
+            request["enable_ddc"] = Value::Bool(true);
+        }
+        if self.enable_nonstream {
+            request["enable_nonstream"] = Value::Bool(true);
+        }
         if let Some(context) = hotword_context(&self.hotwords) {
             request["context"] = Value::String(context);
             let enabled_count = self.hotwords.iter().filter(|h| h.enabled).count();
@@ -694,16 +712,10 @@ impl VolcengineStreamingASR {
         };
 
         if parsed.message_type == Some(MessageType::ErrorMessage) {
-            let body = String::from_utf8_lossy(&parsed.payload).to_string();
             let code = parsed.error_code.unwrap_or(0);
-            log::error!(
-                "[asr] error frame code={} body={}",
-                code,
-                body.chars().take(200).collect::<String>()
-            );
+            log::error!("[asr] Volcengine error frame code={code}");
             self.signal_error(VolcengineASRError::ConnectionFailed(format!(
-                "ASR error {}: {}",
-                code, body
+                "Volcengine ASR error {code}"
             )));
             self.state.lock().is_connected = false;
             *self.audio_tx.lock() = None;
@@ -712,13 +724,6 @@ impl VolcengineStreamingASR {
 
         if parsed.message_type != Some(MessageType::FullServerResponse) {
             return true;
-        }
-
-        if let Ok(payload_str) = std::str::from_utf8(&parsed.payload) {
-            log::info!(
-                "[asr] server JSON: {}",
-                payload_str.chars().take(400).collect::<String>()
-            );
         }
 
         let json: Value = match serde_json::from_slice(&parsed.payload) {
@@ -918,7 +923,7 @@ impl AudioConsumer for VolcengineStreamingASR {
                 // The worker already exited (cancel / error path took audio_tx).
                 // Undo the increment so send_last_frame's wait can reach 0.
                 if self.pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    self.send_done.notify_waiters();
+                    self.send_done.notify_one();
                 }
                 log::warn!("[asr] audio queue closed; dropping subsequent frames");
                 return;
@@ -1052,6 +1057,44 @@ mod tests {
             assert!(asr.handle_frame(&bytes));
         }
         sink.assert_snapshots(&["你", "你好", "您好", "您好。世界"]);
+    }
+
+    #[test]
+    fn simulated_two_minute_stream_keeps_routing_after_definite_segments() {
+        let asr = VolcengineStreamingASR::new(
+            VolcengineCredentials {
+                service: VolcengineService::Standard,
+                auth_mode: VolcengineAuthMode::AppIdToken,
+                app_id: "test".into(),
+                access_token: "test".into(),
+                resource_id: VolcengineCredentials::default_resource_id().into(),
+            },
+            Vec::new(),
+        );
+        let sink = Arc::new(super::super::TranscriptCapture::default());
+        asr.set_partial_sink(sink.clone());
+        let mut snapshots = Vec::new();
+        for packet in 1..=650 {
+            let text = "段".repeat(packet);
+            let payload = serde_json::to_vec(&json!({
+                "audio_info": { "duration": 200 * packet },
+                "result": {
+                    "text": text,
+                    "utterances": [{ "text": text, "definite": packet % 20 == 0 }],
+                },
+            })).unwrap();
+            let bytes = frame::build(
+                MessageType::FullServerResponse,
+                Flags::PositiveSequence,
+                Serialization::Json,
+                &payload,
+                Some(packet as i32),
+            );
+            assert!(asr.handle_frame(&bytes));
+            snapshots.push(text);
+        }
+        let expected = snapshots.iter().map(String::as_str).collect::<Vec<_>>();
+        sink.assert_snapshots(&expected);
     }
 
     #[test]
@@ -1325,6 +1368,28 @@ mod tests {
             "文案: {msg}"
         );
         assert!(!msg.contains("网络"), "限流文案不应误导为网络失败: {msg}");
+    }
+
+    #[test]
+    fn first_frame_payload_omits_ddc_and_nonstream_by_default_and_includes_when_enabled() {
+        let creds = VolcengineCredentials {
+            service: VolcengineService::Standard,
+            auth_mode: VolcengineAuthMode::ApiKey,
+            app_id: String::new(),
+            access_token: "key".into(),
+            resource_id: VolcengineCredentials::default_resource_id().into(),
+        };
+        let default_asr = VolcengineStreamingASR::new(creds.clone(), Vec::new());
+        let default_payload = default_asr.build_first_frame_payload("cid-1");
+        assert!(default_payload["request"].get("enable_ddc").is_none());
+        assert!(default_payload["request"].get("enable_nonstream").is_none());
+
+        let enabled_asr = VolcengineStreamingASR::new(creds, Vec::new())
+            .with_enable_ddc(true)
+            .with_enable_nonstream(true);
+        let enabled_payload = enabled_asr.build_first_frame_payload("cid-2");
+        assert_eq!(enabled_payload["request"]["enable_ddc"], json!(true));
+        assert_eq!(enabled_payload["request"]["enable_nonstream"], json!(true));
     }
 
     #[tokio::test]

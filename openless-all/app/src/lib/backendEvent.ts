@@ -150,6 +150,15 @@ export function applyTranscriptEvent(
     const payload = event.kind.payload as { phase?: string; sessionId?: string | null } | undefined;
     const sessionId = payload?.sessionId ?? event.sessionId;
     const sessionChanged = Boolean(sessionId && sessionId !== state.sessionId);
+    // Background jobs keep publishing phases after a new recording starts.
+    // Only a capture edge may replace the transcript's owner.
+    if (sessionChanged && payload?.phase !== 'starting' && payload?.phase !== 'recording') {
+      return {
+        ...state,
+        sequence: event.sequence,
+        revision: Math.max(state.revision, event.sequence),
+      };
+    }
     if (sessionChanged) {
       return {
         ...state,

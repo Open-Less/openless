@@ -1,5 +1,6 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test, type Page } from '@playwright/test';
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/capsule-motion.html`;
 async function patch(page: Page, value: Record<string, unknown>) {
   await page.locator('.ol-default-capsule').waitFor();
   await page.evaluate((value) => (window as any).fixture.setCapsule(value), value);
@@ -51,12 +52,12 @@ test('the new capsule keeps a frosted, readable surface in both themes', async (
     await expect(page.locator('.ol-classic-translation')).toHaveCSS('color-scheme', theme);
     await page.screenshot({ path: info.outputPath(`capsule-${theme}.png`) });
     await patch(page, { state: 'polishing' });
-    await expect(pill.locator('[role="status"]')).toContainText('thinking');
+    await expect(pill.locator('[role="status"]')).toHaveAttribute('aria-label', '正在翻译');
     await expect(pill).toHaveCSS('opacity', '1');
   }
 });
 
-test('capsule contracts continuously, changes content in sequence, and can reverse mid-flight', async ({
+test('capsule keeps its width, changes content in sequence, and can reverse mid-flight', async ({
   page,
 }) => {
   await page.goto(fixture);
@@ -75,11 +76,11 @@ test('capsule contracts continuously, changes content in sequence, and can rever
     }
     return frames;
   });
-  expect(samples.some((width) => width > 81 && width < 114)).toBeTruthy();
-  await expect(pill).toHaveCSS('width', '80px');
+  expect(samples.every((width) => Math.abs(width - 116) < 1)).toBeTruthy();
+  await expect(pill).toHaveCSS('width', '116px');
   await expect(pill.locator('.ol-default-status')).toHaveCSS('opacity', '1');
-  expect(await pill.evaluate((el) => getComputedStyle(el, '::after').animationName)).toBe(
-    'ol-capsule-sweep',
+  expect(await pill.evaluate((el) => getComputedStyle(el.querySelector('.ol-capsule-wave-progress')!).animationName)).toBe(
+    'ol-wave-advance',
   );
   await patch(page, { state: 'recording' });
   await page.waitForTimeout(60);
@@ -89,7 +90,7 @@ test('capsule contracts continuously, changes content in sequence, and can rever
   await expect(pill).toHaveCSS('width', '116px');
   await patch(page, { leaving: true });
   await page.waitForTimeout(60);
-  expect(await pill.evaluate((element) => getComputedStyle(element).filter)).toContain('blur(');
+  expect(await pill.evaluate((element) => getComputedStyle(element).transform)).not.toBe('none');
   await patch(page, { leaving: false });
   await expect(pill).toHaveCSS('opacity', '1');
   await expect(pill).toHaveCSS('filter', 'none');
@@ -108,7 +109,7 @@ test('translation strip settles above the pill and exits when processing starts'
   expect(body!.y - strip!.y - strip!.height).toBeCloseTo(8, 0);
   await patch(page, { state: 'polishing' });
   await expect(badge).toHaveCSS('opacity', '0');
-  await expect(page.locator('.ol-default-capsule')).toHaveCSS('width', '80px');
+  await expect(page.locator('.ol-default-capsule')).toHaveCSS('width', '116px');
 });
 
 test('translation target popup stays interactive during a recording session', async ({ page }) => {
@@ -134,68 +135,15 @@ test('translation target popup stays interactive during a recording session', as
     .toBe(false);
 });
 
-test('QA records in a pill, reveals a wide result, retains content on exit and reopens', async ({
-  page,
-}, info) => {
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto(fixture + '?qa');
-  await expect(page.locator('.ol-default-capsule')).toBeVisible();
-  await expect(page.locator('.qa-prompt')).toHaveCount(0);
-  await emit(page, 'qa:state', { kind: 'recording', sessionId: 'a', messages: [] });
-  await expect(page.locator('.ol-default-capsule')).toBeVisible();
-  await expect(page.locator('.qa-prompt')).toBeHidden();
-  await emit(page, 'qa:state', { kind: 'thinking', sessionId: 'a', messages: [messages[0]] });
-  await expect(page.locator('.qa-answer-panel')).toHaveCount(0);
-  await expect(page.locator('.ol-default-capsule')).toHaveAttribute('data-processing', 'true');
-  await emit(page, 'qa:state', { kind: 'answer', sessionId: 'a', messages });
-  await expect(page.locator('#native-host')).toHaveCSS('width', '760px');
-  await expect(page.locator('.qa-answer-panel')).toBeVisible();
-  await expect(page.locator('.qa-capsule-shell')).toHaveCSS('opacity', '1');
-  await page.screenshot({ path: info.outputPath('qa-result.png') });
-  await emit(page, 'chat-panel:closing', {});
-  await expect(page.locator('.qa-assistant-message')).toContainText('我会尽力为你解答');
-  await expect
-    .poll(
-      async () => {
-        const shell = page.locator('.qa-capsule-shell');
-        if ((await shell.count()) === 0) return 0;
-        return shell.evaluate((el) => Number(getComputedStyle(el).opacity)).catch(() => 0);
-      },
-      { intervals: [10, 25, 50] },
-    )
-    .toBeLessThan(1);
-  await emit(page, 'chat-panel:shown', {});
-  await emit(page, 'qa:state', { kind: 'recording', sessionId: 'b', messages: [] });
-  await expect(page.locator('.qa-capsule-shell')).not.toHaveClass(/is-closing/);
-  await expect(page.locator('.ol-default-capsule')).toBeVisible();
-  await expect(page.locator('#native-host')).toHaveCSS('height', '80px');
-  expect(errors).toEqual([]);
-});
-
-test('immediate geometry acknowledgements keep each QA result visible', async ({ page }) => {
-  await page.goto(fixture + '?qa');
-  await expect(page.locator('.ol-default-capsule')).toBeVisible();
-  for (let index = 0; index < 12; index++) {
-    const sessionId = `instant-layout-${index}`;
-    await emit(page, 'qa:state', { kind: 'recording', sessionId, messages: [] });
-    await expect(page.locator('.ol-default-capsule')).toBeVisible();
-    await expect(page.locator('#native-host')).toHaveCSS('width', '480px');
-    await emit(page, 'qa:state', { kind: 'answer', sessionId, messages });
-    await expect(page.locator('.qa-answer-panel')).toBeVisible();
-    await expect(page.locator('#native-host')).toHaveCSS('width', '760px');
-  }
-});
-
 test('reduced motion disables sweeps and geometry interpolation', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(fixture);
   await patch(page, { state: 'polishing', translation: true });
-  await expect(page.locator('.ol-default-capsule')).toHaveCSS('width', '80px');
+  await expect(page.locator('.ol-default-capsule')).toHaveCSS('width', '116px');
   expect(
     await page
       .locator('.ol-default-capsule')
-      .evaluate((el) => getComputedStyle(el, '::after').animationName),
+      .evaluate((el) => getComputedStyle(el.querySelector('.ol-capsule-wave-progress')!).animationName),
   ).toBe('none');
 });
 

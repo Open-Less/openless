@@ -1,10 +1,11 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
 import { openCapsuleStyleSettings, settleNavigation } from './support/navigation';
 
 test('recording capsule retains its size and original pill geometry with translation', async ({
   page,
 }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?full&os=mac');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capsule-motion.html?full&os=mac`);
   await page.waitForFunction(() => (window as any).fixture.hasListener('capsule:state'));
   await page.evaluate(() =>
     (window as any).fixture.emit('capsule:state', {
@@ -116,7 +117,7 @@ test('settings switches, segmented indicators and popups keep their full outline
   await page.screenshot({ path: test.info().outputPath('capsule-settings.png') });
 });
 
-test('history list keeps its rounded surface and native trackpad scrolling; correction add uses 8px', async ({
+test('history list keeps its rounded surface and native trackpad scrolling; correction add uses the 12px button radius', async ({
   page,
 }) => {
   await page.goto('/');
@@ -124,11 +125,18 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
   await settleNavigation(page);
   const list = page.locator('.ol-history-list');
   await expect(list).toBeVisible();
-  const colors = await list.evaluate((node) => ({
-    surface: getComputedStyle(node).backgroundColor,
-    header: getComputedStyle(node.querySelector('.ol-thinscroll > div')!).backgroundColor,
-  }));
-  expect(colors.header).toBe(colors.surface);
+  const search = list.locator('.ol-history-search');
+  const firstRecord = list.locator('[data-history-record]').first();
+  await expect(list).toHaveCSS('border-radius', '28px');
+  await expect(search).toHaveCSS('border-radius', '16px');
+  await expect(firstRecord).toHaveCSS('border-radius', '16px');
+  const outer = (await list.boundingBox())!;
+  const field = (await search.boundingBox())!;
+  const record = (await firstRecord.boundingBox())!;
+  expect(field.x - outer.x).toBeCloseTo(field.y - outer.y, 0);
+  expect(field.x - outer.x).toBeCloseTo(outer.x + outer.width - field.x - field.width, 0);
+  expect(record.x).toBeCloseTo(field.x, 0);
+  expect(record.width).toBeCloseTo(field.width, 0);
   const wheelPrevented = await list.locator('.ol-thinscroll').evaluate((node) => {
     const event = new WheelEvent('wheel', { deltaY: 13.25, bubbles: true, cancelable: true });
     node.dispatchEvent(event);
@@ -156,18 +164,18 @@ test('history list keeps its rounded surface and native trackpad scrolling; corr
   await settleNavigation(page);
   const add = page.getByRole('button', { name: '添加', exact: true });
   await expect(add).toBeVisible();
-  await expect(add).toHaveCSS('border-radius', '8px');
+  await expect(add).toHaveCSS('border-radius', '12px');
   await expect(add).toHaveCSS('clip-path', 'none');
   await page.screenshot({ path: test.info().outputPath('correction-add.png') });
   expect(
     await add.evaluate((node) =>
       getComputedStyle(node).getPropertyValue('--ol-corner-radius').trim(),
     ),
-  ).toBe('8px');
+  ).toBe('12px');
 });
 
 test('the WebKit fallback preserves capsule, switch and popup exceptions', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/refinements.html');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/refinements.html`);
   const result = await page.evaluate(async () => {
     const css = await (await fetch('/src/styles/continuous-corners.css?direct')).text();
     const source = document.createElement('style');
@@ -224,6 +232,6 @@ test('the WebKit fallback preserves capsule, switch and popup exceptions', async
     toggle: { radius: '999px', clip: 'none' },
     thumb: { radius: '999px', clip: 'none' },
     popup: { radius: '16px', clip: 'none' },
-    add: { radius: '8px', clip: 'none' },
+    add: { radius: '12px', clip: 'none' },
   });
 });

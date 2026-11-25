@@ -5,9 +5,115 @@
     "default": false,
     "scope": "device_local",
     "features": ["lessComputer", "claudeConsole"],
-    "disabledBehavior": ["hide_entries_and_windows", "unregister_less_computer_hotkeys", "reject_runtime_admission", "cancel_active_tasks", "preserve_feature_settings"],
+    "disabledBehavior": [
+      "hide_entries_and_windows",
+      "unregister_less_computer_hotkeys",
+      "reject_runtime_admission",
+      "cancel_active_tasks",
+      "preserve_feature_settings"
+    ],
     "disabledErrorCode": "permission_denied",
     "cloudSync": "excluded"
+  },
+  "selectionOriginalProtection": {
+    "input": "complete explicit selection, including boundary whitespace; no application character cap",
+    "history": {
+      "store": "history.json",
+      "identity": "existing sessionId",
+      "original": "rawTranscript",
+      "result": "finalText",
+      "order": ["persist_original", "protect_original_clipboard", "model_request", "validate_original_target", "replace_once"],
+      "provisionalStatus": "selectionProcessing",
+      "failure": "retain_original_and_any_complete_result"
+    },
+    "hostPort": "SelectionRuntimeAdapter.protect_original(sessionId, completeOriginal) -> Result<Option<opaque clipboard revision>>",
+    "voiceApplyTicket": "optional originalClipboardRevision binds the original clipboard transaction to the existing sessionId",
+    "recoveryNotice": "only confirmed Inserted and frozen original Unicode scalar count > 4000; never trim or count bytes/UTF-16 units",
+    "historyCopy": "existing detail copy follows raw/polished view; no list checkboxes or bulk copy",
+    "successfulWrite": "do not copy result; restore protected original unless a later user copy owns clipboard",
+    "definiteNoWrite": "copy complete result only while original clipboard transaction still owns clipboard",
+    "uncertainWrite": "PasteSent or OutcomeUnknown; never retry or copy as if definitely not inserted",
+    "previewOnlyHosts": "supplied-text iOS preview never writes an external selection or automatically accesses clipboard"
+  },
+  "appStyleRouting": {
+    "hosts": ["macos", "windows"],
+    "categories": "catalog.categories[].id",
+    "catalogApi": {
+      "baseUrl": "MarketplaceConfig.base_url",
+      "path": "/v1/app-catalog",
+      "cacheFile": "input-app-catalog-cache.json",
+      "refresh": "background_at_startup_and_on_page_request",
+      "offline": "last_good_cache_then_manual_style",
+      "embeddedApplicationTable": false
+    },
+    "scope": "device_local",
+    "cloudSync": "excluded",
+    "snapshot": {
+      "catalog": { "schemaVersion": 1, "reviewedAt": "", "categories": [], "clients": [] },
+      "memberships": {},
+      "categories": { "coding": "builtin.structured" },
+      "apps": [
+        {
+          "app": { "id": "macos:com.microsoft.VSCode", "name": "Visual Studio Code" },
+          "memberId": "catalog:vscode",
+          "category": "coding",
+          "seen": true,
+          "stylePackId": null
+        }
+      ]
+    },
+    "commands": {
+      "get_app_style_routing": { "result": "AppStyleRouting" },
+      "refresh_app_style_catalog": { "result": "AppStyleRouting" },
+      "set_app_style_assignment": {
+        "args": {
+          "assignment": [
+            { "target": "category", "category": "coding", "stylePackId": "builtin.structured" },
+            { "target": "app", "appId": "macos:com.microsoft.VSCode", "stylePackId": null },
+            { "target": "membership", "memberId": "catalog:vscode", "category": "coding" }
+          ]
+        },
+        "result": "AppStyleRouting"
+      },
+      "clear_input_app_history": { "result": "AppStyleRouting" },
+      "get_input_app_icons": { "result": "map<appId, PNG data URL>" }
+    },
+    "precedence": [
+      "explicit_session_pack",
+      "specific_app",
+      "app_category",
+      "current_pack",
+      "enabled_default"
+    ],
+    "maxPacksPerTarget": 1,
+    "sharedPacksAllowed": true,
+    "maxCategoriesPerMember": 1,
+    "membershipOverrides": "device_local_replace_or_explicitly_unclassify",
+    "applicationListInvalidatedBy": "history_changed",
+    "unavailableAssignment": "keep_and_skip"
+  },
+  "recordingTranslation": {
+    "preference": {
+      "field": "translationShiftTapCount",
+      "type": "optional nonzero uint8",
+      "default": 1,
+      "range": [1, 255],
+      "uiChoices": [1, 2, 3],
+      "absent": "untouched; omit when serialized",
+      "explicitDefault": "persist and sync 1",
+      "sync": "v1 preferences Portable"
+    },
+    "nativeShiftGesture": {
+      "hosts": ["macos", "windows"],
+      "binding": "built-in standalone Shift translation shortcut only",
+      "tapMaxMs": 350,
+      "interTapMaxMs": 400,
+      "activation": "complete standalone down/up pairs; same count toggles both directions",
+      "ownership": "capture sessionId at key down; reject stale sessions and finalizing captures",
+      "reset": "capture or preferences revision changes, shortcut reconfiguration, hook reset, combinations, repeat, long hold",
+      "effectiveMode": "BackendSnapshot.dictation.translationActive",
+      "customTranslationShortcut": "preserve binding and existing arm-only behavior; no additional Shift action"
+    }
   },
   "startupSnapshot": {
     "fields": ["contractVersion", "backend"],
@@ -15,6 +121,7 @@
       "contractVersion": "2.0.0",
       "backend": {
         "running": true,
+        "processingDictations": [],
         "dictation": {
           "phase": "idle",
           "sessionId": null,
@@ -47,6 +154,7 @@
       "backend_started",
       "backend_stopping",
       "dictation_state_changed",
+      "dictation_jobs_changed",
       "transcript_delta",
       "polish_delta",
       "dictation_completed",
@@ -105,6 +213,11 @@
             "recordingReady": false
           }
         }
+      },
+      "dictation_jobs_changed": {
+        "sequence": 1,
+        "sessionId": null,
+        "kind": { "type": "dictation_jobs_changed", "payload": [] }
       },
       "transcript_delta": {
         "sequence": 1,
@@ -461,6 +574,7 @@
       "ok": true,
       "payload": {
         "running": true,
+        "processingDictations": [],
         "dictation": {
           "phase": "idle",
           "sessionId": null,

@@ -262,6 +262,15 @@ impl HotkeyInterpreter {
             && !self.pending_released.contains(&press_id)
     }
 
+    /// Device release is a handoff, not a terminal animation. A fresh physical
+    /// press may start the next segment immediately; stale releases own no session.
+    pub(crate) fn submitted(&mut self) {
+        self.held = None;
+        self.session_press_id = None;
+        self.last_dispatch = None;
+        self.cooldown_until = None;
+    }
+
     pub(crate) fn terminal(&mut self, at: Instant) {
         // Clear generation state on every success/failure/cancel terminal path;
         // the cooldown is deliberately shared across all those outcomes.

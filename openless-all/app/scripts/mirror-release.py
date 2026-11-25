@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 
@@ -28,6 +29,58 @@ TARGETS = {
     'android-i686': r'^OpenLess_\d.*_x86\.apk$',
     'android-x86_64': r'^OpenLess_\d.*_x86_64\.apk$',
 }
+
+FILE_TRANSFER_SECONDS = 300
+MAX_FILE_TRANSFER_SECONDS = 2700
+MIN_UPLOAD_BYTES_PER_SECOND = 64 * 1024
+
+def transfer_timeout_seconds(size):
+    # The observed cross-region link continued at 94-528 KiB/s. A fixed five
+    # minute wall limit killed healthy large-file uploads; budget by size while
+    # retaining a hard ceiling and rclone's separate idle timeout.
+    expected = 120 + (size + MIN_UPLOAD_BYTES_PER_SECOND - 1) // MIN_UPLOAD_BYTES_PER_SECOND
+    return min(MAX_FILE_TRANSFER_SECONDS, max(FILE_TRANSFER_SECONDS, expected))
+
+def select_releases(releases, requested_channel='all'):
+    if requested_channel not in ('all', 'stable', 'beta'):
+        raise ValueError('Invalid mirror channel')
+    published = [r for r in releases if not r['draft'] and re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?-tauri', r['tag_name'])]
+    selected = {}
+    for channel, prerelease in [('stable', False), ('beta', True)]:
+        if requested_channel not in ('all', channel):
+            continue
+        candidates = [r for r in published if r['prerelease'] == prerelease]
+        if candidates:
+            selected[channel] = max(candidates, key=lambda r: r['published_at'])
+    return selected
+
+def copy_files(directory, destination, cache_control, budget_seconds):
+    deadline = time.monotonic() + budget_seconds
+    for path in sorted(p for p in directory.iterdir() if p.is_file()):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Mirror upload phase exceeded its time budget')
+        print(f'Uploading {path.name}: {path.stat().st_size} bytes', flush=True)
+        # Use a fresh client for each object, avoiding a stuck multi-file copy
+        # from occupying the entire job without identifying the blocked object.
+        subprocess.run([
+            'rclone', 'copyto', str(path), f'{destination}/{path.name}',
+            '--checksum', '--transfers', '1', '--checkers', '1',
+            '--retries', '2', '--retries-sleep', '5s', '--timeout', '60s',
+            '--contimeout', '20s', '--stats', '30s', '--stats-one-line',
+            '--stats-log-level', 'NOTICE', '--log-level', 'INFO',
+            '--s3-upload-cutoff', '8Mi', '--s3-chunk-size', '8Mi',
+            '--s3-upload-concurrency', '4',
+            '--header-upload', f'Cache-Control: {cache_control}',
+        ], check=True, timeout=min(transfer_timeout_seconds(path.stat().st_size), remaining))
+        print(f'Upload completed: {path.name}', flush=True)
+
+def publish_verified_release(directory, channels, destination, tag, channel):
+    # Any object failure/timeout stops before the first rolling manifest PUT.
+    copy_files(directory, f'{destination}/releases/{tag}',
+        'public, max-age=31536000, immutable', 3600)
+    copy_files(channels, f'{destination}/updates/{channel}',
+        'public, max-age=60', 180)
 
 def tag_version(tag):
     match = re.fullmatch(r'v(\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)-tauri', tag)
@@ -104,12 +157,7 @@ def main():
     if not all(os.environ.get(key) for key in ('OSS_BUCKET', 'OSS_AK', 'OSS_SK')):
         raise ValueError('Configure OSS_BUCKET, OSS_ACCESS_KEY_ID and OSS_ACCESS_KEY_SECRET in the main repository')
     releases = json.loads(subprocess.check_output(['gh', 'api', f'repos/{REPO}/releases?per_page=100']))
-    releases = [r for r in releases if not r['draft'] and re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?-tauri', r['tag_name'])]
-    selected = {}
-    for channel, prerelease in [('stable', False), ('beta', True)]:
-        candidates = [r for r in releases if r['prerelease'] == prerelease]
-        if candidates:
-            selected[channel] = max(candidates, key=lambda r: r['published_at'])
+    selected = select_releases(releases, os.environ.get('MIRROR_CHANNEL', 'all'))
     if not selected:
         raise ValueError('No published desktop releases')
     os.environ.update(RCLONE_CONFIG_OSS_TYPE='s3', RCLONE_CONFIG_OSS_PROVIDER='Alibaba',
@@ -149,12 +197,7 @@ def main():
         channels = root / 'channels' / channel
         generate_manifests(directory, tag, channel, release['published_at'], channels, verify)
         destination = f'oss:{os.environ["OSS_BUCKET"]}'
-        common = ['--checksum', '--transfers', '4', '--retries', '5', '--retries-sleep', '10s']
-        # Copy binaries first; if any transfer fails, never advance the rolling JSON.
-        subprocess.run(['rclone', 'copy', str(directory), f'{destination}/releases/{tag}', *common,
-            '--header-upload', 'Cache-Control: public, max-age=31536000, immutable'], check=True)
-        subprocess.run(['rclone', 'copy', str(channels), f'{destination}/updates/{channel}', *common,
-            '--header-upload', 'Cache-Control: public, max-age=60'], check=True)
+        publish_verified_release(directory, channels, destination, tag, channel)
         print(f'Mirrored {channel}: {tag}', flush=True)
     failures = []
     for channel, release in selected.items():

@@ -33,6 +33,13 @@ pub struct PreferenceField {
 }
 pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
+        rust_name: "translation_shift_tap_count",
+        key: "translationShiftTapCount",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Unsigned8,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "hotkey",
         key: "hotkey",
         class: PreferenceClass::DeviceProfile,
@@ -203,6 +210,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "voice_activation_enabled",
         key: "voiceActivationEnabled",
+        class: PreferenceClass::Excluded,
+        shape: PreferenceShape::Boolean,
+        reason: "local_only_microphone_capture",
+    },
+    PreferenceField {
+        rust_name: "voice_activation_hotkey_linked",
+        key: "voiceActivationHotkeyLinked",
         class: PreferenceClass::Excluded,
         shape: PreferenceShape::Boolean,
         reason: "local_only_microphone_capture",
@@ -399,6 +413,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
     PreferenceField {
         rust_name: "qa_companion_key",
         key: "qaCompanionKey",
+        class: PreferenceClass::DeviceProfile,
+        shape: PreferenceShape::Text,
+        reason: "device_bound",
+    },
+    PreferenceField {
+        rust_name: "qa_shortcut_behavior",
+        key: "qaShortcutBehavior",
         class: PreferenceClass::DeviceProfile,
         shape: PreferenceShape::Text,
         reason: "device_bound",
@@ -747,6 +768,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "polish_strategy_enabled",
+        key: "polishStrategyEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
+        rust_name: "polish_strategy_script",
+        key: "polishStrategyScript",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Text,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "start_minimized",
         key: "startMinimized",
         class: PreferenceClass::Portable,
@@ -1006,6 +1041,9 @@ pub fn excluded_extension_key(key: &str) -> bool {
 }
 
 pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> DocumentResult<()> {
+    if field.key == "translationShiftTapCount" && value.as_u64() == Some(0) {
+        return Err(DocumentError::InvalidDocument);
+    }
     use PreferenceShape::*;
     let valid = match field.shape {
         Boolean => value.is_boolean(),
@@ -1039,7 +1077,7 @@ pub fn validate_preference_value(field: &PreferenceField, value: &Value) -> Docu
             "foregroundWindowScreen",
             "allScreens",
         ],
-        "pipelineMode" => &["traditional", "multimodal"],
+        "pipelineMode" => &["traditional", "multimodal", "deepseek"],
         "chineseScriptPreference" => &["auto", "simplified", "traditional"],
         "outputLanguagePreference" => &["auto", "zhCn", "zhTw", "en", "ja", "ko"],
         "selectionPolishOutputMode" => &["directReplace", "previewConfirm"],

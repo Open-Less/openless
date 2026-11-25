@@ -68,6 +68,18 @@ fn payload_matches_backend_event(payload: &CapsulePayload, event: &BackendEventK
 }
 
 impl CapsuleSnapshotState {
+    #[cfg(not(mobile))]
+    pub(super) fn claim_ask(&mut self, session_id: &str) -> u64 {
+        if self.session_id.as_deref() != Some(session_id) {
+            self.session_id = Some(session_id.to_owned());
+            self.text.clear();
+            self.revision = self.revision.saturating_add(1);
+        }
+        self.pending_session_id = None;
+        self.pending_payload_revision = None;
+        self.revision
+    }
+
     pub(super) fn commit_capsule_payload(
         &mut self,
         payload: &CapsulePayload,
@@ -113,12 +125,68 @@ impl CapsuleSnapshotState {
         true
     }
 
+    // Expire the committed presentation, not the newest backend event. A
+    // pending projection can belong to another session and need not ever
+    // present a capsule; leave its revision, owner and transcript intact.
+    pub(super) fn expire_terminal_capsule(&mut self) -> Option<CapsulePayload> {
+        let displayed = self.payload.as_mut()?;
+        if !matches!(
+            displayed.state,
+            CapsuleState::Done | CapsuleState::Error | CapsuleState::Cancelled
+        ) {
+            return None;
+        }
+        *displayed = CapsulePayload {
+            session_id: displayed.session_id.clone(),
+            state: CapsuleState::Idle,
+            level: 0.0,
+            elapsed_ms: 0,
+            message: None,
+            inserted_chars: None,
+            translation: false,
+            operating: false,
+            warming: false,
+            selection_polish: false,
+            qa: false,
+            capsule_style: displayed.capsule_style,
+        };
+        Some(displayed.clone())
+    }
+
     pub(super) fn record_backend_event(&mut self, event: &BackendEvent) {
         let snapshot = self;
         if event.sequence <= snapshot.sequence {
             return;
         }
         let event_session = event.session_id.map(|session| session.to_string());
+        if let BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
+            // A job list containing the event owner is the device-release edge.
+            // Removal of another job cannot retarget a displayed recording.
+            let submitted = jobs.iter().any(|job| job.session_id == event.session_id);
+            let settled_display = event_session == snapshot.session_id
+                && snapshot.payload.as_ref().is_none_or(|payload| payload.state != CapsuleState::Recording);
+            if submitted || settled_display {
+                if let Some(id) = jobs.first().and_then(|job| job.session_id) {
+                    let id = Some(id.to_string());
+                    if id != snapshot.session_id { snapshot.text.clear(); }
+                    snapshot.session_id = id.clone();
+                    snapshot.pending_session_id = id;
+                    snapshot.revision = event.sequence;
+                    snapshot.pending_payload_revision = Some(event.sequence);
+                }
+            }
+            snapshot.sequence = event.sequence;
+            return;
+        }
+        if snapshot.session_id.is_some() && event_session.is_some() && event_session != snapshot.session_id
+            && (matches!(&event.kind,
+                BackendEventKind::DictationCompleted(_) | BackendEventKind::TranscriptDelta(_) | BackendEventKind::PolishDelta(_))
+                || matches!(&event.kind, BackendEventKind::DictationStateChanged(state)
+                    if !matches!(state.phase, DictationPhase::Starting | DictationPhase::Recording)))
+        {
+            snapshot.sequence = event.sequence;
+            return;
+        }
         let pending_session_id = match &event.kind {
             BackendEventKind::QaLevel(_)
             | BackendEventKind::QaState(_)
@@ -128,10 +196,14 @@ impl CapsuleSnapshotState {
             }) => event_session.clone(),
             _ => None,
         };
+        // The result receipt already projects Done. The subsequent Completed
+        // snapshot has no window projection and must not leave replay pending.
         let payload_projection_pending = matches!(
             &event.kind,
-            BackendEventKind::DictationStateChanged(_)
-                | BackendEventKind::TranscriptDelta(_)
+            BackendEventKind::DictationStateChanged(state) if state.phase != DictationPhase::Completed
+        ) || matches!(
+            &event.kind,
+            BackendEventKind::TranscriptDelta(_)
                 | BackendEventKind::DictationCompleted(_)
                 | BackendEventKind::QaLevel(_)
                 | BackendEventKind::QaState(_)
@@ -262,7 +334,35 @@ mod tests {
             warming: false,
             capsule_style: CapsuleStyle::Classic,
             selection_polish: false,
+            qa: false,
         }
+    }
+
+    #[test]
+    fn job_projection_cannot_replace_recording_but_can_advance_after_device_release() {
+        let a = SessionId::new();
+        let b = SessionId::new();
+        let job = |id| DictationStateSnapshot { session_id: Some(id), phase: DictationPhase::Transcribing, ..Default::default() };
+        let mut state = CapsuleSnapshotState::default();
+        state.record_backend_event(&BackendEvent { sequence: 1, session_id: Some(b),
+            kind: BackendEventKind::DictationStateChanged(DictationStateSnapshot {
+                session_id: Some(b), phase: DictationPhase::Starting, ..Default::default() }) });
+        assert!(state.commit_capsule_payload(&payload(b, CapsuleState::Recording), 1));
+        state.record_backend_event(&BackendEvent { sequence: 2, session_id: Some(a),
+            kind: BackendEventKind::DictationStateChanged(job(a)) });
+        assert_eq!(state.session_id, Some(b.to_string()));
+        assert_eq!(state.pending_payload_revision, None);
+        state.record_backend_event(&BackendEvent { sequence: 3, session_id: Some(a),
+            kind: BackendEventKind::DictationJobsChanged(vec![]) });
+        assert_eq!(state.session_id, Some(b.to_string()));
+        state.record_backend_event(&BackendEvent { sequence: 4, session_id: Some(b),
+            kind: BackendEventKind::DictationJobsChanged(vec![job(a), job(b)]) });
+        assert_eq!(state.session_id, Some(a.to_string()));
+        assert!(state.commit_capsule_payload(&payload(a, CapsuleState::Transcribing), 4));
+        state.record_backend_event(&BackendEvent { sequence: 5, session_id: Some(a),
+            kind: BackendEventKind::DictationJobsChanged(vec![job(b)]) });
+        assert_eq!(state.session_id, Some(b.to_string()));
+        assert!(state.commit_capsule_payload(&payload(b, CapsuleState::Transcribing), 5));
     }
 
     fn completed_dictation() -> (CapsuleSnapshotState, SessionId) {
@@ -344,6 +444,60 @@ mod tests {
             );
             assert!(!snapshot.commit_capsule_payload(&payload(next, CapsuleState::Idle), 2));
         }
+    }
+
+    #[test]
+    fn capsule_completion_snapshot_does_not_block_replay_or_expiry() {
+        let (mut snapshot, completed) = completed_dictation();
+        assert!(snapshot.commit_capsule_payload(&payload(completed, CapsuleState::Done), 2));
+        snapshot.record_backend_event(&BackendEvent {
+            sequence: 3,
+            session_id: Some(completed),
+            kind: BackendEventKind::DictationStateChanged(DictationStateSnapshot {
+                phase: DictationPhase::Completed,
+                session_id: Some(completed),
+                ..Default::default()
+            }),
+        });
+        assert_eq!(snapshot.pending_payload_revision, None);
+        assert_eq!(snapshot.payload_revision, 3);
+        assert_eq!(
+            snapshot.expire_terminal_capsule().unwrap().state,
+            CapsuleState::Idle
+        );
+        assert_eq!(snapshot.payload_revision, snapshot.revision);
+    }
+
+    #[test]
+    fn capsule_expiry_does_not_consume_a_pending_successor_projection() {
+        let (mut snapshot, completed) = completed_dictation();
+        let mut receipt = payload(completed, CapsuleState::Done);
+        receipt.message = Some("已输入".into());
+        assert!(snapshot.commit_capsule_payload(&receipt, 2));
+
+        let successor = SessionId::new();
+        snapshot.record_backend_event(&BackendEvent {
+            sequence: 3,
+            session_id: Some(successor),
+            kind: BackendEventKind::QaLevel(QaRecordingLevel {
+                session_id: successor.to_string(),
+                level: 0.2,
+            }),
+        });
+
+        let mut ordinary_idle = payload(completed, CapsuleState::Idle);
+        ordinary_idle.session_id = None;
+        assert!(!snapshot.commit_capsule_payload(&ordinary_idle, 3));
+        let idle = snapshot.expire_terminal_capsule().unwrap();
+        assert_eq!(idle.state, CapsuleState::Idle);
+        assert_eq!(idle.session_id, receipt.session_id);
+        assert!(idle.message.is_none());
+        assert_eq!(snapshot.payload.as_ref().unwrap().state, CapsuleState::Idle);
+        assert_eq!(snapshot.pending_payload_revision, Some(3));
+        assert_eq!(snapshot.payload_revision, 2);
+        assert_eq!(snapshot.pending_session_id, Some(successor.to_string()));
+        assert!(snapshot.commit_capsule_payload(&payload(successor, CapsuleState::Recording), 3));
+        assert!(snapshot.expire_terminal_capsule().is_none());
     }
 
     #[test]

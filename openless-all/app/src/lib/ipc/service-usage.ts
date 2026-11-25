@@ -1,4 +1,6 @@
 import { invokeOrMock } from './shared';
+import { isHarmonyRuntime } from '../../runtime/environment';
+import { getPreviewServiceUsage, clearPreviewServiceUsage } from '../../preview/usage';
 
 export interface ServiceUsageRecord {
   id: string;
@@ -33,9 +35,16 @@ export interface ServiceUsageSnapshot {
   records: ServiceUsageRecord[];
   droppedOrFailed: number;
 }
-export function getServiceUsage(): Promise<ServiceUsageSnapshot> {
-  return invokeOrMock('get_service_usage', undefined, () => ({ records: [], droppedOrFailed: 0 }));
+export function supportsServiceUsage(): boolean {
+  return !isHarmonyRuntime();
 }
-export function clearServiceUsage(): Promise<void> {
-  return invokeOrMock('clear_service_usage', undefined, () => undefined);
+
+export async function getServiceUsage(): Promise<ServiceUsageSnapshot> {
+  if (!supportsServiceUsage()) throw new Error('service usage is unavailable');
+  return invokeOrMock('get_service_usage', undefined, getPreviewServiceUsage);
+}
+
+export async function clearServiceUsage(): Promise<void> {
+  if (!supportsServiceUsage()) throw new Error('service usage is unavailable');
+  return invokeOrMock('clear_service_usage', undefined, clearPreviewServiceUsage);
 }

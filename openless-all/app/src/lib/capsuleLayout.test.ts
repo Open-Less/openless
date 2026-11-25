@@ -141,8 +141,8 @@ assertEqual(
 );
 assertEqual(
   getClassicTranslationBadgeOffset(true, false),
-  0,
-  'Classic external rail uses its own badge lane instead of same-window offset',
+  60,
+  'Classic external rail keeps the same top badge offset as macOS',
 );
 const classicExternalGeometry = getClassicCapsuleGeometry('win', true, true, false);
 assertEqual(classicExternalGeometry.hostHeight, 172, 'Classic external rail uses the 172px host');
@@ -153,37 +153,42 @@ assertEqual(
 );
 assertEqual(
   classicExternalGeometry.railTop,
-  28,
-  'Classic external rail clears the translation badge lane',
+  48,
+  'Classic external rail keeps the middle rail anchor below the badge',
 );
-assertEqual(classicExternalGeometry.badgeTop, 88, 'Classic external badge sits above the pill');
+assertEqual(classicExternalGeometry.badgeTop, 12, 'Classic external badge sits at the very top');
 assertEqual(
   classicExternalGeometry.badgeBottom,
-  116,
-  'Classic external badge leaves an 8px body gap',
+  40,
+  'Classic external badge clears the 52px transcript rail and 8px gap',
 );
 if (
+  classicExternalGeometry.badgeBottom + 8 > classicExternalGeometry.railTop! ||
   classicExternalGeometry.railTop! + classicExternalGeometry.railHeight >
-    classicExternalGeometry.badgeTop ||
-  classicExternalGeometry.badgeBottom > classicExternalGeometry.bodyTop
+    classicExternalGeometry.bodyTop
 ) {
-  throw new Error('Classic external rail and translation badge must not overlap');
+  throw new Error('Classic external badge, rail, and body must not overlap');
 }
 const classicSameWindowGeometry = getClassicCapsuleGeometry('win', true, true, true);
 assertEqual(
   classicSameWindowGeometry.railTop,
-  64,
+  48,
   'Classic same-window rail keeps the body rail anchor',
 );
-assertEqual(classicSameWindowGeometry.badgeBottom, 56, 'Classic same-window badge clears the rail');
+assertEqual(classicSameWindowGeometry.badgeBottom, 40, 'Classic same-window badge clears the rail');
 for (const os of ['mac', 'win'] as const) {
   const external = getClassicCapsuleGeometry(os, true, true, false);
-  if (
-    external.railTop! + external.railHeight > external.badgeTop ||
-    external.badgeBottom > external.bodyTop
-  ) {
-    throw new Error(`${os}: external Classic rail and badge overlap`);
-  }
+  const sameWindow = getClassicCapsuleGeometry(os, true, true, true);
+  assertEqual(
+    external.badgeTop,
+    sameWindow.badgeTop,
+    `${os}: external and same-window Classic badgeTop must match`,
+  );
+  assertEqual(
+    external.railTop,
+    sameWindow.railTop,
+    `${os}: external and same-window Classic railTop must match`,
+  );
 }
 assertEqual(
   getClassicProcessingLabel(false),
@@ -207,25 +212,25 @@ assertEqual(
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', false, true)?.topOffset,
-  64,
+  48,
   'Classic compact external rail anchors to the 172px body content top',
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', true, true)?.topOffset,
-  28,
-  'Classic translation external rail clears the explicit badge lane',
+  48,
+  'Classic translation external rail stays at 48px below the top badge',
 );
 const typelessCompactRail = getCapsuleTranscriptRailPosition('typeless', false, true);
 const typelessTranslationRail = getCapsuleTranscriptRailPosition('typeless', true, true);
 assertEqual(
-  getCapsuleTranscriptRailPosition('classic', true, false)?.height,
-  28,
-  'Classic translation remains in the click-through overlay with transcript disabled',
+  getCapsuleTranscriptRailPosition('classic', true, false),
+  null,
+  'Classic hides the click-through rail when transcript is not visible',
 );
 assertEqual(
   getCapsuleTranscriptRailPosition('classic', true, true)?.height,
-  88,
-  'Classic overlay includes both the rail and the translation badge',
+  52,
+  'Classic overlay only hosts the 52px transcript rail',
 );
 assertClose(
   getCapsuleTranscriptRailPosition('typeless', true, false)?.height ?? 0,

@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const section = await readFile(
-  new URL('../src/pages/settings/SelectionWorkspaceSection.tsx', import.meta.url),
+  new URL('../src/features/input/SelectionWorkspaceSection.tsx', import.meta.url),
   'utf8',
 );
 const dialog = await readFile(
-  new URL('../src/pages/settings/SelectionWorkspaceExtraControlsDialog.tsx', import.meta.url),
+  new URL('../src/features/input/SelectionWorkspaceExtraControlsDialog.tsx', import.meta.url),
   'utf8',
 );
 

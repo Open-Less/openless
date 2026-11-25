@@ -224,6 +224,17 @@ impl AuxiliaryApi for AuxiliaryService {
             if !context.uses_llm_polisher() {
                 return Ok(request.raw_text);
             }
+            if request.raw_text.chars().count() > crate::long_recording::POLISH_CHUNK_CHARS {
+                let output = crate::dictation_engine::polish_long_recording(
+                    Arc::clone(&service.polisher),
+                    SessionId::new(),
+                    context,
+                    request.raw_text,
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .await?;
+                return Ok(output.text);
+            }
             let output = service
                 .polisher
                 .polish(
@@ -261,42 +272,81 @@ impl AuxiliaryApi for AuxiliaryService {
                 })?;
             let fallback_label =
                 AsrCallLabel::new(context.asr.provider_type.clone(), context.asr.model.clone());
-            let session_id = SessionId::new();
-            let session = service
-                .transcription
-                .start(session_id, context, Arc::new(DiscardTextStream))
-                .await
-                .map_err(|mut error| {
-                    error.retryable = !is_terminal_foundry_error(&error);
-                    RetranscriptionFailure {
-                        error,
-                        attempted_asr: Some(fallback_label.clone()),
+            let long_recording = crate::long_recording::duration_ms(pcm.len() as u64)
+                > crate::long_recording::THRESHOLD_MS;
+            let chunk_bytes = if long_recording {
+                crate::long_recording::RECOVERY_CHUNK_BYTES
+            } else {
+                pcm.len()
+            };
+            let mut combined = RetranscriptionResult {
+                text: String::new(),
+                duration_ms: 0,
+                asr: fallback_label.clone(),
+            };
+            for pcm in pcm.chunks(chunk_bytes) {
+                let session_id = SessionId::new();
+                let pace_replay = context.asr.provider_type == "volcengine";
+                let session = service
+                    .transcription
+                    .start(
+                        session_id,
+                        Arc::clone(&context),
+                        Arc::new(DiscardTextStream),
+                    )
+                    .await
+                    .map_err(|mut error| {
+                        error.retryable = !is_terminal_foundry_error(&error);
+                        RetranscriptionFailure {
+                            error,
+                            attempted_asr: Some(fallback_label.clone()),
+                        }
+                    })?;
+                let attempted_asr = session
+                    .asr_call_label()
+                    .unwrap_or_else(|| fallback_label.clone());
+                let mut guard = RetranscriptionCancelGuard::new(
+                    Arc::clone(&session),
+                    Arc::clone(&service.task_spawner),
+                );
+                if pace_replay {
+                    // The realtime endpoint expects audio over time, including when
+                    // playback is sourced from an archived recording.
+                    let mut chunks = pcm.chunks(crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES);
+                    if let Some(first) = chunks.next() {
+                        session.consume_pcm_chunk(first);
                     }
-                })?;
-            let attempted_asr = session
-                .asr_call_label()
-                .unwrap_or_else(|| fallback_label.clone());
-            session.consume_pcm_chunk(&pcm);
-            let mut guard = RetranscriptionCancelGuard::new(
-                Arc::clone(&session),
-                Arc::clone(&service.task_spawner),
-            );
-            let result = session.finish().await;
-            guard.disarm();
-            match result {
-                Ok(output) => Ok(RetranscriptionResult {
-                    text: output.text,
-                    duration_ms: output.duration_ms,
-                    asr: attempted_asr,
-                }),
-                Err(mut error) => {
-                    error.retryable = !is_terminal_foundry_error(&error);
-                    Err(RetranscriptionFailure {
-                        error,
-                        attempted_asr: Some(attempted_asr),
-                    })
+                    for chunk in chunks {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        session.consume_pcm_chunk(chunk);
+                    }
+                } else {
+                    session.consume_pcm_chunk(pcm);
+                }
+                let result = session.finish().await;
+                guard.disarm();
+                match result {
+                    Ok(output) => {
+                        if !combined.text.is_empty() && !output.text.is_empty() {
+                            combined.text.push('\n');
+                        }
+                        combined.text.push_str(&output.text);
+                        combined.duration_ms += output.duration_ms;
+                        combined.asr = attempted_asr;
+                    }
+                    Err(mut error) => {
+                        error.retryable = !is_terminal_foundry_error(&error);
+                        return Err(RetranscriptionFailure {
+                            error,
+                            attempted_asr: Some(attempted_asr),
+                        });
+                    }
                 }
             }
+            if long_recording {
+                combined.duration_ms = crate::long_recording::duration_ms(pcm.len() as u64);
+            }
+            Ok(combined)
         })
     }
 }
@@ -517,6 +567,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn long_recording_history_retranscription_uses_all_pcm_and_canonical_duration() {
+        let transcription = Arc::new(FixtureTranscriptionEngine::successful("recovered", 125));
+        let (mut service, path) = service(
+            Arc::new(FixtureTextPolisher::successful("unused")),
+            transcription.clone(),
+        );
+        let preferences_path = path.with_extension("preferences.json");
+        service.preferences = Arc::new(PreferencesStore::open(preferences_path.clone()).unwrap());
+        service
+            .preferences
+            .update(|prefs| prefs.active_asr_provider = "groq".into())
+            .unwrap();
+        let mut pcm = vec![1; 301 * crate::DICTATION_SAMPLE_RATE as usize * 2];
+        let len = pcm.len();
+        pcm[len - 4..].copy_from_slice(&[8, 0, 9, 0]);
+        let result = service.retranscribe_pcm(pcm.clone()).await.unwrap();
+        assert_eq!(transcription.pcm(), pcm);
+        assert_eq!(result.duration_ms, 301_000);
+        assert_eq!(result.text, ["recovered"; 6].join("\n"));
+        let _ = std::fs::remove_file(preferences_path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn long_recording_history_repolish_sends_every_character_without_envelope_truncation() {
+        let polisher = Arc::new(FixtureTextPolisher::successful("completed part"));
+        let (service, path) = service(
+            polisher.clone(),
+            Arc::new(FixtureTranscriptionEngine::successful("unused", 0)),
+        );
+        let raw = format!("{}last detail", "完整原文。\n".repeat(4_000));
+        let result = service
+            .repolish(RepolishRequest {
+                raw_text: raw.clone(),
+                style_pack_id: Some(BUILTIN_STYLE_PACK_FORMAL_ID.into()),
+                front_app: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(polisher.inputs().concat(), raw);
+        assert!(polisher
+            .inputs()
+            .iter()
+            .all(|input| input.chars().count() <= 4_000));
+        assert!(!result.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn retranscription_feeds_pcm_and_returns_the_frozen_provider_label() {
         let transcription = Arc::new(FixtureTranscriptionEngine::successful("重转文本", 125));
         let (service, path) = service(
@@ -524,13 +623,17 @@ mod tests {
             transcription.clone(),
         );
         let expected_provider = service.preferences.get().active_asr_provider;
+        let pcm = vec![1; 2 * crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES + 2];
+        let started = std::time::Instant::now();
+        let result = service.retranscribe_pcm(pcm.clone()).await.unwrap();
 
-        let result = service.retranscribe_pcm(vec![1, 0, 2, 0]).await.unwrap();
-
+        if expected_provider == "volcengine" {
+            assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+        }
         assert_eq!(result.text, "重转文本");
         assert_eq!(result.duration_ms, 125);
         assert_eq!(result.asr.provider, expected_provider);
-        assert_eq!(transcription.pcm(), vec![1, 0, 2, 0]);
+        assert_eq!(transcription.pcm(), pcm);
         assert_eq!(transcription.cancel_count(), 0);
         let _ = std::fs::remove_file(path);
     }

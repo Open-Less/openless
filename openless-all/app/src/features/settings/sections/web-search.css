@@ -1,0 +1,15 @@
+.ol-web-search-settings .ol-setting-row-control > :is(.ol-select-trigger, .ol-field) {
+  width: min(100%, 360px);
+}
+
+.ol-web-search-settings .ol-select-trigger {
+  height: auto;
+  min-height: 32px;
+  padding-block: 6px;
+}
+
+.ol-web-search-settings .ol-select-value,
+.ol-web-search-options .ol-select-item > :first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

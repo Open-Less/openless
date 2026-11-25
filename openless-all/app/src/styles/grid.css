@@ -1,0 +1,304 @@
+/* 12-column content grid. A pane is the grid; navigation rails stay outside it.
+   Spans are whole columns so neighboring rows share edges. */
+
+.ol-grid-12,
+.ol-form-12 {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--ol-grid-gutter);
+  width: 100%;
+  min-width: 0;
+}
+
+.ol-col-1 {
+  grid-column: span 1;
+}
+.ol-col-2 {
+  grid-column: span 2;
+}
+.ol-col-3 {
+  grid-column: span 3;
+}
+.ol-col-4 {
+  grid-column: span 4;
+}
+.ol-col-5 {
+  grid-column: span 5;
+}
+.ol-col-6 {
+  grid-column: span 6;
+}
+.ol-col-7 {
+  grid-column: span 7;
+}
+.ol-col-8 {
+  grid-column: span 8;
+}
+.ol-col-9 {
+  grid-column: span 9;
+}
+.ol-col-10 {
+  grid-column: span 10;
+}
+.ol-col-11 {
+  grid-column: span 11;
+}
+.ol-col-12 {
+  grid-column: span 12;
+}
+
+.ol-col-1,
+.ol-col-2,
+.ol-col-3,
+.ol-col-4,
+.ol-col-5,
+.ol-col-6,
+.ol-col-7,
+.ol-col-8,
+.ol-col-9,
+.ol-col-10,
+.ol-col-11,
+.ol-col-12 {
+  min-width: 0;
+}
+
+.ol-grid-fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.ol-grid-fill > * {
+  min-width: 0;
+  min-height: 0;
+}
+
+.ol-grid-12[data-columns='1'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ol-grid-12[data-columns='1'] > * {
+  grid-column: 1 / -1;
+}
+
+.ol-grid-12[data-columns='2'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ol-grid-12[data-columns='2'] > * {
+  grid-column: auto;
+}
+
+/* Three cards across, then two, then one. */
+.ol-grid-cards > * {
+  grid-column: span 4;
+}
+
+@media (max-width: 1080px) {
+  .ol-grid-cards > * {
+    grid-column: span 6;
+  }
+}
+
+@media (max-width: 680px) {
+  .ol-grid-cards > * {
+    grid-column: span 12;
+  }
+}
+
+/* Four metric tiles across. */
+.ol-grid-stats > * {
+  grid-column: span 3;
+}
+
+@media (max-width: 900px) {
+  .ol-grid-stats > * {
+    grid-column: span 6;
+  }
+}
+
+@media (max-width: 640px) {
+  .ol-grid-stats > * {
+    grid-column: span 12;
+  }
+}
+
+/* Three metadata fields share one row. */
+.ol-grid-meta > * {
+  grid-column: span 4;
+}
+
+@media (max-width: 720px) {
+  .ol-grid-meta > * {
+    grid-column: span 12;
+  }
+}
+
+/* Four record fields share one row. */
+.ol-grid-quarters > * {
+  grid-column: span 3;
+}
+
+@media (max-width: 900px) {
+  .ol-grid-quarters > * {
+    grid-column: span 6;
+  }
+}
+
+@media (max-width: 640px) {
+  .ol-grid-quarters > * {
+    grid-column: span 12;
+  }
+}
+
+/* Ten equalizer bands: six across, then four, then two. */
+.ol-grid-bands > * {
+  grid-column: span 2;
+}
+
+@media (max-width: 900px) {
+  .ol-grid-bands > * {
+    grid-column: span 3;
+  }
+}
+
+@media (max-width: 560px) {
+  .ol-grid-bands > * {
+    grid-column: span 6;
+  }
+}
+
+/* Paired fields take half the pane. Five steps cannot divide 12, so each takes four columns. */
+.ol-grid-fields > * {
+  grid-column: span 6;
+}
+
+.ol-grid-steps > * {
+  grid-column: span 4;
+}
+
+@media (max-width: 720px) {
+  .ol-grid-fields > *,
+  .ol-grid-steps > * {
+    grid-column: span 12;
+  }
+}
+
+.ol-form-12 {
+  column-gap: var(--ol-grid-gutter);
+  row-gap: 8px;
+  align-items: center;
+}
+
+.ol-form-12 > :first-child {
+  grid-column: span 3;
+  min-width: 0;
+}
+
+.ol-form-12 > :last-child {
+  grid-column: span 9;
+  min-width: 0;
+}
+
+.ol-form-12[data-stacked='true'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ol-form-12[data-stacked='true'] > * {
+  grid-column: 1 / -1;
+}
+
+.ol-pipeline-grid > :nth-child(3n + 1),
+.ol-pipeline-grid > :nth-child(3n) {
+  grid-column: span 3;
+}
+
+.ol-pipeline-grid > :nth-child(3n + 2) {
+  grid-column: span 6;
+}
+
+html[data-ol-stacked-layout='true']
+  :is(
+    .ol-grid-12,
+    .ol-form-12,
+    .ol-translation-grid,
+    .ol-language-grid,
+    .ol-shortcuts-layout,
+    .ol-shortcut-row,
+    .ol-usage-history-grid,
+    .ol-model-workspace,
+    .ol-model-dialog-body,
+    .ol-model-facts,
+    .ol-channel-form-row,
+    .ol-omni-primary-fields,
+    .ol-omni-advanced-fields,
+    .ol-channel-model-tools,
+    .ol-guide-choices,
+    .ol-intent-options
+  ),
+html[data-ol-conservative-layout='true']
+  .ol-conservative-scope
+  :is(
+    .ol-grid-12,
+    .ol-form-12,
+    .ol-translation-grid,
+    .ol-language-grid,
+    .ol-shortcuts-layout,
+    .ol-shortcut-row,
+    .ol-usage-history-grid,
+    .ol-model-workspace,
+    .ol-model-dialog-body,
+    .ol-model-facts,
+    .ol-channel-form-row,
+    .ol-omni-primary-fields,
+    .ol-omni-advanced-fields,
+    .ol-channel-model-tools,
+    .ol-guide-choices,
+    .ol-intent-options
+  ) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-ol-stacked-layout='true']
+  :is(
+    .ol-grid-12,
+    .ol-form-12,
+    .ol-translation-grid,
+    .ol-language-grid,
+    .ol-shortcuts-layout,
+    .ol-shortcut-row,
+    .ol-usage-history-grid,
+    .ol-model-workspace,
+    .ol-model-dialog-body,
+    .ol-model-facts,
+    .ol-channel-form-row,
+    .ol-omni-primary-fields,
+    .ol-omni-advanced-fields,
+    .ol-channel-model-tools,
+    .ol-guide-choices,
+    .ol-intent-options
+  )
+  > *,
+html[data-ol-conservative-layout='true']
+  .ol-conservative-scope
+  :is(
+    .ol-grid-12,
+    .ol-form-12,
+    .ol-translation-grid,
+    .ol-language-grid,
+    .ol-shortcuts-layout,
+    .ol-shortcut-row,
+    .ol-usage-history-grid,
+    .ol-model-workspace,
+    .ol-model-dialog-body,
+    .ol-model-facts,
+    .ol-channel-form-row,
+    .ol-omni-primary-fields,
+    .ol-omni-advanced-fields,
+    .ol-channel-model-tools,
+    .ol-guide-choices,
+    .ol-intent-options
+  )
+  > * {
+  grid-column: 1 / -1 !important;
+}

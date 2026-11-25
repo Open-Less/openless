@@ -19,9 +19,10 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::polish::{
-    append_utf8_sse_chunk, apply_openai_compatible_thinking_control, chat_completions_url,
-    extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
-    openai_model_omits_custom_temperature, safe_str_slice, send_with_transient_retry, LLMError,
+    append_utf8_sse_chunk, apply_openai_compatible_thinking_control_with_effort,
+    chat_completions_url, extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
+    openai_model_omits_custom_temperature, openai_model_uses_max_completion_tokens, safe_str_slice,
+    send_with_transient_retry, LLMError,
 };
 
 pub const OMNI_GEMINI_PROVIDER_ID: &str = "gemini";
@@ -39,6 +40,10 @@ pub struct OmniConfig {
     pub extra_headers: HashMap<String, String>,
     pub temperature: Option<f32>,
     pub thinking_enabled: bool,
+    /// Per-request token cap selected by the post-ASR strategy.
+    pub max_tokens_override: Option<u32>,
+    /// Per-request reasoning effort selected by the post-ASR strategy.
+    pub reasoning_effort: Option<String>,
 }
 
 impl OmniConfig {
@@ -101,16 +106,27 @@ impl OpenAICompatibleOmni {
                 body["temperature"] = json!(temperature);
             }
         }
+        if let Some(max_tokens) = self.config.max_tokens_override {
+            let field = if self.config.provider_id.trim() == "openai"
+                && openai_model_uses_max_completion_tokens(&self.config.model)
+            {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            body[field] = json!(max_tokens);
+        }
         // DashScope Omni requests text-only output.
         if self.config.audio_requires_data_url() {
             body["modalities"] = json!(["text"]);
         }
-        apply_openai_compatible_thinking_control(
+        apply_openai_compatible_thinking_control_with_effort(
             &mut body,
             &self.config.provider_id,
             &self.config.base_url,
             &self.config.model,
             self.config.thinking_enabled,
+            self.config.reasoning_effort.as_deref(),
         );
         body
     }
@@ -388,13 +404,18 @@ impl OmniProvider {
                     label,
                 };
             }
-            let gemini_config = crate::llm_gemini::GeminiConfig::new(
+            let thinking_enabled = config
+                .reasoning_effort
+                .as_deref()
+                .map(|effort| effort != "none")
+                .unwrap_or(config.thinking_enabled);
+            let mut gemini_config = crate::llm_gemini::GeminiConfig::new(
                 config.api_key.clone(),
                 config.model.clone(),
                 config.base_url.clone(),
             )
-            .with_thinking_enabled(config.thinking_enabled);
-            let mut gemini_config = gemini_config;
+            .with_thinking_enabled(thinking_enabled)
+            .with_max_output_tokens(config.max_tokens_override);
             if let Some(temperature) = config.temperature {
                 gemini_config.temperature = temperature;
             }
@@ -518,6 +539,8 @@ mod tests {
             extra_headers: HashMap::new(),
             temperature: Some(0.3),
             thinking_enabled: false,
+            max_tokens_override: None,
+            reasoning_effort: None,
         }
     }
 
@@ -782,6 +805,20 @@ mod tests {
         // temperature is stored as f32 (0.3f32 serializes as 0.30000001192092896); compare with tolerance.
         assert!((body["temperature"].as_f64().unwrap() - 0.3).abs() < 1e-6);
         assert!(body.get("modalities").is_none());
+    }
+
+    #[test]
+    fn omni_body_applies_strategy_request_overrides() {
+        let mut omni = config();
+        omni.model = "gpt-5-mini".into();
+        omni.max_tokens_override = Some(321);
+        omni.reasoning_effort = Some("high".into());
+        let provider = OpenAICompatibleOmni::new(omni);
+        let body = provider.omni_body(false, vec![json!({"role": "user", "content": "x"})]);
+
+        assert_eq!(body["max_completion_tokens"], 321);
+        assert_eq!(body["reasoning_effort"], "high");
+        assert!(body.get("max_tokens").is_none());
     }
 
     #[test]

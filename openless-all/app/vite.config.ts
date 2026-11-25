@@ -43,6 +43,7 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       '@android': path.resolve(appRoot, 'android/frontend'),
+      '@': path.resolve(appRoot, 'third_party/rare-ui'),
     },
   },
   clearScreen: false,
@@ -74,7 +75,16 @@ export default defineConfig(async () => ({
           cssCodeSplit: false,
           rollupOptions: { output: { format: 'iife' as const, inlineDynamicImports: true } },
         }
-      : {}),
+      : !isMobileDev
+        ? {
+            rollupOptions: {
+              input: {
+                main: path.join(appRoot, 'index.html'),
+                askWindow: path.join(appRoot, 'ask-window/index.html'),
+              },
+            },
+          }
+        : {}),
     target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,

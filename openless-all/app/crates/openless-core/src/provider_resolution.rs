@@ -97,6 +97,7 @@ pub(crate) async fn resolve_selection_text_provider(
         preferences.pipeline_mode,
     );
     match mode {
+        PipelineMode::Deepseek => Ok(crate::deepseek_suite::invocation(false)),
         PipelineMode::Multimodal => {
             let mut invocation = resolve_session_provider(
                 credential_store,

@@ -10,18 +10,17 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 
-/** Keeps the OpenLess process alive while the system IME is active, without showing an overlay. */
+/** Keeps the runtime alive for IME or active authorization, without showing an overlay. */
 class OpenLessRuntimeService : Service() {
+    private var lastStartId: Int? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     // Registers this Service (not an Activity) as the Context every
     // Rust->Kotlin JNI call routes through — see
     // OpenLessNative.nativeRegisterActivityContext()'s doc comment for why.
-    // This Service starts in onCreate()/onCreateInputView() and is stopped
-    // in OpenLessImeService.onDestroy(), so the registration stays valid
-    // for as long as the IME itself is alive, independent of whether
-    // OpenLessBackendWarmupActivity (background warmup / settings host)
-    // exists, is backgrounded, or has been reclaimed by the OS.
+    // The IME and user-initiated authorization share this context lifetime,
+    // independent of whether the warmup/settings Activity still exists.
     override fun onCreate() {
         super.onCreate()
         // #region agent log
@@ -40,9 +39,11 @@ class OpenLessRuntimeService : Service() {
                 )
             }
         // #endregion
+        runningService = this
     }
 
     override fun onDestroy() {
+        if (runningService === this) runningService = null
         // #region agent log
         android.util.Log.i(
             "OpenLessDbg58c22b",
@@ -84,34 +85,55 @@ class OpenLessRuntimeService : Service() {
             Log.w(TAG, "Tauri RunEvent::Exit fired; recording and re-checking backend")
             OpenLessProcessRestartStats(this, "rtexit").recordStart()
         }
-        try {
-            val notification = buildNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    } else {
-                        0
-                    },
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
+        // Serialize demand snapshots AND Android start/stop requests. A JNI worker
+        // cannot acquire between an idle decision and its stop request.
+        return synchronized(demandLock) {
+            if (runningService !== this) return@synchronized START_NOT_STICKY
+            lastStartId = startId
+            val requested = runtimeRequestedLocked()
+            // A foreground start must be promoted even if its caller has already
+            // released demand. Android treats stopping before promotion as a crash.
+            if (!requested && intent?.action != ACTION_START_FOREGROUND_RUNTIME) {
+                stopRuntimeIfLatestStart()
+                return@synchronized START_NOT_STICKY
             }
-        } catch (error: Throwable) {
-            Log.e(TAG, "failed to promote IME runtime service", error)
-            stopSelf(startId)
-            return START_NOT_STICKY
+            try {
+                val notification = buildNotification()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                        } else {
+                            0
+                        },
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            } catch (error: Throwable) {
+                Log.e(TAG, "failed to promote runtime service", error)
+                stopRuntimeIfLatestStart()
+                return@synchronized START_NOT_STICKY
+            }
+            if (!requested) stopRuntimeIfLatestStart()
+            // START_STICKY keeps the backend service alive, but it must not launch
+            // a visible Tauri Activity merely because the service restarted or a
+            // previous Activity was destroyed. Doing so steals the foreground from
+            // the app the user is currently using and, after Wry has destroyed the
+            // old WebView, can create an empty black Activity. UI warmup remains
+            // explicitly initiated by the launcher/settings or the IME path when
+            // an input interaction actually requires it.
+            if (imeRequested) START_STICKY else START_NOT_STICKY
         }
-        // START_STICKY keeps the backend service alive, but it must not launch
-        // a visible Tauri Activity merely because the service restarted or a
-        // previous Activity was destroyed. Doing so steals the foreground from
-        // the app the user is currently using and, after Wry has destroyed the
-        // old WebView, can create an empty black Activity. UI warmup remains
-        // explicitly initiated by the launcher/settings or the IME path when
-        // an input interaction actually requires it.
-        return if (authorizationActive() && !imeRequested) START_NOT_STICKY else START_STICKY
+    }
+
+    /** Main thread, with demandLock held. Android removes the notification when the service stops. */
+    private fun stopRuntimeIfLatestStart() {
+        val startId = lastStartId ?: return
+        // A newer request may still be waiting for its onStartCommand callback.
+        if (stopSelfResult(startId)) runningService = null
     }
 
     private fun buildNotification(): Notification {
@@ -134,7 +156,7 @@ class OpenLessRuntimeService : Service() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, channelId)
                 .setContentTitle(if (imeRequested) "OpenLess 输入法" else "OpenLess")
-                .setContentText(if (imeRequested) "输入法面板已就绪" else "等待 ChatGPT 授权")
+                .setContentText(if (imeRequested) "输入法面板已就绪" else "后台运行服务已就绪")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .build()
@@ -142,7 +164,7 @@ class OpenLessRuntimeService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
                 .setContentTitle(if (imeRequested) "OpenLess 输入法" else "OpenLess")
-                .setContentText(if (imeRequested) "输入法面板已就绪" else "等待 ChatGPT 授权")
+                .setContentText(if (imeRequested) "输入法面板已就绪" else "后台运行服务已就绪")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .build()
@@ -151,30 +173,78 @@ class OpenLessRuntimeService : Service() {
 
     companion object {
         @Volatile var imeRequested = false
-        private val authorizationUsers = java.util.concurrent.atomic.AtomicInteger(0)
-        fun authorizationActive(): Boolean = authorizationUsers.get() > 0
+            private set
+        private val demandLock = Any()
+        private var authorizationUsers = 0
+        private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        // Service callbacks and reconciliation run on the main thread only.
+        private var runningService: OpenLessRuntimeService? = null
+
+        fun authorizationActive(): Boolean = synchronized(demandLock) { authorizationUsers > 0 }
+        private fun runtimeRequestedLocked(): Boolean = imeRequested || authorizationUsers > 0
+
+        private fun startRuntimeLocked(context: android.content.Context) {
+            val intent = Intent(context, OpenLessRuntimeService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent.setAction(ACTION_START_FOREGROUND_RUNTIME))
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun setImeRequested(context: android.content.Context, requested: Boolean) {
+            synchronized(demandLock) {
+                imeRequested = requested
+                if (requested) startRuntimeLocked(context)
+                else reconcileDemand(context)
+            }
+        }
 
         @androidx.annotation.Keep
         @JvmStatic fun acquireAuthorization(context: android.content.Context) {
-            authorizationUsers.incrementAndGet()
-            try {
-                val intent = Intent(context, OpenLessRuntimeService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-                else context.startService(intent)
-            } catch (error: Throwable) {
-                authorizationUsers.decrementAndGet()
-                throw error
+            synchronized(demandLock) {
+                authorizationUsers += 1
+                try {
+                    startRuntimeLocked(context)
+                } catch (error: Throwable) {
+                    authorizationUsers -= 1
+                    throw error
+                }
             }
         }
 
         @androidx.annotation.Keep
         @JvmStatic fun releaseAuthorization(context: android.content.Context) {
-            val remaining = authorizationUsers.updateAndGet { maxOf(0, it - 1) }
-            if (remaining == 0 && !imeRequested) context.stopService(Intent(context, OpenLessRuntimeService::class.java))
+            synchronized(demandLock) {
+                authorizationUsers = maxOf(0, authorizationUsers - 1)
+            }
+            reconcileDemand(context)
+        }
+
+        private fun reconcileDemand(context: android.content.Context) {
+            val application = context.applicationContext
+            mainHandler.post {
+                synchronized(demandLock) {
+                    // Re-read CURRENT demand after any newer JNI acquire/IME start.
+                    // In particular, never post a captured stopService decision.
+                    if (!runtimeRequestedLocked()) {
+                        runningService?.stopRuntimeIfLatestStart()
+                    } else if (runningService?.lastStartId != null) {
+                        // Re-deliver onStartCommand to refresh the notification AND
+                        // sticky policy. This is an already-running service, not a
+                        // new background startForegroundService authorization request.
+                        runCatching { application.startService(Intent(application, OpenLessRuntimeService::class.java)) }
+                            .onFailure { Log.w(TAG, "failed to reconcile runtime demand", it) }
+                    }
+                    // If creation is still queued, its onStartCommand reads current
+                    // demand. No release/IME teardown may resurrect a missing service.
+                }
+            }
         }
 
         private const val NOTIFICATION_ID = 42002
         private const val TAG = "OpenLessRuntimeService"
+        private const val ACTION_START_FOREGROUND_RUNTIME = "com.openless.app.action.START_FOREGROUND_RUNTIME"
         private const val ACTION_RUNTIME_ACTIVITY_DESTROYED = "com.openless.app.action.RUNTIME_ACTIVITY_DESTROYED"
         private const val EXTRA_DESTROY_REASON = "reason"
 
@@ -186,13 +256,9 @@ class OpenLessRuntimeService : Service() {
         private const val ACTION_RUNTIME_EXITED = "com.openless.app.action.RUNTIME_EXITED"
 
         /**
-         * Called from OpenLessBackendWarmupActivity.onDestroy() — this
-         * service is the supervisor that decides whether/when to relaunch
-         * the runtime host Activity (via ensureBackendReady(), already run
-         * unconditionally at the end of onStartCommand()), not the dying
-         * Activity deciding for itself. The action is only for logging here
-         * today; onStartCommand() already re-checks on every start
-         * regardless of why it was started.
+         * Called from OpenLessBackendWarmupActivity.onDestroy() to retain the
+         * lifecycle counters. onStartCommand() reconciles current IME/auth demand;
+         * teardown alone neither keeps an idle FGS alive nor relaunches an Activity.
          *
          * @param reason one of "config" (isChangingConfigurations was true —
          *   a rotation/density/locale change, not a kill), "finishing"

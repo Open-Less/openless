@@ -59,10 +59,6 @@ const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 4096;
 /// Shed optional enhancement before a temporary backlog can stop capture.
 const AUDIO_PROCESSING_SHED_ENHANCEMENT_US: u64 = 500_000;
 static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
-/// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
-/// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
-/// archive messages accepted before stop are fully flushed.
-const WAV_ARCHIVE_QUEUE_CAPACITY: usize = 256;
 /// The provisional capture cap is 500 ms at the canonical 16 kHz mono i16 format.
 pub(crate) const STAGED_CAPTURE_MAX_BYTES: usize = TARGET_SAMPLE_RATE as usize;
 /// Voice handoff staging keeps up to 30 seconds while the formal dictation session is prepared.
@@ -365,10 +361,11 @@ enum WavArchiveMessage {
 }
 
 /// WAV archive entry point off the realtime audio callback. The callback only copies PCM and
-/// pushes messages into a bounded channel; file writing, seek, and sync all run on a dedicated
-/// thread.
+/// queues every frame without blocking on disk; file writing, seek, and sync run
+/// on a dedicated thread. A temporary disk backlog must not punch holes in a
+/// recoverable long recording.
 struct WavArchiveWriter {
-    sender: SyncSender<WavArchiveMessage>,
+    sender: Sender<WavArchiveMessage>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
     queue_full_warned: AtomicBool,
 }
@@ -376,7 +373,7 @@ struct WavArchiveWriter {
 impl WavArchiveWriter {
     fn create(path: &Path) -> std::io::Result<Self> {
         let archiver = WavArchiver::create(path)?;
-        let (sender, receiver) = sync_channel::<WavArchiveMessage>(WAV_ARCHIVE_QUEUE_CAPACITY);
+        let (sender, receiver) = channel::<WavArchiveMessage>();
         let join_handle = thread::Builder::new()
             .name("openless-wav-archive".into())
             .spawn(move || run_wav_archive_writer(archiver, receiver))?;
@@ -388,19 +385,9 @@ impl WavArchiveWriter {
     }
 
     fn append(&self, pcm_bytes: &[u8]) {
-        match self
-            .sender
-            .try_send(WavArchiveMessage::Pcm(pcm_bytes.to_vec()))
-        {
+        match self.sender.send(WavArchiveMessage::Pcm(pcm_bytes.to_vec())) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
-                    log::warn!(
-                        "[recorder] wav archive queue is full; dropping archive PCM until the writer catches up"
-                    );
-                }
-            }
-            Err(TrySendError::Disconnected(_)) => {
+            Err(_) => {
                 if !self.queue_full_warned.swap(true, Ordering::Relaxed) {
                     log::warn!("[recorder] wav archive writer stopped before PCM was queued");
                 }
@@ -482,17 +469,16 @@ impl RawTap {
         }
     }
 
-    fn append_raw(&self, samples: &[f32]) {
+    fn append_pcm(&self, pcm: &[u8]) {
         if self.raw_writer.is_none() && self.write_processed {
             return;
         }
-        let pcm = openless_core::pcm_f32_to_i16_le(samples);
         if let Some(raw) = self.raw_writer.as_ref() {
-            raw.append(&pcm);
+            raw.append(pcm);
         }
         if !self.write_processed {
             if let Some(canonical) = self.canonical.as_ref() {
-                canonical.append(&pcm);
+                canonical.append(pcm);
             }
         }
     }
@@ -503,6 +489,7 @@ struct ForwardTarget {
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
     archive: Option<Arc<WavArchiveWriter>>,
+    write_processed: bool,
 }
 
 enum CaptureSinkState {
@@ -541,7 +528,7 @@ impl CaptureSink {
 
     fn deliver(target: &ForwardTarget, pcm: &[u8]) {
         target.consumer.consume_pcm_chunk(pcm);
-        if let Some(archive) = target.archive.as_ref() {
+        if let Some(archive) = target.archive.as_ref().filter(|_| target.write_processed) {
             archive.append(pcm);
         }
     }
@@ -555,8 +542,9 @@ impl CaptureSink {
     ) -> Result<(), RecorderError> {
         // 只要处理前时，主档案由 DSP 线程写原始 PCM，这里就不能再写处理后。
         let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
-        *self.raw_tap.lock() = raw_tap;
+        let mut tap_slot = self.raw_tap.lock();
         let _delivery = self.delivery_gate.lock();
+        *tap_slot = raw_tap;
         let prefix = {
             let mut state = self.state.lock();
             let CaptureSinkState::Staging { pcm } = &mut *state else {
@@ -574,7 +562,8 @@ impl CaptureSink {
             *state = CaptureSinkState::Promoted(ForwardTarget {
                 consumer,
                 level_handler,
-                archive: if write_processed { archive } else { None },
+                archive,
+                write_processed,
             });
             prefix
         };
@@ -587,6 +576,12 @@ impl CaptureSink {
         };
         if let Some(target) = target {
             if !prefix.is_empty() {
+                if !target.write_processed {
+                    // The staged prefix predates RawTap registration; archive it once.
+                    if let Some(archive) = &target.archive {
+                        archive.append(&prefix);
+                    }
+                }
                 Self::deliver(&target, &prefix);
                 (target.level_handler)(pcm_rms_level(&prefix));
             }
@@ -626,6 +621,7 @@ impl AudioConsumer for CaptureSink {
                     consumer: Arc::clone(&target.consumer),
                     level_handler: Arc::clone(&target.level_handler),
                     archive: target.archive.clone(),
+                    write_processed: target.write_processed,
                 }),
                 CaptureSinkState::Discarded => None,
             }
@@ -908,8 +904,10 @@ impl WarmCaptureSink {
         archive: Option<Arc<WavArchiveWriter>>,
         raw_tap: Option<Arc<RawTap>>,
     ) -> Result<(), RecorderError> {
+        let mut tap_slot = self.raw_tap.lock();
         let _delivery = self.delivery_gate.lock();
-        *self.raw_tap.lock() = raw_tap;
+        let write_processed = raw_tap.as_ref().map_or(true, |tap| tap.write_processed);
+        *tap_slot = raw_tap;
         let (prefix, staged_level) = {
             let mut state = self.state.lock();
             let WarmCaptureSinkState::Ring { claims, .. } = &mut *state;
@@ -930,6 +928,7 @@ impl WarmCaptureSink {
                     consumer,
                     level_handler,
                     archive,
+                    write_processed,
                 }),
             );
             (prefix, max_level)
@@ -949,6 +948,11 @@ impl WarmCaptureSink {
             .flatten();
         if let Some(target) = target {
             if !prefix.is_empty() {
+                if !target.write_processed {
+                    if let Some(archive) = &target.archive {
+                        archive.append(&prefix);
+                    }
+                }
                 CaptureSink::deliver(&target, &prefix);
                 if let Some(activation) = activation {
                     self.deliver_activation(&activation, &prefix);
@@ -1236,6 +1240,8 @@ pub(crate) struct WarmCaptureHub {
     runtime_errors: Mutex<HashMap<u64, Sender<RecorderError>>>,
     runtime_fallback_claims: Mutex<HashSet<u64>>,
     enabled: AtomicBool,
+    standby_policy: Mutex<(u64, bool)>,
+    standby_requested: AtomicBool,
     preview_active: AtomicBool,
     cold_capture_active: AtomicBool,
     pending_configuration:
@@ -1254,6 +1260,8 @@ impl WarmCaptureHub {
             runtime_errors: Mutex::new(HashMap::new()),
             runtime_fallback_claims: Mutex::new(HashSet::new()),
             enabled: AtomicBool::new(false),
+            standby_policy: Mutex::new((0, false)),
+            standby_requested: AtomicBool::new(false),
             preview_active: AtomicBool::new(false),
             cold_capture_active: AtomicBool::new(false),
             pending_configuration: Mutex::new(None),
@@ -1350,6 +1358,21 @@ impl WarmCaptureHub {
         }
     }
 
+    /// A linked pause overrides idle prewarming, never a promoted explicit recording.
+    pub(crate) fn set_capture_paused(&self, revision: u64, paused: bool) {
+        let _lifecycle = self.lifecycle_gate.lock();
+        {
+            let mut policy = self.standby_policy.lock();
+            if revision < policy.0 || *policy == (revision, paused) {
+                return;
+            }
+            *policy = (revision, paused);
+        }
+        let device = self.device_name.lock().clone();
+        let processing = *self.processing_config.lock();
+        self.configure_locked(self.standby_requested.load(Ordering::Acquire), device, processing);
+    }
+
     pub(crate) fn configure(
         &self,
         enabled: bool,
@@ -1357,6 +1380,7 @@ impl WarmCaptureHub {
         processing: openless_core::AudioProcessingConfig,
     ) {
         let _lifecycle = self.lifecycle_gate.lock();
+        self.standby_requested.store(enabled, Ordering::Release);
         self.configure_locked(enabled, device_name, processing);
     }
 
@@ -1366,6 +1390,8 @@ impl WarmCaptureHub {
         device_name: Option<String>,
         processing: openless_core::AudioProcessingConfig,
     ) {
+        let paused = self.standby_policy.lock().1;
+        let enabled = enabled && !paused;
         let device_changed = *self.device_name.lock() != device_name;
         let config_changed = *self.processing_config.lock() != processing;
         if self.cold_capture_active.load(Ordering::Acquire) {
@@ -1373,6 +1399,12 @@ impl WarmCaptureHub {
             return;
         }
         if (device_changed || config_changed || !enabled) && self.sink.has_claims() {
+            // A staged handoff already owns body PCM. Let it promote and finalize;
+            // invalidating it would lose the prefix and reopen a cold microphone.
+            if paused {
+                *self.pending_configuration.lock() = Some((enabled, device_name, processing));
+                return;
+            }
             let staging_claims = self.sink.staging_claim_ids();
             self.runtime_fallback_claims.lock().extend(staging_claims);
             *self.pending_configuration.lock() = Some((enabled, device_name, processing));
@@ -1429,7 +1461,9 @@ impl WarmCaptureHub {
     }
 
     fn ensure_started_locked(&self, device_name: Option<String>) -> Result<(), RecorderError> {
-        if !self.enabled.load(Ordering::Acquire) {
+        if !self.enabled.load(Ordering::Acquire)
+            || (self.standby_policy.lock().1 && !self.sink.has_promoted_claims())
+        {
             return Err(RecorderError::EngineFailed(
                 "warm capture is disabled".into(),
             ));
@@ -1602,6 +1636,9 @@ impl WarmCaptureHub {
         }
         loop {
             let lifecycle = self.lifecycle_gate.lock();
+            if self.standby_policy.lock().1 {
+                return Err(RecorderError::EngineFailed("standby capture is paused".into()));
+            }
             let desired_processing = processing.unwrap_or(*self.processing_config.lock());
             if *self.device_name.lock() != device_name
                 || *self.processing_config.lock() != desired_processing
@@ -2278,35 +2315,18 @@ fn run_audio_thread(
     runtime_error_tx: Sender<RecorderError>,
 ) {
     let far_end_for_reference = far_end.clone();
-    let (reference_stream, reference) = if processing.echo_cancellation_enabled {
-        match playback_reference::start(&stop_flag, &state.diagnostics) {
-            Ok((stream, buffer)) => (Some(stream), Some(buffer)),
-            Err(error) => {
-                log::warn!(
-                    "[recorder] playback reference unavailable; recording without AEC: {error}"
-                );
-                (None, None)
-            }
-        }
-    } else {
-        (None, None)
-    };
-    state.diagnostics.event(
-        "P1",
-        "[\"H1\",\"H2\",\"H3\"]",
-        "reference_start",
-        if reference.is_some() {
-            "available"
-        } else {
-            "fallback"
-        },
-        &format!(
-            "{{\"aec_requested\":{},\"reference_available\":{}}}",
-            processing.echo_cancellation_enabled,
-            reference.is_some()
-        ),
-    );
-    *state.reference.lock() = reference;
+    // The microphone must start before any playback tap. Creating a process tap
+    // reconfigures Core Audio and has been measured at about two seconds; the
+    // processor already treats a missing reference as "no cancellation yet".
+    if !processing.echo_cancellation_enabled {
+        state.diagnostics.event(
+            "P1",
+            "[\"H1\",\"H2\",\"H3\"]",
+            "reference_start",
+            "fallback",
+            "{\"aec_requested\":false,\"reference_available\":false}",
+        );
+    }
     let (processor, frame_tx) = match AudioProcessingWorker::start_with_targets(
         processing,
         consumer,
@@ -2325,19 +2345,6 @@ fn run_audio_thread(
         }
     };
     *state.processor_sender.lock() = Some(frame_tx.clone());
-    // 扬声器回环参考：`cpal::Stream` 不是 Send，只能在音频线程里创建，
-    // 并随本线程结束一起释放（和麦克风流一样）。
-    let _reference_stream = far_end_for_reference.as_ref().and_then(|queue| {
-        match start_reference_stream(&stop_flag, queue) {
-            Ok(stream) => Some(stream),
-            Err(error) => {
-                log::warn!(
-                    "[recorder] speaker reference unavailable; continuing without AEC: {error}"
-                );
-                None
-            }
-        }
-    });
     let (stream, state) = match build_input_stream(
         microphone_device_name,
         frame_tx.clone(),
@@ -2358,7 +2365,61 @@ fn run_audio_thread(
     };
 
     // build_input_stream returns only after native playback starts successfully.
+    // Playback taps stay after this signal: they must not keep the microphone closed.
     let _ = startup_tx.send(Ok(()));
+    let playback_reference = if processing.echo_cancellation_enabled {
+        let stop = Arc::clone(&stop_flag);
+        let reference_state = Arc::clone(&state);
+        let diagnostics = Arc::clone(&state.diagnostics);
+        thread::Builder::new()
+            .name("openless-playback-reference".into())
+            .spawn(move || {
+                let (stream, outcome) = match playback_reference::start(&stop, &diagnostics) {
+                    Ok((stream, buffer)) => {
+                        *reference_state.reference.lock() = Some(buffer);
+                        (Some(stream), "available")
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[recorder] playback reference unavailable; recording without AEC: {error}"
+                        );
+                        (None, "fallback")
+                    }
+                };
+                diagnostics.event(
+                    "P1",
+                    "[\"H1\",\"H2\",\"H3\"]",
+                    "reference_start",
+                    outcome,
+                    &format!(
+                        "{{\"aec_requested\":true,\"reference_available\":{}}}",
+                        outcome == "available"
+                    ),
+                );
+                if let Some(stream) = stream {
+                    while !stop.load(Ordering::SeqCst) {
+                        thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    drop(stream);
+                }
+            })
+            .ok()
+    } else {
+        None
+    };
+    // `cpal::Stream` is !Send, so the speaker loopback stays on this thread,
+    // but only after the microphone has already started.
+    let speaker_reference = far_end_for_reference.as_ref().and_then(|queue| {
+        match start_reference_stream(&stop_flag, queue) {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                log::warn!(
+                    "[recorder] speaker reference unavailable; continuing without AEC: {error}"
+                );
+                None
+            }
+        }
+    });
 
     // Start the liveness watchdog: detect the capture callback silently stopping.
     const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000; // check once per second
@@ -2483,7 +2544,7 @@ fn run_audio_thread(
         }
     }
     drop(stream);
-    drop(reference_stream);
+    drop(speaker_reference);
     log::info!("[recorder] cpal Stream dropped (mic released)");
     *state.processor_sender.lock() = None;
     drop(frame_tx);
@@ -2494,6 +2555,10 @@ fn run_audio_thread(
     if let Some(handle) = watchdog_handle {
         let _ = handle.join();
     }
+    // Detach the playback tap. Joining it would hold Recorder::stop for Core
+    // Audio teardown, the same reconfiguration that used to delay the microphone.
+    // The tap thread owns its stream and exits on stop_flag.
+    drop(playback_reference);
 }
 
 /// Try the selected microphone's native format before other advertised formats/devices.
@@ -2709,6 +2774,19 @@ fn start_native_config(
     Ok((stream, Arc::clone(state)))
 }
 
+/// The saved microphone is usually the default device. Asking every input for
+/// its name first lets one slow device (a sleeping Bluetooth headset, an
+/// aggregate device) hold the microphone closed for about a second.
+pub(crate) fn default_input_matches_preference(
+    preferred: Option<&str>,
+    default_name: Option<&str>,
+) -> bool {
+    match preferred.map(str::trim).filter(|name| !name.is_empty()) {
+        None => true,
+        Some(preferred) => default_name == Some(preferred),
+    }
+}
+
 fn select_input_device(
     host: &cpal::Host,
     microphone_device_name: Option<&str>,
@@ -2716,6 +2794,25 @@ fn select_input_device(
     let preferred = microphone_device_name
         .map(str::trim)
         .filter(|name| !name.is_empty());
+    if let Some(device) = host.default_input_device() {
+        if default_input_matches_preference(preferred, device.name().ok().as_deref()) {
+            return Ok(device);
+        }
+        let devices = host
+            .input_devices()
+            .map_err(|e| RecorderError::EngineFailed(format!("input_devices: {e}")))?;
+        for candidate in devices {
+            if candidate.name().ok().as_deref() == preferred {
+                return Ok(candidate);
+            }
+        }
+        log::warn!(
+            "[recorder] preferred input device not found; falling back to default: {}",
+            preferred.unwrap_or_default()
+        );
+        return Ok(device);
+    }
+
     if let Some(preferred) = preferred {
         let devices = host
             .input_devices()
@@ -2728,10 +2825,6 @@ fn select_input_device(
         log::warn!(
             "[recorder] preferred input device not found; falling back to default: {preferred}"
         );
-    }
-
-    if let Some(device) = host.default_input_device() {
-        return Ok(device);
     }
     host.input_devices()
         .map_err(|error| RecorderError::EngineFailed(format!("input_devices: {error}")))?
@@ -3059,6 +3152,7 @@ impl AudioProcessingWorker {
                 #[cfg(target_os = "android")]
                 android_capture::prioritize_current_thread();
                 let mut processor = openless_core::AudioProcessor::new(processing);
+                let mut raw_normalizer = openless_core::audio::PcmNormalizer::default();
                 if let Some(queue) = far_end.clone() {
                     processor.attach_far_end(queue);
                 }
@@ -3081,23 +3175,21 @@ impl AudioProcessingWorker {
                         AudioProcessingMessage::Frame(frame) => {
                             #[cfg(target_os = "android")]
                             processor.set_monitoring_enabled(android_capture::monitoring_enabled());
-                            // 「处理前」的原始帧：额外 raw 档案永远拿原始 PCM；
-                            // 只要处理前、不要处理后时，主档案也写原始 PCM，回退与
-                            // 播放继续可用，且不会多出一份重复文件。
-                            if raw_archiver.is_some() || !write_processed {
-                                let pcm = openless_core::pcm_f32_to_i16_le(&frame.samples);
+                            // Raw means before enhancement, still canonical 16 kHz mono PCM.
+                            // Hold promotion ownership across raw and processed delivery so a
+                            // single frame cannot straddle the staged/live archive transition.
+                            let tap_slot = raw_tap_slot.as_ref().map(|slot| slot.lock());
+                            if let Some(raw_chunk) = raw_normalizer.process(&frame.samples, frame.channels, frame.input_sample_rate) {
                                 if let Some(raw) = &raw_archiver {
-                                    raw.append(&pcm);
+                                    raw.append(&raw_chunk.pcm_i16_le);
                                 }
                                 if !write_processed {
                                     if let Some(canonical) = &archiver {
-                                        canonical.append(&pcm);
+                                        canonical.append(&raw_chunk.pcm_i16_le);
                                     }
                                 }
-                            }
-                            if let Some(slot) = raw_tap_slot.as_ref() {
-                                if let Some(tap) = slot.lock().clone() {
-                                    tap.append_raw(&frame.samples);
+                                if let Some(tap) = tap_slot.as_ref().and_then(|slot| slot.as_ref()) {
+                                    tap.append_pcm(&raw_chunk.pcm_i16_le);
                                 }
                             }
                             let queued_us = backlog.micros.load(Ordering::Acquire);
@@ -3118,6 +3210,7 @@ impl AudioProcessingWorker {
                             ) {
                                 deliver(chunk);
                             }
+                            drop(tap_slot);
                             #[cfg(target_os = "android")]
                             android_capture::publish_monitor(&processor);
                         }
@@ -3127,6 +3220,7 @@ impl AudioProcessingWorker {
                             }
                             // A warm microphone reuses this worker across recording segments.
                             processor = openless_core::AudioProcessor::new(processing);
+                            raw_normalizer = openless_core::audio::PcmNormalizer::default();
                             enhancement_enabled = processing.enhancement_enabled;
                             let _ = done.send(());
                         }
@@ -3525,6 +3619,47 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex as StdMutex};
 
+    fn archive_test_path(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}.wav",
+            std::process::id(),
+            NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
+        ))
+    }
+
+    #[test]
+    fn wav_archive_keeps_every_frame_when_disk_worker_is_delayed() {
+        let path = archive_test_path("openless-archive");
+        let archiver = WavArchiver::create(&path).unwrap();
+        let (sender, receiver) = channel();
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let worker_start = start.clone();
+        let join_handle = thread::spawn(move || {
+            worker_start.wait();
+            run_wav_archive_writer(archiver, receiver);
+        });
+        let writer = WavArchiveWriter {
+            sender,
+            join_handle: Mutex::new(Some(join_handle)),
+            queue_full_warned: AtomicBool::new(false),
+        };
+        let mut expected = Vec::new();
+        for index in 0..1024_u16 {
+            let pcm = index.to_le_bytes().repeat(320);
+            writer.append(&pcm);
+            expected.extend_from_slice(&pcm);
+        }
+        start.wait();
+        writer.finish();
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], expected);
+        assert_eq!(
+            u32::from_le_bytes(wav[40..44].try_into().unwrap()) as usize,
+            expected.len()
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[derive(Default)]
     struct RecordingConsumer {
         chunks: StdMutex<Vec<Vec<u8>>>,
@@ -3539,6 +3674,120 @@ mod tests {
         fn finish_segment(&self) {
             *self.segment_flushes.lock().unwrap() += 1;
         }
+    }
+
+    #[test]
+    fn raw_only_archive_keeps_staged_prefix_without_duplicating_live_processed_pcm() {
+        for warm in [false, true] {
+            let path = archive_test_path("openless-prefix");
+            let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
+            let raw = Arc::new(RawTap::new(Some(writer.clone()), None, false));
+            let consumer = Arc::new(RecordingConsumer::default());
+            let prefix = openless_core::pcm_f32_to_i16_le(&[0.1, 0.2]);
+            let live_raw = [0.3, 0.4];
+            let live_processed = openless_core::pcm_f32_to_i16_le(&[0.31, 0.41]);
+            if warm {
+                let sink = WarmCaptureSink::new(64);
+                sink.arm(17, false).unwrap();
+                sink.consume_pcm_chunk(&prefix);
+                sink.promote(
+                    17,
+                    consumer.clone(),
+                    Arc::new(|_| {}),
+                    Some(writer.clone()),
+                    Some(raw.clone()),
+                )
+                .unwrap();
+                raw.append_pcm(&openless_core::pcm_f32_to_i16_le(&live_raw));
+                sink.consume_pcm_chunk(&live_processed);
+            } else {
+                let sink = CaptureSink::new(64);
+                sink.consume_pcm_chunk(&prefix);
+                sink.promote(
+                    consumer.clone(),
+                    Arc::new(|_| {}),
+                    Some(writer.clone()),
+                    Some(raw.clone()),
+                )
+                .unwrap();
+                raw.append_pcm(&openless_core::pcm_f32_to_i16_le(&live_raw));
+                sink.consume_pcm_chunk(&live_processed);
+            }
+            writer.finish();
+            let wav = std::fs::read(&path).unwrap();
+            let mut expected = prefix.clone();
+            expected.extend(openless_core::pcm_f32_to_i16_le(&live_raw));
+            assert_eq!(&wav[44..], expected);
+            assert_eq!(
+                consumer.chunks.lock().unwrap().concat(),
+                [prefix, live_processed].concat()
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn raw_archive_normalizes_native_stereo_rate_to_the_canonical_wav_format() {
+        let path = archive_test_path("openless-raw-format");
+        let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (worker, sender) = AudioProcessingWorker::start_with_targets(
+            Default::default(),
+            consumer.clone(),
+            Arc::new(|_| {}),
+            Some(writer.clone()),
+            None,
+            Arc::new(StreamState::new()),
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        let epoch = std::time::Instant::now();
+        for index in 0..100 {
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    captured_at: epoch + std::time::Duration::from_millis(index * 10),
+                    samples: [0.2_f32, 0.4].repeat(480),
+                    channels: 2,
+                    input_sample_rate: 48_000,
+                }))
+                .unwrap();
+        }
+        drop(sender);
+        worker.finish();
+        writer.finish();
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(wav.len(), 44 + 16_000 * 2);
+        assert_eq!(&wav[44..], consumer.chunks.lock().unwrap().concat());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn raw_archive_resampling_restarts_with_each_warm_recording_segment() {
+        let path = archive_test_path("openless-raw-segments");
+        let writer = Arc::new(WavArchiveWriter::create(&path).unwrap());
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (worker, sender) = AudioProcessingWorker::start_with_targets(
+            Default::default(), consumer.clone(), Arc::new(|_| {}), Some(writer.clone()), None,
+            Arc::new(StreamState::new()), false, None, None,
+        ).unwrap();
+        for _ in 0..2 {
+            sender.send(AudioProcessingMessage::Frame(RawAudioFrame {
+                captured_at: std::time::Instant::now(), samples: vec![0.3; 1001],
+                channels: 1, input_sample_rate: 44_100,
+            })).unwrap();
+            let (done, ack) = channel();
+            sender.send(AudioProcessingMessage::Flush(done)).unwrap();
+            ack.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        }
+        drop(sender);
+        worker.finish();
+        writer.finish();
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], consumer.chunks.lock().unwrap().concat());
+        assert_eq!(wav.len() - 44, 364 * 2 * 2);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -3923,6 +4172,74 @@ mod tests {
         assert!(warm_capture_enabled(true, false));
         assert!(warm_capture_enabled(false, true));
         assert!(!warm_capture_enabled(false, false));
+    }
+
+    #[test]
+    fn linked_pause_overrides_prewarm_saved_configuration_and_cold_recovery() {
+        let hub = WarmCaptureHub::new();
+        hub.set_capture_paused(1, true);
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
+        hub.begin_cold_capture().unwrap();
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        hub.end_cold_capture();
+        hub.resume_after_cold_capture();
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
+        hub.set_capture_paused(0, false);
+        assert!(hub.standby_policy.lock().1);
+        assert!(hub.arm(99, None, openless_core::AudioProcessingConfig::default()).is_err());
+    }
+
+    #[test]
+    fn linked_pause_keeps_staged_voice_body_until_promotion_and_finalization() {
+        let hub = WarmCaptureHub::new();
+        let key = voice_capture_key(9);
+        let consumer = Arc::new(RecordingConsumer::default());
+        let body = [0x00, 0x40].repeat(160);
+        hub.sink.arm_with_limit(key, false, STAGED_CAPTURE_MAX_BYTES).unwrap();
+        hub.sink.consume_pcm_chunk(&body);
+        hub.enabled.store(true, Ordering::Release);
+        hub.set_capture_paused(1, true);
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        assert!(hub.sink.staging_claim_ids().contains(&key));
+        assert!(!hub.runtime_fallback_claims.lock().contains(&key));
+        hub.sink.promote(key, consumer.clone(), Arc::new(|_| {}), None, None).unwrap();
+        assert_eq!(consumer.chunks.lock().unwrap().concat(), body);
+        hub.release_claim(key);
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
+    }
+
+    #[test]
+    fn linked_pause_preserves_promoted_recording_until_its_claim_releases() {
+        let hub = WarmCaptureHub::new();
+        let consumer = Arc::new(RecordingConsumer::default());
+        hub.sink.arm_with_limit(7, false, STAGED_CAPTURE_MAX_BYTES).unwrap();
+        hub.sink.promote(7, consumer, Arc::new(|_| {}), None, None).unwrap();
+        hub.enabled.store(true, Ordering::Release);
+        hub.set_capture_paused(1, true);
+        assert!(hub.sink.has_promoted_claims());
+        hub.configure(true, None, openless_core::AudioProcessingConfig::default());
+        assert!(hub.sink.has_promoted_claims());
+        hub.release_claim(7);
+        assert!(!hub.enabled.load(Ordering::Acquire));
+        assert!(hub.recorder.lock().is_none());
+    }
+
+    #[test]
+    fn saved_default_microphone_skips_the_full_input_list() {
+        assert!(default_input_matches_preference(None, Some("MacBook Air麦克风")));
+        assert!(default_input_matches_preference(
+            Some(" MacBook Air麦克风 "),
+            Some("MacBook Air麦克风")
+        ));
+        assert!(!default_input_matches_preference(
+            Some("外接麦克风"),
+            Some("MacBook Air麦克风")
+        ));
+        assert!(!default_input_matches_preference(Some("外接麦克风"), None));
     }
 
     #[test]

@@ -55,6 +55,7 @@ pub async fn experimental_asr_delete(
     ensure_main_window(&window)?;
     service(&core)?
         .delete_model(model)
+        .await
         .map_err(|error| error.to_string())
 }
 

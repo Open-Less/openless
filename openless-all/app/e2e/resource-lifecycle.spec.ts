@@ -1,3 +1,4 @@
+import { fixtureOrigin } from './support/server';
 import { test, expect } from '@playwright/test';
 import { openCapsuleStyleSettings } from './support/navigation';
 
@@ -55,7 +56,7 @@ test('offscreen WebGL preview releases its animation clock and resumes only when
 test('pointer cancellation restores the list and never persists a partial drag', async ({
   page,
 }) => {
-  await page.goto('http://127.0.0.1:5326/e2e/fixtures/refinements.html');
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/refinements.html`);
   const handle = page.getByRole('button', { name: 'Alpha', exact: true });
   const rect = (await handle.boundingBox())!;
   await page.mouse.move(rect.x + 10, rect.y + 10);

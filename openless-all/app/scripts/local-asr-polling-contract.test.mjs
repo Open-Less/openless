@@ -1,7 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 
-const source = await readFile(new URL('../src/pages/LocalAsr/index.tsx', import.meta.url), 'utf-8');
+const source = await readFile(
+  new URL('../src/features/local-asr/index.tsx', import.meta.url),
+  'utf-8',
+);
 
 // The poller skips ticks while the window is hidden, so allow that guard before the refresh.
 const HIDDEN_GUARD = String.raw`(?:if \(document\.hidden\) return;\s*)?`;

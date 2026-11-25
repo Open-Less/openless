@@ -22,7 +22,7 @@ const BUTTON_RADIUS: f32 = 12.0;
 const BUTTON_OFFSET: f32 = RECORDING_WIDTH / 2.0 - 4.0 - BUTTON_RADIUS;
 // Measured from the 60 fps reference: 232×64 physical pixels at 2×.
 const ENVELOPE: [f32; 11] = [0.22, 0.34, 0.48, 0.65, 0.82, 1.0, 0.82, 0.65, 0.48, 0.34, 0.22];
-const STACK_GAP: f32 = 8.0;
+const STACK_GAP: f32 = 24.0;
 const BADGE_HEIGHT: f32 = 28.0;
 const RAIL_HEIGHT: f32 = 52.0;
 const RAIL_PAD: f32 = 18.0;
@@ -194,6 +194,7 @@ enum Target {
     Confirm,
     /// `.ol-default-processing-cancel`: the whole processing pill.
     Processing,
+    Background,
 }
 
 /// `CapsuleWaveform`: the level is smoothed per frame, then shaped by the
@@ -391,6 +392,9 @@ impl Rail {
 
 pub struct DefaultCapsule {
     glass: Option<(Rect, f32)>,
+    rear: Option<Rect>,
+    rear_lift: Tween,
+    badge_bottom: Option<Tween>,
     started: bool,
     width: Tween,
     opacity: Tween,
@@ -413,6 +417,9 @@ impl Default for DefaultCapsule {
     fn default() -> Self {
         Self {
             glass: None,
+            rear: None,
+            rear_lift: Tween::at(20.0),
+            badge_bottom: None,
             started: false,
             width: Tween::at(COMPACT_WIDTH),
             opacity: Tween::at(0.0),
@@ -444,6 +451,7 @@ fn status_label(frame: &Frame) -> String {
     } else {
         state.text.trim()
     };
+    let message = if matches!(message, "empty_transcript" | "未识别到语音，录音已保留，可在历史中重新转录") { &labels.empty_transcript } else { message };
     let fallback = |text: &str| {
         if message.is_empty() {
             text.to_owned()
@@ -452,6 +460,7 @@ fn status_label(frame: &Frame) -> String {
         }
     };
     match state.phase.as_str() {
+        "transcribing" | "polishing" if state.translation_active => labels.translating.clone(),
         "transcribing" | "polishing" => fallback(if state.operating {
             &labels.using
         } else {
@@ -482,6 +491,11 @@ impl DefaultCapsule {
             regions.push(Rect::from_center_size(pos2(center.x + BUTTON_OFFSET, center.y),
                 egui::vec2(BUTTON_RADIUS*2.0, BUTTON_RADIUS*2.0)));
         }
+        if frame.processing_session_id.is_some() {
+            if let Some(rear) = self.rear {
+                regions.push(Rect::from_min_max(rear.min, pos2(rear.right(), shell.top())));
+            }
+        }
         regions
     }
 
@@ -503,6 +517,7 @@ impl DefaultCapsule {
         let stage = ui.max_rect();
         let tokens = tokens(dark);
         self.glass = None;
+        self.rear = None;
         if frame.state.selection_polish {
             if notice(&painter, stage, frame, &tokens, now) && !reduced {
                 ui.ctx().request_repaint();
@@ -523,7 +538,7 @@ impl DefaultCapsule {
             .size()
             .x;
         // `scrollWidth + 28`, rounded up so a label that fits is never ellipsized.
-        let status_width = (label_width.ceil() + 2.0 * STATUS_PADDING + if processing { 28.0 } else { 0.0 }).clamp(80.0, 300.0);
+        let status_width = if phase != "failed" { RECORDING_WIDTH } else { (label_width.ceil() + 2.0 * STATUS_PADDING + if processing { 28.0 } else { 0.0 }).clamp(RECORDING_WIDTH, if label == frame.labels.empty_transcript { 444.0 } else { 300.0 }) };
         let time = |seconds: f64| if reduced { 0.0 } else { seconds };
 
         if !self.started {
@@ -579,7 +594,13 @@ impl DefaultCapsule {
             time(if layer_visible { 0.0 } else { 0.12 }),
             LINEAR,
         );
-        let badge_visible = state.translation_active && recording && !leaving;
+        let badge_visible = (state.translation_active && matches!(phase, "recording" | "transcribing" | "polishing")
+            || state.qa
+                && matches!(
+                    state.phase.as_str(),
+                    "recording" | "transcribing" | "polishing"
+                ))
+            && !leaving;
         let (badge_duration, badge_delay) = if badge_visible { (0.2, 0.04) } else { (0.12, 0.0) };
         for (tween, target) in [
             (&mut self.badge_opacity, if badge_visible { 1.0 } else { 0.0 }),
@@ -606,6 +627,19 @@ impl DefaultCapsule {
             pos2(center_x + width / 2.0, body_bottom + lift),
         );
         self.glass = Some((shell, opacity));
+        let rear_visible = (recording || processing) && !leaving && frame.processing_count > 0;
+        if rear_visible {
+            self.rear_lift.set(now, 0.0, time(0.22), 0.0, MORPH);
+        } else {
+            self.rear_lift.jump(20.0);
+        }
+        let rear_label = format!("{}{}", if frame.processing_translation { &frame.labels.translating } else { &frame.labels.transcribing },
+            if frame.processing_count > 1 { format!(" · {}", frame.processing_count) } else { String::new() });
+        if rear_visible {
+            let galley = painter.layout_no_wrap(rear_label.clone(), egui::FontId::proportional(11.0), tokens.pill.ink);
+            self.rear = Some(Rect::from_min_size(pos2(center_x - (galley.size().x + 20.0).clamp(60.0, 96.0) / 2.0, body_top - 18.0 + self.rear_lift.value(now)),
+                vec2((galley.size().x + 20.0).clamp(60.0, 96.0), 22.0)));
+        }
         let outline = shapes::stadium(shell);
         let cancel_center = pos2(if processing { shell.left() + 16.0 } else { center_x - BUTTON_OFFSET }, shell.center().y);
         let confirm_center = pos2(center_x + BUTTON_OFFSET, shell.center().y);
@@ -623,9 +657,14 @@ impl DefaultCapsule {
             .filter(|&point| {
                 frame.interactive
                     && !leaving
-                    && shapes::rounded_rect_distance(point, shell, HEIGHT / 2.0) <= 0.0
+                    && (shapes::rounded_rect_distance(point, shell, HEIGHT / 2.0) <= 0.0
+                        || frame.processing_session_id.is_some()
+                            && self.rear.is_some_and(|rear| rear.contains(point)))
             })
             .and_then(|point| {
+                if frame.processing_session_id.is_some() && point.y < shell.top() && self.rear.is_some_and(|rear| rear.contains(point)) {
+                    return Some(Target::Background);
+                }
                 if recording {
                     if point.distance(cancel_center) <= BUTTON_RADIUS {
                         Some(Target::Cancel)
@@ -649,6 +688,7 @@ impl DefaultCapsule {
                 action = match target {
                     Target::Confirm => CapsuleAction::Confirm,
                     Target::Cancel | Target::Processing => CapsuleAction::Cancel,
+                    Target::Background => CapsuleAction::CancelProcessing,
                 };
             }
         } else if !down {
@@ -680,6 +720,12 @@ impl DefaultCapsule {
             && matches!(phase, "recording" | "transcribing" | "polishing")
             && !rail_text.is_empty();
         let rail_bottom = body_top - STACK_GAP;
+        if let Some(rear) = self.rear {
+            painter.rect_filled(rear, 20, tokens.pill.fill);
+            painter.rect_stroke(rear, 20, Stroke::new(1.0, tokens.pill.border), StrokeKind::Inside);
+            painter.text(pos2(rear.center().x, rear.top() + 10.0), egui::Align2::CENTER_CENTER,
+                rear_label, egui::FontId::proportional(11.0), tokens.pill.ink);
+        }
         if rail_visible {
             let rail = self.rail.get_or_insert_with(|| Rail::new(center_x));
             rail.update(
@@ -698,11 +744,14 @@ impl DefaultCapsule {
         }
         let badge_bottom = body_top
             - STACK_GAP
-            - if rail_visible && state.translation_active {
-                RAIL_HEIGHT + STACK_GAP
+            - if rail_visible && (state.translation_active || state.qa) {
+                RAIL_HEIGHT + 8.0
             } else {
                 0.0
             };
+        let badge_position = self.badge_bottom.get_or_insert_with(|| Tween::at(badge_bottom));
+        badge_position.set(now, badge_bottom, time(0.22), 0.0, MORPH);
+        let badge_bottom = badge_position.value(now);
         let badge_opacity = self.badge_opacity.value(now);
         if badge_opacity > 0.0 {
             let badge = badge(
@@ -847,6 +896,7 @@ impl DefaultCapsule {
         }
 
         let animating = [
+            &self.rear_lift,
             &self.width,
             &self.opacity,
             &self.lift,
@@ -862,6 +912,7 @@ impl DefaultCapsule {
         .iter()
         .any(|tween| tween.active(now))
             || (!reduced && ((recording && !leaving) || self.sweep_since.is_some()))
+            || self.badge_bottom.as_ref().is_some_and(|tween| tween.active(now))
             || self.rail.as_ref().is_some_and(|rail| rail.animating(now));
         if animating {
             ui.ctx().request_repaint();
@@ -874,7 +925,7 @@ fn lerp_color(from: Color32, to: Color32, t: f32) -> Color32 {
     from.lerp_to_gamma(to, t.clamp(0.0, 1.0))
 }
 
-/// `.ol-classic-translation`: "Translate to" and the target language chip.
+/// `.ol-classic-translation`: translation status and the active target chip.
 /// The chip is a label here: the native helper has no language menu.
 fn badge(
     painter: &Painter,
@@ -884,9 +935,32 @@ fn badge(
     opacity: f32,
     pixels_per_point: f32,
 ) -> Vec<Shape> {
+    if frame.state.qa || frame.state.phase != "recording" || !frame.state.translation_active {
+        let label = painter.layout_job(LayoutJob::single_section(
+            if frame.state.qa { frame.labels.asking.clone() } else { frame.labels.translating.clone() },
+            format(11.0, 500.0, 16.5, tokens.pill.ink),
+        ));
+        let size = label.size();
+        let rect = Rect::from_min_size(
+            pos2(
+                bottom_center.x - size.x / 2.0 - 10.0,
+                bottom_center.y - 26.0,
+            ),
+            vec2(size.x + 20.0, 26.0),
+        );
+        return vec![
+            egui::epaint::RectShape::filled(rect, 8, tokens.pill.fill.gamma_multiply(opacity))
+                .into(),
+            text(
+                pos2(rect.left() + 10.0, rect.center().y - size.y / 2.0),
+                label,
+                opacity,
+            ),
+        ];
+    }
     let fade = |color: Color32| color.gamma_multiply(opacity);
     let label = painter.layout_job(LayoutJob::single_section(
-        frame.labels.translate_to.clone(),
+        frame.labels.translating.clone(),
         format(11.0, 400.0, 16.5, tokens.pill.ink),
     ));
     let target = frame
@@ -1133,6 +1207,9 @@ mod tests {
             transcript: String::new(),
             show_transcript: false,
             transcript_font_size: 15.0,
+            processing_count: 0,
+            processing_translation: false,
+            processing_session_id: None,
             labels: CapsuleLabels::for_locale("zh-CN"),
             theme: ThemeMode::System,
             leaving: false,
@@ -1157,6 +1234,30 @@ mod tests {
     }
 
     #[test]
+    fn rear_pill_only_claims_its_exposed_area() {
+        let mut capsule = DefaultCapsule::default();
+        capsule.glass = Some((Rect::from_min_size(pos2(172.0, 124.0), vec2(116.0, 32.0)), 1.0));
+        capsule.rear = Some(Rect::from_min_size(pos2(182.0, 106.0), vec2(96.0, 22.0)));
+        let mut recording = frame("recording");
+        recording.processing_count = 1;
+        recording.processing_session_id = Some("old-a".into());
+        let regions = capsule.input_regions(&recording);
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[2].height(), 18.0);
+        assert!(regions[2].contains(pos2(240.0, 114.0)));
+        assert!(!regions[2].contains(pos2(240.0, 134.0)));
+        let mut processing = recording.clone();
+        processing.state.phase = "polishing".into();
+        let processing_regions = capsule.input_regions(&processing);
+        assert_eq!(processing_regions.len(), 2);
+        assert_eq!(processing_regions[1], regions[2]);
+        assert!(recording.accepts("old-a", 1, crate::Action::Cancel));
+        assert!(!recording.accepts("old-a", 1, crate::Action::Confirm));
+        recording.processing_session_id = Some("old-b".into());
+        assert!(!recording.accepts("old-a", 1, crate::Action::Cancel));
+    }
+
+    #[test]
     fn status_labels_follow_the_webview_rules() {
         let mut done = frame("completed");
         done.state.inserted_chars = Some(12);
@@ -1168,6 +1269,8 @@ mod tests {
         assert_eq!(status_label(&thinking), "thinking");
         thinking.state.operating = true;
         assert_eq!(status_label(&thinking), "using");
+        thinking.state.translation_active = true;
+        assert_eq!(status_label(&thinking), "正在翻译");
 
         // While transcribing, the live recognition replaces the message.
         let mut transcribing = frame("transcribing");

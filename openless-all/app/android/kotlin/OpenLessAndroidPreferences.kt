@@ -25,7 +25,7 @@ object OpenLessAndroidPreferences {
     private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
     private val VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS = setOf("up", "down")
     private val VALID_OVERLAY_GESTURE_ACTIONS =
-        setOf("none", "quick_note", "translation", "style_pack", "cancel", "qa", "voice_edit")
+        setOf("none", "quick_note", "translation", "style_pack", "cancel", "voice_edit")
 
     fun overlayTriggerMode(context: Context): String? {
         val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
@@ -70,7 +70,9 @@ object OpenLessAndroidPreferences {
             if (!file.isFile) continue
             try {
                 val actions = JSONObject(file.readText()).optJSONObject(KEY_OVERLAY_GESTURE_ACTIONS)
-                val value = actions?.optString(direction, "")?.takeIf {
+                val stored = actions?.optString(direction, "")
+                if (stored == "qa") return "none"
+                val value = stored?.takeIf {
                     it in VALID_OVERLAY_GESTURE_ACTIONS
                 }
                 if (value != null) return value
@@ -84,7 +86,7 @@ object OpenLessAndroidPreferences {
             "up" -> if (legacyCancel == "up") "cancel" else "none"
             "down" -> if (legacyCancel == "down") "cancel" else "none"
             "left" -> legacyLeft
-            "right" -> "qa"
+            "right" -> "none"
             else -> "none"
         }
     }

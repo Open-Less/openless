@@ -4,11 +4,22 @@ import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsEn as askEntrySettings } from './askEntrySettings';
 
 export const de: typeof zhCN = {
+  shiftTranslation: {
+    title: 'Aufnahmeübersetzung',
+    description: 'Shift-Umschaltung und Anzahl der Tastendrücke',
+    count: 'Anzahl der Shift-Tastendrücke',
+    scope:
+      'Drücke während der Aufnahme Shift allein so oft kurz, um die Übersetzung ein- oder auszuschalten. Gilt für das standardmäßige Shift-Kürzel; deaktiviert, wenn Shift die Aufnahmetaste ist.',
+    times_one: '{{count}} Tastendruck',
+    times_other: '{{count}} Tastendrücke',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: 'Sprachbearbeitung',
@@ -106,6 +117,8 @@ export const de: typeof zhCN = {
     noSnapshot: 'Noch keine verschlüsselte Cloud-Sicherung.',
     snapshotUnknown: 'Cloud-Sicherung noch nicht geprüft.',
     lastSync: 'Zuletzt synchronisiert: {{time}}',
+    synced: 'Synchronisierung abgeschlossen',
+    syncing: 'Die neuesten Cloud-Daten werden synchronisiert…',
     syncNow: 'Jetzt synchronisieren',
     checkPending: 'Ausstehendes Ergebnis prüfen',
     unlock: 'Entsperren',
@@ -115,6 +128,7 @@ export const de: typeof zhCN = {
     delete: 'Cloud-Sicherung löschen',
     working: 'Wird verarbeitet…',
     cancelTask: 'Aktuellen Vorgang abbrechen',
+    cancelSync: 'Synchronisierung abbrechen',
     cancelRequested: 'Abbruch angefordert. Der Vorgang wird beendet.',
     done: 'Synchronisierungseinstellungen aktualisiert.',
     restored: 'Cloud-Daten wiederhergestellt. Gerätespezifische Einstellungen prüfen.',
@@ -136,6 +150,15 @@ export const de: typeof zhCN = {
     newPassword: 'Neues Sync-Passwort',
     currentPassword: 'Aktuelles Sync-Passwort',
     confirmPassword: 'Neues Passwort bestätigen',
+    setSyncPasswordTitle: 'Synchronisierungspasswort festlegen',
+    setSyncPasswordDescription:
+      'OpenLess verwendet dieses Passwort, um die Daten auf diesem Gerät zu verschlüsseln und eine Cloud-Sicherung zu erstellen. Die Synchronisierung startet nach der Erstellung.',
+    confirmSyncPassword: 'Synchronisierungspasswort bestätigen',
+    confirmAndContinue: 'Bestätigen und fortfahren',
+    revealPassword: 'Passwort anzeigen ({{field}})',
+    concealPassword: 'Passwort ausblenden ({{field}})',
+    previewNotice:
+      'Vorschau der Cloud-Synchronisierung. Verwende ein Beispielpasswort. Es wird keine Verbindung hergestellt und keine Zugangsdaten gespeichert.',
     passwordPolicy:
       '12–128 Zeichen mit Groß- und Kleinbuchstaben sowie einer Zahl. Keine üblichen Passwörter verwenden.',
     rememberKey: 'Entsperrschlüssel im sicheren Speicher dieses Geräts merken',
@@ -143,6 +166,7 @@ export const de: typeof zhCN = {
     disableDescription:
       'Weitere Synchronisierung wird gestoppt. Cloud-Sicherung und lokale Daten bleiben erhalten. Löschen ist eine separate Aktion.',
     confirmDisable: 'Synchronisierung ausschalten',
+    refreshBackup: 'Cloud-Sicherung anzeigen',
     deleteTitle: 'Verschlüsselte Cloud-Sicherung löschen?',
     deleteDescription:
       'Nur die Cloud-Sicherung dieses Kontos wird gelöscht. Lokale Daten bleiben. Für ein anderes Gerät wird danach eine neue Sicherung benötigt.',
@@ -160,6 +184,7 @@ export const de: typeof zhCN = {
     replace: 'Synchronisierte lokale Daten durch Cloud-Daten ersetzen',
     replaceWarning:
       'Lokale Daten im Sync-Umfang werden ersetzt. Zum Behalten lokaler Änderungen Zusammenführen wählen.',
+    mergeOverwriteDirection: 'Bei einem Konflikt überschreibt die lokale Version beim Synchronisieren den Cloud-Eintrag. Die Cloud-Version überschreibt den lokalen Eintrag.',
     restoreCheck: 'Ich habe Wiederherstellungsart und Konfliktentscheidungen geprüft.',
     applyRestore: 'Wiederherstellung bestätigen',
     conflictProgress: '{{selected}} von {{total}} Konflikten gelöst',
@@ -228,6 +253,8 @@ export const de: typeof zhCN = {
       cancelled: 'Vorgang abgebrochen.',
       network: 'Sync-Dienst nicht erreichbar. Verbindung prüfen und erneut versuchen.',
       rateLimited: 'Zu viele Anfragen. Vor erneutem Versuch warten.',
+      deletePendingOperation:
+        'Ein früherer Cloud-Vorgang wurde noch nicht bestätigt. Aktualisiere später den Status und versuche erneut, die Sicherung zu löschen.',
       outcomeUnknown:
         'Cloud-Ergebnis unbestätigt. Ausstehenden Vorgang prüfen, bevor eine neue Sicherung erstellt wird.',
       recovery:
@@ -304,10 +331,13 @@ export const de: typeof zhCN = {
     delete: 'Löschen',
     later: 'Später',
     cancel: 'Abbrechen',
+    confirmAction: 'Bestätigen',
     close: 'Schließen',
     show: 'Einblenden',
     hide: 'Ausblenden',
+    apiKeySaved: 'API-Schlüssel gespeichert',
     saved: 'Gespeichert',
+    deleted: 'Gelöscht',
     refreshed: 'Aktualisiert',
     saving: 'Wird gespeichert…',
     experimental: 'Experimentell',
@@ -319,7 +349,11 @@ export const de: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
+    emptyTranscript: 'Leer · Keine Sprache',
+    transcribing: 'Transkription',
+    asking: 'Frag etwas',
     thinking: 'denkt nach',
+    slowConnection: 'Verbindung langsamer als üblich',
     using: 'verwendet',
     cancelled: 'Abgebrochen',
     error: 'Ein Fehler ist aufgetreten',
@@ -331,7 +365,7 @@ export const de: typeof zhCN = {
       polishing: 'Wird überarbeitet…',
       replaced: 'Ersetzt',
       noSelection: 'Kein Text ausgewählt',
-      failed: 'Überarbeitung fehlgeschlagen. Erneut versuchen',
+      failed: 'Fehlgeschlagen',
     },
   },
   selectionPolishPreview: {
@@ -377,6 +411,9 @@ export const de: typeof zhCN = {
     title: 'Nachfragen',
     headerHint: 'Jederzeit fragen',
     thinking: 'Denkt nach…',
+    thoughtLive: 'Denkt nach ({{seconds}} s)',
+    thoughtDone: 'Nachgedacht ({{seconds}} s)',
+    stop: 'Stopp',
     error: 'Ein Fehler ist aufgetreten. Versuche es erneut.',
     errorRetry: 'Erneut versuchen',
     errorRetryHint: 'Versuche es erneut.',
@@ -394,6 +431,7 @@ export const de: typeof zhCN = {
     mobileRecordStart: 'Aufnahme starten',
     mobileRecordStop: 'Beenden und senden',
     composerPlaceholder: 'Frage eingeben. Mit Enter senden',
+    voiceInputPlaceholder: 'Du verwendest die Spracheingabe',
     composerSend: 'Senden',
     statusIdle: 'Zum Fragen {{recordHotkey}} drücken',
     statusRecording: 'Aufnahme läuft',
@@ -484,7 +522,7 @@ export const de: typeof zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: 'Aktualisieren',
+        update: 'Paket aktualisieren',
         withdraw: 'Zurückziehen',
       },
       loadFailed: 'Meine Pakete konnten nicht geladen werden: {{err}}',
@@ -535,6 +573,7 @@ export const de: typeof zhCN = {
   shell: {
     shortcutLabel: 'Aufnahmekurzbefehl',
     shortcutHint: 'Starten / Beenden',
+    homeLabel: 'Zurück zur Übersicht',
     betaTag: 'BETA',
     betaNote: 'Lokale Speicherung, optionale Cloud-Sicherung',
     navHint: {
@@ -559,6 +598,7 @@ export const de: typeof zhCN = {
         tagline: 'Spracheingabe mit lokalem Schwerpunkt',
         releaseNotes: 'Versionshinweise ↗',
         docs: 'Hilfezentrum ↗',
+        credits: 'Komponenten',
       },
     },
     providerPrompt: {
@@ -686,6 +726,12 @@ export const de: typeof zhCN = {
     llmConfigured: 'Aktives LLM eingerichtet',
     llmNotConfigured: 'Nicht eingerichtet',
     statusConfigured: 'Eingerichtet',
+    statusFailed: 'Fehlgeschlagen',
+    serviceHint: {
+      asr: 'Spracherkennung: Status ansehen und die Diensteinstellungen öffnen',
+      llm: 'Textverarbeitung: Status ansehen und die Diensteinstellungen öffnen',
+      omni: 'Multimodale Sprache: Status ansehen und die Diensteinstellungen öffnen',
+    },
     statusNotConfigured: 'Nicht eingerichtet',
     statusUnknown: 'Nicht verfügbar',
     credentialsLoadError: 'Status der Zugangsdaten konnte nicht gelesen werden',
@@ -700,6 +746,16 @@ export const de: typeof zhCN = {
     metricTotalTrend: 'Lokales Archiv (max. 200)',
     activityTitle: 'Aktivität im Jahr',
     activityCount: 'Diktate: {{count}}',
+    activityAppsLabel: 'Meiste Diktate nach App',
+    activityAppsShow: 'Top-Apps anzeigen',
+    activityAppsHide: 'Top-Apps ausblenden',
+    activityAppsUnavailable:
+      'Die jährliche Aktivität nach App ist auf dieser Plattform nicht verfügbar.',
+    activityAppsError: 'Die jährliche Aktivität nach App konnte nicht geladen werden.',
+    activityYearTitle: 'Dieses Jahr',
+    activityActiveDays: 'Aktive Tage',
+    activityPeakDay: 'Stärkster Tag',
+    activityDailyAverage: 'Tagesdurchschnitt',
     activityLoadError: 'Aktivitätsdaten konnten nicht geladen werden',
     period: {
       ariaLabel: 'Auswertungszeitraum',
@@ -767,6 +823,19 @@ export const de: typeof zhCN = {
     retranscribe: 'Erneut transkribieren',
     retranscribing: 'Wird transkribiert…',
     retranscribeFailed: 'Erneute Transkription fehlgeschlagen: {{err}}',
+    retranscribeErrors: {
+      NoSpeech: 'Der Erkennungsdienst hat keinen Text zurückgegeben; die Aufnahme bleibt erhalten',
+      Missing: 'Die ursprüngliche Aufnahme fehlt',
+      InvalidAudio: 'Die Aufnahme ist leer oder beschädigt',
+      Permission: 'Aufnahme nicht lesbar; Dateiberechtigungen prüfen',
+      Active: 'Diese Aufnahme zuerst beenden',
+      Busy: 'Sprachdienst ausgelastet; später erneut versuchen',
+      Unsupported: 'Der aktuelle Kanal unterstützt keine erneute Transkription',
+      Configuration: 'Einstellungen des Erkennungskanals prüfen',
+      Storage: 'Aufnahme oder Verlauf kann nicht gelesen oder gespeichert werden',
+      Provider: 'Erkennungsanfrage fehlgeschlagen; Kanal oder Netzwerk prüfen',
+      InvalidId: 'Ungültige Aufnahme-ID',
+    },
     showRaw: 'Rohtext anzeigen',
     hideRaw: 'Rohtext ausblenden',
     rawLabel: 'Rohtext',
@@ -827,7 +896,7 @@ export const de: typeof zhCN = {
     dismiss: 'Ausblenden',
   },
   vocab: {
-    selectAllVisible: 'Aktuelle Ergebnisse auswählen',
+    selectAllVisible: 'Alle Ergebnisse auswählen',
     selecting: 'Auswählen',
     doneSelecting: 'Fertig',
     disabledWord: 'Aus',
@@ -1136,6 +1205,14 @@ export const de: typeof zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: 'Verhalten des Fragen-Kürzels',
+      desc: 'Verwendet das Aufnahme-Kürzel und die Zusatztaste. Das Aufnahme-Kürzel allein diktiert weiterhin am Cursor.',
+      record: 'Öffnen und sofort aufnehmen',
+      open: 'Öffnen, erneut drücken zum Aufnehmen',
+      draft: 'Öffnen und Textfeld fokussieren',
+      failed: 'Das Verhalten konnte nicht gespeichert werden.',
+    },
     dictation: 'Diktieren',
     translation: 'Übersetzen',
     question: 'Alles fragen',
@@ -1150,6 +1227,11 @@ export const de: typeof zhCN = {
       'Ausgewählter Text dient als Kontext. Eine Auswahl ist optional. Jede Kombination beginnt eine neue Frage.',
   },
   selectionAsk: {
+    desktopContext: {
+      title: 'App-Namen mit Ask teilen',
+      description: 'Beim Öffnen von Ask die Namen der aktiven und geöffneten Apps erfassen und beim Senden einer Frage an das Modell weitergeben. Fensterinhalte werden nicht gelesen.',
+      saveFailed: 'Die Berechtigung zum Teilen des Desktop-Kontexts konnte nicht geändert werden.',
+    },
     title: 'Alles fragen',
     desc: 'Text auswählen und Fragen dazu sprechen, auch mit mehreren Rückfragen.',
     shortcutSettings: 'Kurzbefehlseinstellungen',
@@ -1173,7 +1255,7 @@ export const de: typeof zhCN = {
     },
     history: {
       title: 'Verlauf speichern',
-      desc: 'Speichert Fragen und Antworten lokal. Standardmäßig deaktiviert.',
+      desc: 'Den Verlauf von Nachfragen auf diesem Gerät speichern. Standardmäßig deaktiviert.',
     },
     howto: {
       title: 'So funktioniert es',
@@ -1200,7 +1282,7 @@ export const de: typeof zhCN = {
   settings: {
     generalPages: {
       recordingTitle: 'Mikrofon und Aufnahme',
-      recordingDesc: 'Mikrofonüberwachung und Erkennung sowie Überwachung und Signale.',
+      recordingDesc: 'Mikrofon auswählen sowie Aufnahme und Hinweistöne einstellen.',
       capsuleTitle: 'Kapselstil',
       capsuleDesc: 'Kapselschalter, mehrere Bildschirme, Stil und gestreamter Originaltext.',
       textInputTitle: 'Texteinfügung',
@@ -1209,13 +1291,16 @@ export const de: typeof zhCN = {
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
     advancedPages: {
+      polishStrategyTitle: 'Überarbeitungsstrategie',
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInputTitle: 'Texteingabe',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
       cursorContextTitle: 'Wahrnehmung',
       startupDiagnosticsTitle: 'Startdiagnose',
       cursorContextHint:
-        'Der Cursorkontext ist standardmäßig aktiv. Hier deaktivieren, wenn naher Text nicht mit Überarbeitungsanfragen gesendet werden soll.',
+        'Standardmäßig aktiviert.',
     },
     advancedGroups: {
       recording: 'Aufnahme',
@@ -1280,8 +1365,6 @@ export const de: typeof zhCN = {
         'Anfragen verwenden den Systemproxy, wenn diese Option aktiv ist. Andernfalls werden alle Anfragen direkt gesendet, was bei inländischen Diensten meist schneller ist. Ausländische Dienste wie GitHub-Anmeldung und Updates können dann fehlschlagen. Echtzeit-Sprachstreams und Less Computer sind davon unabhängig.',
     },
     expressionLearning: {
-      clearHint:
-        'Nach dem Löschen kann ein laufendes Diktat noch die beim Start erfassten Vorlieben verwenden.',
       lineBreaksMore: 'Mehr Zeilenumbrüche',
       lineBreaksLess: 'Weniger Zeilenumbrüche',
       exclamationsMore: 'Mehr Ausrufezeichen',
@@ -1292,7 +1375,7 @@ export const de: typeof zhCN = {
       title: 'Ausdrucksgewohnheiten',
       enabled: 'Ausdrucksgewohnheiten lernen',
       description:
-        'Beobachtet Formatänderungen nach dem Diktat lokal; Ausdrucksdaten speichern nur abstrakte Statistiken. Der Verlauf wird separat verwaltet. Wiederholte, konsistente Zeilenumbruch- und Satzzeichenpräferenzen werden als kurze Anweisungen an das gewählte Textmodell gesendet. Ausschalten beendet das Lernen sofort und die Anwendung ab dem nächsten Diktat; ein laufendes Diktat kann noch erfasste Vorlieben verwenden.',
+        'Zeilenumbruch- und Zeichensetzungsvorlieben für künftige Textüberarbeitungen lernen.',
       status: '{{count}} stabile Vorlieben',
       clear: 'Ausdrucksgewohnheiten löschen',
       error: 'Ausdrucksgewohnheiten konnten nicht gelesen oder gespeichert werden.',
@@ -1300,6 +1383,11 @@ export const de: typeof zhCN = {
     vocabularyLearning: {
       title: 'Aus Korrekturen lernen',
       enabled: 'Lernen aus Korrekturen aktivieren',
+      suggestionPosition: 'Position der Vorschlagskarte',
+      positionNearInput: 'Nahe der Eingabe',
+      positionBottomRight: 'Unten rechts fixiert',
+      suggestionPositionHint:
+        'Nur Windows: bevorzugt beim Textcursor oder Eingabefeld; andernfalls unten rechts auf dem ursprünglichen Eingabebildschirm. Die feste Position nutzt immer dessen Arbeitsbereich.',
       observationSeconds: 'Beobachtungsdauer',
       observationSecondsHint:
         'Das aktuelle Eingabefeld nach dem Diktat höchstens 10–60 Sekunden beobachten.',
@@ -1311,19 +1399,17 @@ export const de: typeof zhCN = {
         'Original und Ersatz in automatischen Vorschlägen auf 2–32 Zeichen begrenzen. Manuelle Einträge bleiben unverändert.',
       seconds: '{{count}} s',
       characters: '{{count}} Zeichen',
-      changeHint:
-        'Änderungen beenden die aktuelle Beobachtung und löschen offene Vorschläge. Sie gelten ab dem nächsten Diktat. Zurücksetzen ändert den Aktivierungsschalter nicht.',
       reset: 'Parameter zurücksetzen',
       saveError: 'Speichern fehlgeschlagen. Bitte erneut versuchen.',
       description:
-        'Nach dem Einfügen werden Änderungen im Eingabefeld bis zu 60 Sekunden lokal erkannt. Wörter werden erst nach Bestätigung gespeichert. Der beobachtete Text wird nicht an ein Modell gesendet. Passwortfelder und bekannte sensible Apps sind ausgeschlossen. Die Unterstützung unter Windows und Android hängt vom Editor ab; Android benötigt Bedienungshilfen. Ausschalten beendet die Beobachtung.',
+        'Aus manuellen Wortkorrekturen nach dem Diktieren lernen und bestätigte Wörter ins Wörterbuch aufnehmen.',
     },
     dataStorage: {
       title: 'Datenspeicherung',
       desc: 'Gesprächsverlauf und Kontext, die auf diesem Gerät gespeichert werden.',
       cursorContextLabel: 'Cursorkontext (experimentell)',
       cursorContextDesc:
-        'Einen kurzen Textabschnitt rund um den Cursor als Referenz für Eigennamen, Homophone und Bezüge mit der Überarbeitung an das Modell senden (macOS / Windows / Android). Diktat, Schnellnotizen und Cloud-Notizen nutzen ihn, der Kontext selbst wird aber nie in Notizen, Verlauf oder Protokolle geschrieben; bei einem Cloud-Modell wird er mit der Überarbeitungsanfrage an diesen Anbieter gesendet. Diese Einstellung ist vom lokalen Lernen getrennt. Passwortfelder, Terminals und bekannte sensible Apps sind ausgeschlossen.',
+        'Text am Cursor dem Modell als Referenz für die Textüberarbeitung senden.',
     },
     localMigration: {
       title: 'Lokale Konfigurationsmigration',
@@ -1425,13 +1511,13 @@ export const de: typeof zhCN = {
         systemAgc: 'System automatic gain',
         unavailable: 'Unavailable on this device',
         androidEffectsHint:
-          'Android system effects apply before the software chain. Avoid enabling the same effect twice. Unsupported startup falls back to normal capture.',
+          'Echounterdrückung, Rauschunterdrückung und automatische Verstärkung des Geräts nutzen.',
         effectsActive: 'System effects are active for this recording.',
         spectrum: 'Input / processed spectrum',
         spectrumHint:
-          'Shows the current enhanced recording only. This does not start a microphone, save audio, or upload it. Monitoring stops when this panel closes or goes to the background.',
+          'Das Aufnahmespektrum vor und nach der Verarbeitung vergleichen.',
         spectrumLegend: 'Gray: input · Color: processed · 20 Hz–24 kHz',
-        spectrumWaiting: 'Start a recording with speech enhancement enabled to see the spectrum.',
+        spectrumWaiting: 'Warten auf Aufnahme',
         presets: 'Equalizer presets',
         choosePreset: 'Choose a preset',
         preset_normal: 'Flat',
@@ -1445,9 +1531,9 @@ export const de: typeof zhCN = {
         aecLight: 'Leicht (wenig CPU)',
         aecModel: 'Modell (stärker)',
         aecModelHint:
-          'Das Modell unterdrückt mehr Echo, kostet aber rund 3x CPU; auf älteren Geräten besser Leicht.',
+          'Stärkere Echounterdrückung mit höherer CPU-Auslastung.',
         aecHint:
-          'Unterdrückt Lautsprecher-Rückkopplung. Braucht ein Referenzsignal; mit Kopfhörern aus lassen.',
+          'Vom Mikrofon erfasste Lautsprecherwiedergabe unterdrücken.',
         buffer: 'Ausgabepuffer',
         noise: 'Noise reduction',
         dereverb: 'Comb filter',
@@ -1457,7 +1543,7 @@ export const de: typeof zhCN = {
         vad: 'Speech gate',
         title: 'Speech enhancement settings',
         description:
-          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+          'Rauschunterdrückung, Echounterdrückung, Lautstärke und Equalizer einstellen.',
         off: 'Off',
         spectral: 'Spectral subtraction',
         strength: 'Noise reduction strength',
@@ -1465,11 +1551,11 @@ export const de: typeof zhCN = {
         attack: 'Attack speed',
         decay: 'Release speed',
         vadHint:
-          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+          'Die Lautstärke leiser Passagen absenken.',
         threshold: 'Speech gate threshold',
         tone: 'Tone and room adjustments',
         combHint:
-          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+          'Resonanz und Stimmklang anpassen.',
         preamp: 'Equalizer preamp',
         order: 'Processing order',
         up: 'Move up',
@@ -1478,10 +1564,10 @@ export const de: typeof zhCN = {
       },
       echoCancellationLabel: 'Wiedergabe-Echounterdrückung',
       echoCancellationDesc:
-        'Verwendet eine lokale Wiedergabereferenz, ohne die Wiedergabe stummzuschalten. macOS benötigt 14.6+ und die Berechtigung zur Systemaudioaufnahme. Nicht unterstützte Geräte, Bluetooth-Routen und Linux ALSA verwenden nur das Mikrofon. Gilt ab der nächsten Aufnahme.',
+        'Lokale Wiedergabe als Referenz nutzen, um Echo in Aufnahmen zu verringern. Gilt ab der nächsten Aufnahme.',
       audioEnhancementLabel: 'Sprachverbesserung',
       audioEnhancementDesc:
-        'RNNoise- oder PureVox-Rauschunterdrückung, automatische Verstärkung und Begrenzung. Standardmäßig aus; Änderungen gelten ab der nächsten Aufnahme.',
+        'Hintergrundgeräusche reduzieren und die Lautstärke automatisch anpassen. Gilt ab der nächsten Aufnahme.',
       muteDuringRecordingLabel: 'Während der Aufnahme stummschalten',
       muteDuringRecordingDesc:
         'Schaltet die Systemausgabe während der Spracheingabe vorübergehend stumm, um Lautsprecherechos zu vermeiden.',
@@ -1545,11 +1631,6 @@ export const de: typeof zhCN = {
       windowsSendInputNewlineModeEnter: 'Enter (die meisten Editoren)',
       windowsSendInputNewlineModeShiftEnter: 'Shift+Enter (Chateingabefelder)',
       windowsSendInputNewlineModeCrLf: 'CR+LF Unicode',
-      windowsShowOpenlessInKeyboardListLabel: 'OpenLess in der Tastaturliste anzeigen',
-      windowsShowOpenlessInKeyboardListDesc:
-        'Wenn deaktiviert, wechselt Win+Space nicht zu OpenLess. SendInput und Einfügen über die Zwischenablage funktionieren weiterhin. Aktiviere die Option erneut, um den Eintrag wiederherzustellen.',
-      windowsShowOpenlessInKeyboardListError:
-        'Die Tastaturliste konnte nicht aktualisiert werden: Das System hat die Änderung des OpenLess-Sprachprofils abgelehnt.',
       historyGroupTitle: 'Verlauf und Kontext',
       historyRetentionLabel: 'Verlauf aufbewahren (Tage)',
       historyRetentionDesc:
@@ -1559,6 +1640,20 @@ export const de: typeof zhCN = {
       polishSkipMaxCharsLabel: 'Überarbeitung bei kurzen Eingaben überspringen (max. Zeichen)',
       polishSkipMaxCharsDesc:
         'Transkripte mit höchstens N Zeichen (ohne Leerzeichen) werden ohne LLM-Aufruf als Rohtext eingefügt. 0 = aus. Übersetzungen werden immer überarbeitet.',
+      polishStrategyEnabledLabel: 'Eigene Strategie verwenden',
+      polishStrategyEnabledDesc:
+        'Führt nach ASR eine begrenzte lokale Strategie aus. Fehler fallen auf die normale Überarbeitung zurück; Dateien, Netzwerk und Zugangsdaten sind nicht erreichbar.',
+      polishStrategyEdit: 'Bearbeiten',
+      polishStrategyEditorTitle: 'Überarbeitungsstrategie bearbeiten',
+      polishStrategyScriptLabel: 'Skript',
+      polishStrategyScriptDesc:
+        'strategy(input) definieren und skip, polish oder request zurückgeben. Fehlende Werte für Sprache, Konfidenz und Modell sind ().',
+      polishStrategyScriptPlaceholder:
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
+      polishStrategySkillCopy: 'Agent-Anleitung kopieren',
+      polishStrategySkillCopied: 'Agent-Anleitung kopiert',
+      polishStrategySkillCopyFailed:
+        'Kopieren fehlgeschlagen; überprüfe die Zwischenablage-Berechtigung',
       polishContextWindowLabel: 'Kontextfenster für Überarbeitung (Minuten)',
       polishContextWindowDesc:
         'Verwendet überarbeitete Transkripte der letzten N Minuten als Gesprächskontext. 0 = deaktiviert.',
@@ -1577,6 +1672,17 @@ export const de: typeof zhCN = {
       voiceActivationDesc: 'Lokal auf eine Aktivierungsphrase warten, um das Diktat zu starten.',
       voiceActivationLocalOnly:
         'Die Erkennung bleibt auf diesem Gerät; Bereitschaftsaudio wird weder hochgeladen noch archiviert.',
+      voiceActivationHotkeyLinked: 'Aufnahme-Tastenkürzel verknüpfen',
+      voiceActivationHotkeyLinkedDesc:
+        'Ein Klick schaltet die lokale Aktivierung statt der Aufnahme um. Nach dem Start pausiert. Pausieren beendet die Mikrofon-Vorwärmung, nicht andere Aufnahmen. Diktate nutzen weiterhin den gewählten Dienst.',
+      voiceActivationDisabled: 'Sprachaktivierung deaktiviert',
+      voiceActivationPaused: 'Aktivierung vorübergehend pausiert',
+      voiceActivationPausing: 'Aktivierung wird gestoppt…',
+      voiceActivationStarting: 'Aktivierung wird gestartet…',
+      voiceActivationListening: 'Warten auf Aktivierungsphrase',
+      voiceActivationDictating: 'Diktat oder Abschluss läuft',
+      voiceActivationError:
+        'Aktivierung nicht verfügbar. Modell, Mikrofonberechtigung und Gerät prüfen.',
       voiceActivationMultimodalModels:
         'Hier das Sprachaktivierungsmodell vorbereiten. Das Diktat nutzt weiterhin den aktuellen multimodalen Dienst.',
       voiceActivationModelMissing: 'Das lokale Zipformer-Modell ist nicht installiert.',
@@ -1636,7 +1742,7 @@ export const de: typeof zhCN = {
       validationHint:
         'Sendet manuell eine echte Anfrage, um diese Konfiguration zu prüfen. Dabei kann Dienstguthaben verbraucht werden. Das Speichern der Einstellungen führt keine Prüfung aus.',
       validationHintOmni:
-        'Sendet manuell eine reine Text-Verbindungsanfrage (ohne Aufnahme). Erfolg bedeutet nicht, dass Audio-Diktat funktioniert — bitte mit einer kurzen Aufnahme bestätigen. Dabei kann Dienstguthaben verbraucht werden.',
+        'Sendet manuell eine Textanfrage. Dabei kann Serverguthaben verbraucht werden.',
       autoSaveHint:
         'Änderungen werden automatisch gespeichert. Anschließend kannst du die Verbindung manuell prüfen.',
       nameHint:
@@ -1699,10 +1805,11 @@ export const de: typeof zhCN = {
       pipelineModeLabel: 'Verarbeitungsmodus',
       pipelineModeHint:
         'Klassisch = ASR + LLM in zwei Schritten. Multimodal = ein audiotaugliches Modell in einem Durchgang.',
+      pipelineModeDeepseek: 'DeepSeek suite',
       pipelineModeTraditional: 'Klassisch',
       pipelineModeMultimodal: 'Multimodal',
       pipelineIsolationNotice:
-        'Die beiden Modi speichern ihre Zugangsdaten vollständig getrennt. Beim Wechsel bleiben die Daten des anderen Modus gespeichert und werden beim Zurückwechseln wieder verwendet.',
+        'Die drei Pipelines speichern ihre Konfiguration getrennt. Die Auswahl bleibt beim Schließen der Einstellungen oder des Fensters und nach einem Neustart erhalten. Beim Zurückwechseln wird die bisherige Konfiguration verwendet.',
       presets: {
         lmstudio: 'LM Studio',
         opencode: 'OpenCode Zen',
@@ -2425,6 +2532,7 @@ export const de: typeof zhCN = {
     experimentsTitle: 'Experimente und Erweiterungen',
     experimentsDescription: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
     serviceViews: {
+      deepseek: 'DeepSeek suite',
       label: 'Diensteinstellungen',
       llm: 'Sprachmodelle',
       asr: 'Spracherkennung',
@@ -2432,11 +2540,12 @@ export const de: typeof zhCN = {
       models: 'Lokale Modelle',
       connections: 'Verbindungen',
       inactive: 'In diesem Modus ungenutzt',
+      unavailable: 'Nicht verfügbar',
       inactiveDetail:
         'Diese Einstellungen bleiben gespeichert, werden aber im aktuellen Erkennungsmodus nicht verwendet.',
       statusConfigured:
-        'Grüner Punkt: mindestens ein Dienst ist aktiv. Anfragen nutzen den ersten aktivierten Dienst.',
-      statusMissing: 'Roter Punkt: noch kein Dienst ist aktiviert.',
+        'Mindestens ein Dienst ist aktiv. Anfragen nutzen den ersten aktivierten Dienst.',
+      statusMissing: 'Noch kein Dienst ist aktiviert.',
     },
     searchPlaceholder: 'Einstellungskategorie suchen…',
     clearSearch: 'Suche leeren',
@@ -2448,6 +2557,9 @@ export const de: typeof zhCN = {
     backToAdvanced: 'Zurück zu erweiterten Funktionen',
     back: 'Zurück',
     advancedPages: {
+      polishStrategy: 'Überarbeitung anhand des Erkennungsergebnisses steuern.',
+      webSearch: 'Configure Q&A web search, free search and search APIs.',
+      webSearchTitle: 'Web Search',
       liveInput: 'Live-Transkript im Eingabefeld konfigurieren.',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       customSyncServer:
@@ -2460,7 +2572,7 @@ export const de: typeof zhCN = {
       voiceEnhancement:
         'Erweiterte Audioverarbeitung, Rauschunterdrückung und Unterdrückung von Wiedergabehall festlegen.',
       cursorContext:
-        'Den Kontext um den Cursor für Überarbeitungsanfragen und den Umgang mit kurzen Eingaben festlegen.',
+        'Cursor-Kontext, Korrekturlernen und Ausdrucksgewohnheiten verwalten.',
       startupDiagnostics: 'Startzeiten, Backend-Verbindungen und verzögerte Prüfungen ansehen.',
     },
     descriptions: {
@@ -2490,7 +2602,7 @@ export const de: typeof zhCN = {
       privacy:
         'Berechtigung Mikrofon Bedienungshilfen Verlauf Aufnahme Speicher Datenschutz Export',
       advanced:
-        'Less Computer Claude Agent Multimodal Omni Diagnose Protokolle Experiment Aus Korrekturen lernen vocabulary learning manual edits vocabulary learning Beta ',
+        'Less Computer Claude Agent Multimodal Omni Diagnose Protokolle Experiment Aus Korrekturen lernen vocabulary learning manual edits vocabulary learning Beta Überarbeitungsstrategie Rhai script',
       about: 'Version Beta Stabil Update Aktualisierung',
     },
     sections: {
@@ -2752,6 +2864,10 @@ export const de: typeof zhCN = {
     activePill: 'Aktiv',
     setDefault: 'Als Standard festlegen',
     downloading: 'Wird heruntergeladen',
+    cancelDownload: 'Download abbrechen',
+    cancelDownloadTitle: 'Download von {{name}} abbrechen',
+    cancellingDownload: 'Download wird abgebrochen…',
+    downloadFailed: 'Modelldownload fehlgeschlagen',
     startDownload: 'Download starten',
     downloadNewModel: 'Neues Modell herunterladen',
     activeModelLabel: 'Aktives Modell',
