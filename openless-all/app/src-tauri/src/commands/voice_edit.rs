@@ -3,6 +3,7 @@ use super::CoordinatorState;
 /// Opens the desktop Voice Edit panel or asks Android's main WebView to show
 /// its embedded equivalent. The session starts only after the panel invokes
 /// `start_voice_edit_session`.
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn voice_edit_window_open(
     window: tauri::Window,
@@ -17,6 +18,18 @@ pub async fn voice_edit_window_open(
     tauri::async_runtime::spawn_blocking(move || host.show_voice_edit())
         .await
         .map_err(|error| format!("Voice Edit window task failed: {error}"))?
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn voice_edit_window_open(
+    window: tauri::Window,
+    coord: CoordinatorState<'_>,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Voice Edit can only be opened from the main window".to_string());
+    }
+    coord.tauri_host().show_voice_edit()
 }
 
 #[tauri::command]

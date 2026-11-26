@@ -35,7 +35,6 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
     }
   };
 
-
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);

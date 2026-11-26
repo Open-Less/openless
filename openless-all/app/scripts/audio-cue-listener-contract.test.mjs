@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const source = await readFile(new URL('../src/features/capsule/AudioCue.tsx', import.meta.url), 'utf8');
+const source = await readFile(
+  new URL('../src/features/capsule/AudioCue.tsx', import.meta.url),
+  'utf8',
+);
 
 // The always-alive capsule listener must never open output just by mounting, even when
 // the persisted preference is disabled. Runtime playback/recovery is covered separately.

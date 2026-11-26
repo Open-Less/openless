@@ -313,7 +313,9 @@ function transcript(view, sequence, text, sessionId = 'session') {
   transcript(view, 11, 'updated text');
   assert.equal(view.values.setLocalAsrText, 'updated text');
   assert.deepEqual(view.traceCalls.at(-1), {
-    sequence: 11, before: 'existing text', after: 'updated text',
+    sequence: 11,
+    before: 'existing text',
+    after: 'updated text',
   });
   view.emit('capsule:state', { state: 'done', sessionId: 'session' });
   assert.equal(view.values.setLocalAsrText, '');
@@ -675,6 +677,7 @@ for (const overlay of [false, true]) {
     let plays = 0;
     let primes = 0;
     let stops = 0;
+    let disposals = 0;
     const scope = {
       audioCueRuntimeEnabled: true,
       prevStateRef: { current: 'idle' },
@@ -683,6 +686,7 @@ for (const overlay of [false, true]) {
       primeAudioCue: () => primes++,
       playRecordStartCue: () => plays++,
       stopAudioCue: () => stops++,
+      disposeAudioCue: () => disposals++,
       require(name) {
         if (name === '@tauri-apps/api/webviewWindow')
           return { getCurrentWebviewWindow: () => ({ label }) };
@@ -698,7 +702,7 @@ for (const overlay of [false, true]) {
     await tick();
     const primary = label === 'capsule';
     assert.equal(bus.size, primary ? 2 : 0, 'only the resident capsule may own cue subscriptions');
-    assert.equal(primes, primary ? 1 : 0, 'opening another WebView must not prime the cue');
+    assert.equal(primes, 0, 'mounting any WebView must leave the output device closed');
     assert.equal(plays, 0, 'mounting cannot replay a recording edge');
     bus.emit('capsule-mirror-0', 'capsule:state', { state: 'recording' });
     assert.equal(plays, 0, 'a mirror event cannot play the primary capsule cue');
@@ -707,8 +711,13 @@ for (const overlay of [false, true]) {
     assert.equal(plays, primary ? 1 : 0, 'only a fresh primary recording edge may play');
     bus.emit('capsule', 'capsule:state', { state: 'done' });
     assert.equal(stops, primary ? 1 : 0);
+    bus.emit('capsule', 'prefs:changed', { audioCueOnRecord: false });
+    assert.equal(disposals, primary ? 1 : 0, 'disabling cues disposes the owned output');
+    bus.emit('capsule', 'capsule:state', { state: 'recording' });
+    assert.equal(plays, primary ? 1 : 0, 'disabled cues cannot play on a new recording');
     cleanup();
     assert.equal(bus.size, 0);
+    assert.equal(disposals, primary ? 2 : 0, 'only the cue owner disposes output on unmount');
   }
 }
 {
