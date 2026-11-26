@@ -6,10 +6,10 @@
 LICENSE[SC4L]: F:Contains the GNU Affero General Public License version 3 text used for OpenLess 2.0 | R:code:README.md, code:RELEASING.md | A:- | S:-
 README.md[SG6M]: F:Introduces OpenLess six-platform open-source voice input, sponsors, developers, privacy and long-prompt advantages, Auto Style and quick-start links | R:code:README.zh.md,code:docs/architecture.md,code:USAGE.md,code:RELEASING.md,code:openless-all/README.md | A:Sponsors,What OpenLess Replaces,See It in Action,Core Features & Experience,Quick Start & Documentation | S:OpenLess 2.0 is AGPL-3.0-only; published 1.x releases retain MIT. PRs target beta; architecture and readiness live in docs/architecture.md.
 README.zh.md[SG5M]: F:Introduces OpenLess six-platform voice input in Chinese, covering sponsors, developers, privacy and long-prompt advantages, example, Auto Style and docs | R:code:README.md,code:docs/architecture.md,code:USAGE.zh.md,code:RELEASING.zh.md,code:openless-all/README.zh.md | A:赞助商,OpenLess 是一款什么样的开源替代品？,看个实际例子,核心功能与使用体验,快速开始与文档导航 | S:OpenLess 2.0 is AGPL-3.0-only; published 1.x releases retain MIT. Architecture and platform acceptance status live in docs/architecture.md.
-RELEASING.md[SV7S]: F:Defines admin release authority, channels, five-file version gates, shared draft assets, signing, CDN publication and attribution | R:code:RELEASING.zh.md,code:.github/workflows/release-tauri.yml,code:.github/workflows/release-harmony.yml | A:Release Authority,Channels,Version-Sync Gate,Unified Release Pipeline,HarmonyOS Signing,Attribution Rules | S:Updater manifests go to CDN, not Release assets. Published assets are immutable; notes-only edits never move tags or rebuild. Linux distribution needs exact-candidate device acceptance.
-RELEASING.zh.md[SV6S]: F:Documents Chinese release policy for administrator authority, version synchronization, draft assets, signing and contributor attribution | R:code:RELEASING.md,code:.github/workflows/release-tauri.yml,code:.github/workflows/release-harmony.yml | A:Release Authority,Channels,Version-Sync Gate,HarmonyOS Signing,Pre-Release Checklist,Attribution Rules | S:Only administrators tag and publish. Beta never auto-updates Stable. Draft repairs precede publication; notes-only edits preserve tags, packages and asset identity.
+RELEASING.md[SV7S]: F:Defines admin release authority, channels, five-file version gates, shared draft assets, signing, CDN publication and attribution | R:code:RELEASING.zh.md,code:.github/workflows/release-tauri.yml,code:.github/workflows/release-harmony.yml | A:Release Authority,Version-Sync Gate,Unified Release Pipeline,Channel Matrix,Pre-Release Checklist,Attribution Rules | S:Updater manifests go to CDN, not Release assets. Published assets are immutable; notes-only edits never move tags or rebuild. Linux distribution needs exact-candidate device acceptance.
+RELEASING.zh.md[SV6S]: F:Documents Chinese release policy for administrator authority, version synchronization, draft assets, signing and contributor attribution | R:code:RELEASING.md,code:.github/workflows/release-tauri.yml,code:.github/workflows/release-harmony.yml | A:发布权限,渠道、分支与标签约定,版本号五处同步闸门,统一发布流水线与下载资产,管理员发布前检查表,署名要求 | S:Only administrators tag and publish. Beta never auto-updates Stable. Draft repairs precede publication; notes-only edits preserve tags, packages and asset identity.
 USAGE.md[SU5S]: F:Guides platform installation, permissions, model setup, continuous dictation, styles, Ask, dictionary, remote input and troubleshooting | R:code:USAGE.zh.md,code:docs/guides/speech-services.md | A:Installation,First-Time Setup,Daily Usage,Ask & Selection Rewrite,Troubleshooting | S:iOS requires personal signing. Unverified Ask writeback leaves results in its window. Local ASR requires Traditional mode and placing the enabled local provider first.
-USAGE.zh.md[SU4S]: F:Guides Chinese users through installation, permissions, dictation pipelines, styles, safe writeback, history, sync and troubleshooting | R:code:USAGE.md,code:docs/guides/speech-services.md | A:Installation,First-Time Setup,Daily Usage,Ask & Selection Rewrite,Troubleshooting | S:Local ASR uses the first enabled provider in Traditional mode; cursor context excludes passwords and terminals.
+USAGE.zh.md[SU4S]: F:Guides Chinese users through installation, permissions, dictation pipelines, styles, safe writeback, history, sync and troubleshooting | R:code:USAGE.md,code:docs/guides/speech-services.md | A:安装,首次配置,日常使用,随便问与选区改写,常见问题 | S:Local ASR uses the first enabled provider in Traditional mode; cursor context excludes passwords and terminals.
 
 ===/<repository>/.github/ISSUE_TEMPLATE/===
 bug.yml[FQ3T]: F:Defines the Chinese bug issue form with separate fields for symptoms, impact, acceptance and open questions | R:code:.github/ISSUE_TEMPLATE/config.yml | A:impact, acceptance, todo | S:-
@@ -29,7 +29,7 @@ action.yml[OV4T]: F:Installs the ALSA, Fcitx, PipeWire, Wayland and packaging de
 ===/<repository>/.github/workflows/===
 android-apk.yml[OV7L]: F:Plans Android ABI jobs, builds APK artifacts and attaches signed release packages to the shared draft on a Tauri tag run | R:code:.github/workflows/release-tauri.yml, code:.github/actions/cache-npm/action.yml | A:plan, build-android-apk, publish-android-release | S:Tag builds enter through release-tauri. Scheduled smoke builds are debug-grade, and manual dispatch has separate signing behavior.
 cache-maintenance.yml[OP5T]: F:Reports GitHub Actions cache use and prunes closed PR caches or old branch generations to enforce the budget | R:code:openless-all/app/scripts/ci-cache-usage.sh, code:.github/workflows/ci.yml | A:report | S:Tag and open PR scopes stay protected. The family retention target is two branch generations.
-ci.yml[OQ8L]: F:Runs the changed-area gate, frontend and browser checks, native capsule and platform builds, and required Windows result aggregation | R:code:openless-all/app/scripts/ci-changed-areas.sh,code:.github/actions/cache-npm/action.yml | A:changes,ui-motion,cross-platform,windows-checks | S:Changed-area output skips a platform only on explicit false. Missing PR baseline evidence defaults to running checks, and the desktop-only label is a separate gate.
+ci.yml[OQ8L]: F:Runs changed-area gates, frontend and browser checks, native and platform builds, and Windows result aggregation | R:code:openless-all/app/scripts/ci-changed-areas.sh,code:.github/actions/cache-npm/action.yml | A:changes,ui-motion,cross-platform,windows-checks | S:Chromium and WebKit each run two shards with 30-minute steps and 50-minute jobs. Only shard 1 saves each browser cache. Uncertain change impact runs checks.
 mirror-release.yml[OV6T]: F:Reconciles GitHub release packages and channel metadata with Alibaba OSS after release events, on a schedule or on demand | R:code:openless-all/app/scripts/mirror-release.py,code:.github/workflows/release-tauri.yml | A:mirror | S:One canonical-repository job serializes mirroring and removes abandoned multipart uploads before the next copy.
 release-harmony.yml[OV7M]: F:Builds the HarmonyOS HAP, attaches the public package and checksums, and optionally uploads a signed candidate to AppGallery | R:code:.github/workflows/release-tauri.yml, code:openless-all/app/scripts/prepare-harmony-sdk.sh, code:openless-all/app/scripts/upload-appgallery.mjs | A:build-harmony-hap | S:Automatic release attachment requires a draft. GitHub receives the unsigned HAP, while AppGallery uses the distinct signed package.
 release-tauri.yml[OV8L]: F:Packages macOS and Windows installers and coordinates one draft with Android and HarmonyOS release assets | R:code:RELEASING.md,code:.github/workflows/android-apk.yml,code:.github/workflows/release-harmony.yml | A:prepare-release,build,publish,android,harmony | S:Desktop and Android use the same per-tag publication lock when merging updater-signatures.json. Draft asset collection can proceed when some matrix jobs failed.
@@ -43,10 +43,10 @@ openless.rb[FV5T]: F:Defines the macOS OpenLess cask with architecture-specific 
 ATTRIBUTION.md[SC4T]: F:Credits adapted Rare UI components and Open Runde fonts and links their upstream sources and licenses | R:code:openless-all/app/public/licenses/rare-ui-LICENSE.txt | A:Rare UI Toast,Rare UI AI Prompt Box and Streaming Response | S:-
 architecture.md[SG6S]: F:Documents three-layer UI-Host-Core architecture, six-platform client forms, acceptance status, module responsibilities, diagrams and release branches | R:code:openless-all/README.zh.md,code:docs/index.md,code:RELEASING.zh.md | A:全平台客户端形态、适配状态与子文档导航,分层与核心模块职责,分支、发布机制与平台工程规划 | S:PRs target beta; desktop updater manifests are hosted on CDN, not GitHub Release assets. Linux L01-L12 and HarmonyOS device acceptance remain pending.
 index.md[SG4T]: F:Routes users and developers to READMEs, usage, speech setup, architecture, platform build guides, release checklist, attribution and license docs | R:code:README.zh.md,code:README.md,code:docs/architecture.md,code:USAGE.zh.md,code:RELEASING.zh.md | A:上手与使用 OpenLess,开发、构建与架构,发布、署名与许可 | S:Online user docs are maintained at openless.top while repository docs cover architecture, platform builds and release policy.
-linux-egui-command-event-baseline.json[FM5L]: F:Captures the historical Tauri command and event compatibility inventory, Core event kinds and Linux interface ownership for contract 2.0.0 | R:code:openless-all/app/contract/backend-2.0.json,code:docs/linux-egui-backend-contract.md | A:commands,events,coreEventKinds,compatibilityRules,implementationStatus | S:The M0 inventory records its own source date. Current Linux product release requires separate device and install evidence.
+linux-egui-command-event-baseline.json[FM5L]: F:Records the dated M0 Tauri command and event inventory, Core event kinds, Linux ownership and compatibility rules for contract 2.0.0 | R:code:openless-all/app/contract/backend-2.0.json,code:openless-all/app/crates/openless-core/src/api.rs | A:commands,events,coreEventKinds,compatibilityRules,implementationStatus | S:Historical inventory observed on 2026-09-04, not a live command count. Linux release still requires actual audio, input, install, upgrade and rollback evidence.
 
 ===/<repository>/docs/images/client-diagrams/===
-README.md[SG3T]: F:Indexes editable Mermaid and rendered PNG and SVG client architecture, data flow and startup diagrams in English and Chinese | R:code:docs/architecture.md,code:docs/structure.md | A:- | S:-
+README.md[SG3T]: F:Indexes editable Mermaid and rendered PNG and SVG client architecture, data flow and startup diagrams in English and Chinese | R:code:docs/architecture.md,code:docs/images/client-diagrams/openless-client-architecture.mmd | A:- | S:-
 openless-client-architecture.mmd[SG4T]: F:Maps WebView routes and Tauri IPC through platform hosts and shared Core to persistence and external services | R:code:docs/images/client-diagrams/openless-client-architecture.svg, code:docs/architecture.md | A:UI, EXT | S:-
 openless-client-architecture.svg[SG2T]: F:Renders the English client architecture diagram with WebView, Tauri, other hosts and external system boundaries | R:code:docs/images/client-diagrams/openless-client-architecture.mmd | A:- | S:-
 openless-client-architecture.zh-CN.mmd[SG3T]: F:Defines Chinese architecture diagram nodes and connections for the UI, Tauri host, Core and external services | R:code:docs/images/client-diagrams/openless-client-architecture.zh-CN.svg | A:UI, EXT | S:-
@@ -64,15 +64,15 @@ openless-client-startup-recording-flow.zh-CN.svg[SA2T]: F:Renders the Chinese st
 polish-reference-examples.sample.jsonl[SA3T]: F:Provides six JSONL references for formal and light rewriting, spoken corrections, structured prompts and preserving questions | R:- | A:id,mode,scene,raw,polished,tags and notes | S:Keep questions unanswered during polishing.
 
 ===/<repository>/openless-all/===
-README.md[SV5S]: F:Maps cross-platform sources and documents desktop prerequisites, shared Core/Linux tests, packaging and native mobile build entry points | R:code:openless-all/README.zh.md,code:openless-all/app/scripts/build-mac.sh,code:openless-all/ios/README.md | A:Repository Layout,Desktop Quick Start,Shared Backend and Linux,macOS Build,Windows Build,Mobile Builds | S:Use build-mac.sh rather than bare tauri build; INSTALL=0 avoids replacing the installed app. Linux CI/releases remain paused; iOS versions independently.
-README.zh.md[SV4S]: F:Documents cross-platform source layout, toolchains, local desktop/Core/Linux builds and Android, HarmonyOS and iOS build guides in Chinese | R:code:openless-all/README.md,code:openless-all/ios/README.zh.md | A:Repository Layout,Prerequisites,Shared Backend and Linux,macOS Build,Windows Build,Mobile Builds | S:The GNU helper requires a space-free build path. Linux automation is paused; local deb/rpm packaging remains available.
+README.md[SV5S]: F:Maps cross-platform sources and documents desktop prerequisites, shared Core/Linux tests, packaging and native mobile build entry points | R:code:openless-all/README.zh.md,code:openless-all/app/scripts/build-mac.sh,code:openless-all/ios/README.md | A:Repository Layout,Prerequisites & Quick Start,Shared backend and Linux host,macOS Build,Windows Build,HarmonyOS Build | S:Use build-mac.sh rather than bare tauri build; INSTALL=0 avoids replacing the installed app. Linux CI/releases remain paused; iOS versions independently.
+README.zh.md[SV4S]: F:Documents cross-platform source layout, toolchains, local desktop/Core/Linux builds and Android, HarmonyOS and iOS build guides in Chinese | R:code:openless-all/README.md,code:openless-all/ios/README.zh.md | A:目录结构,环境要求与快速启动,共享后端与 Linux 宿主,macOS 构建,Windows 构建,HarmonyOS 构建 | S:The GNU helper requires a space-free build path. Linux automation is paused; local deb/rpm packaging remains available.
 
 ===/<repository>/openless-all/app/.cargo/===
 config.toml[FV4T]: F:Sets MinGW linker flags for the x86_64 Windows GNU Cargo target | R:code:openless-all/app/Cargo.toml | A:target.x86_64-pc-windows-gnu | S:Suppress automatic export of Rust symbols from the desktop cdylib to avoid exceeding PE ordinal capacity.
 
 ===/<repository>/openless-all/app/===
-.clang-format[XQ2T]: F:Uses LLVM formatting with two-space indentation and a 100-column limit while keeping include order and comment wrapping | R:code:docs/structure.md | A:- | S:-
-.editorconfig[XQ2T]: F:Defines LF, UTF-8 and per-language indentation rules for the app tree | R:code:docs/structure.md | A:- | S:Markdown retains trailing whitespace.
+.clang-format[XQ2T]: F:Uses LLVM formatting with two-space indentation and a 100-column limit; disables include sorting and comment reflow | R:code:openless-all/app/.editorconfig | A:- | S:-
+.editorconfig[XQ2T]: F:Defines UTF-8, LF, final newlines and four-space default indentation, with two-space overrides for listed app languages | R:code:openless-all/app/.clang-format | A:- | S:Markdown retains trailing whitespace.
 .gitignore[FC3T]: F:Ignores local frontend artifacts and generated Tauri builds and native capsule sidecars under the app tree | R:code:.gitignore | A:- | S:-
 .prettierignore[XQ3T]: F:Keeps dependencies, build and generated files, vendored sources and npm lockfiles out of Prettier passes | R:code:openless-all/app/.prettierrc.json | A:- | S:-
 .prettierrc.json[XQ3T]: F:Defines app Prettier quoting, two-space layout, 100-column wrapping, line endings and shell formatting plugin | R:code:openless-all/app/.prettierignore | A:- | S:-
@@ -81,7 +81,7 @@ Cargo.toml[FV6T]: F:Declares Cargo resolver 2 and composes shared Core, MicYou, 
 index.html[EU4T]: F:Provides the app React mount and themed bootstrap splash while the entry module loads | R:code:openless-all/app/src/main.tsx | A:root | S:Loads startup.js before the main module.
 package-lock.json[FV4L]: F:Pins resolved npm packages and platform variants for the OpenLess frontend and test tooling | R:code:openless-all/app/package.json | A:- | S:-
 package.json[FV6T]: F:Declares web app version, frontend dependencies, Tauri entry points, and build and validation commands | R:code:openless-all/app/package-lock.json,code:openless-all/app/vite.config.ts | A:scripts,dependencies,overrides | S:Build has platform IPC contract prechecks. Browser motion verification uses the dedicated Playwright command.
-playwright.config.ts[XQ5T]: F:Configures Chromium and WebKit verification with separate build preview and source fixture servers | R:code:openless-all/app/e2e/support/server.ts | A:webServer, projects | S:CI and explicit port overrides disable server reuse. Fixture routes use live modules independently of the built preview.
+playwright.config.ts[XQ5T]: F:Configures Chromium and WebKit verification with separate build preview and source fixture servers | R:code:openless-all/app/e2e/support/server.ts | A:webServer, projects | S:CI sets a 25-minute global timeout and disables server reuse. Fixture routes use live modules independently of the built preview.
 tsconfig.json[FV5T]: F:Defines frontend TypeScript language and DOM libraries, strict options, Android alias, and Vite configuration project reference. | R:code:openless-all/app/tsconfig.node.json,code:openless-all/app/vite.config.ts | A:Frontend TypeScript project | S:Keep resolver aliases and build target assumptions coordinated with Vite.
 tsconfig.node.json[FV3T]: F:Defines the composite TypeScript project used to check the Vite configuration. | R:code:openless-all/app/vite.config.ts | A:- | S:-
 vite.config.ts[OV7T]: F:Configures React and Tailwind builds, platform-dev and preview routing, frontend bundle inputs and target-specific artifact options. | R:code:openless-all/app/ask-window/index.html,code:openless-all/app/tsconfig.json | A:VITE_OPENLESS_PLATFORM; TAURI_DEV_HOST; desktop Ask entry | S:Build the standalone Ask HTML entry for desktop. Harmony emits inline IIFE output without split CSS or module preload, and mobile bundles carry MicYou notices.
@@ -221,7 +221,7 @@ theme.ts[CU4T]: F:Keeps the Ask WebView theme synchronized to host preferences, 
 window.css[CU5L]: F:Styles the Ask composer, expansion, attachments, retained results and independent tool activity | R:code:openless-all/app/ask-window/ask-window.tsx,code:openless-all/app/ask-window/composer.tsx | A:ask-draft-error,ask-tool-activity | S:Compact failure text overlays a zero-height anchor while the draft remains stored. Keep the code visible, prevent wrapping into controls, and retain reduced-motion behavior.
 
 ===/<repository>/openless-all/app/assets/remote-input/===
-app.js[EU7L]: F:Runs phone-side OpenLess pairing, PCM streaming, recording and cancellation, session recovery and result copy UI | R:code:openless-all/app/assets/remote-input/index.html, code:docs/remote-input-recording-recovery.md | A:connect, startRecording, stopRecording, acquireWakeLock, resampleToInt16LE | S:Stop and cancel can be queued before the start acknowledgement. Reconnect checks the prior session without reopening the microphone.
+app.js[EU7L]: F:Runs phone-side PIN pairing, sequenced PCM streaming, recording controls, session result recovery, wake lock and copy UI | R:code:openless-all/app/assets/remote-input/index.html,code:openless-all/app/crates/openless-core/src/remote_input_service.rs | A:connect,startRecording,stopRecording,requestRecovery,acquireWakeLock,resampleToInt16LE | S:Queue stop or cancel before the start acknowledgement; flush bounded PCM in order. Recovery uses a session-specific key, never a history listing, and reconnect does not reopen the microphone.
 index.html[EU5S]: F:Defines the remote phone page for pairing, certificate trust, recording, status, transcript results and source assets | R:code:openless-all/app/assets/remote-input/app.js, code:openless-all/app/assets/remote-input/style.css | A:- | S:Certificate guidance requires comparison with the desktop fingerprint before trusting the root CA.
 style.css[CU4L]: F:Styles remote phone recording, pairing, certificate disclosure and result controls for mobile layouts | R:code:openless-all/app/assets/remote-input/index.html | A:- | S:-
 
@@ -229,7 +229,7 @@ style.css[CU4L]: F:Styles remote phone recording, pairing, certificate disclosur
 vocab-presets.json[FD4T]: F:Seeds built-in vocabulary lists with stable IDs, display names and suggested phrases | R:code:openless-all/app/crates/openless-core/src/vocabulary.rs | A:id, name, phrases | S:Core uses the embedded data as the built-in set independently of the writable data-directory preset file.
 
 ===/<repository>/openless-all/app/contract/===
-backend-2.0.json[FG8L]: F:Defines the shared backend startup snapshot, events, Android JNI, Linux facade and legacy voice contract data | R:code:openless-all/app/crates/openless-core/src/api.rs,code:docs/linux-egui-backend-contract.md | A:contractVersion,startupSnapshot,backendEvent,androidJni,linuxFacade | S:Hosts use the pinned startup version before consuming state. Event examples carry an ordered sequence and originating session.
+backend-2.0.json[FG8L]: F:Defines shared startup snapshots, backend events, app-style routing, selection protection, Shift translation, testing gates and host wire contracts | R:code:openless-all/app/crates/openless-core/src/api.rs,code:docs/linux-egui-command-event-baseline.json | A:contractVersion,startupSnapshot,backendEvent,appStyleRouting,selectionOriginalProtection,linuxFacade | S:Startup is pinned to contract 2.0.0; event envelopes carry sequence and sessionId. Selection originals are protected before model work; uncertain writes must not be retried. App routing and testing-feature switches stay device-local.
 language-catalog.json[FL5T]: F:Defines shared language identifiers, native display names, ASR codes and Apple locales for Core and UI consumers | R:code:openless-all/app/crates/openless-core/src/language_catalog.rs, code:openless-all/app/src/lib/languageCatalog.ts | A:code, nativeName, asrCode, appleLocale | S:The checked-in catalog is shared data. Runtime providers still determine which languages they support.
 
 ===/<repository>/openless-all/app/crates/micyou-dsp/===
@@ -299,11 +299,11 @@ coding_agent.rs[DB6L]: F:Defines shared coding-agent requests, provider command 
 coding_agent_guard.rs[DS6M]: F:Classifies higher-risk agent commands and builds provider-specific approval and deny policies | R:code:openless-all/app/crates/openless-core/src/coding_agent.rs | A:is_high_risk_command, default_deny_rules, build_opencode_guard_config | S:Provider guard configurations share a fail-closed policy and approvable patterns map to explicit deny rules.
 config.rs[LG7S]: F:Defines Core configuration and dependency injection for clock, task scheduling, host effects, recognition, credentials and runtime services | R:code:openless-all/app/crates/openless-core/src/api.rs, code:openless-all/app/crates/openless-core/src/ports.rs | A:Clock, BackendDependencies, RestoreRuntimeEffects, TaskSpawner | S:Apply absolute host restore effects after installing the complete repository target while admission stays fenced. Failures must propagate for rollback.
 correction.rs[DB5L]: F:Stores deterministic correction rules and applies exact and numeric-placeholder replacements after recognition | R:code:openless-all/app/crates/openless-core/src/correction_observation.rs | A:sync_replace_all, read_locked, next_number_start | S:Correction rules operate on the transcript independently of vocabulary hints. Removing an absent rule is idempotent.
-correction_observation.rs[DS5S]: F:Filters locally observed edits before they may become vocabulary suggestions | R:code:openless-all/app/crates/openless-core/src/host_document.rs | A:permits_vocabulary_suggestion, number_signature | S:Reject sensitive content and changes to number or negation signatures before suggesting a term.
+correction_observation.rs[DS5S]: F:Filters locally observed edits before they may become vocabulary suggestions | R:code:openless-all/app/crates/openless-core/src/host_document/mod.rs,code:openless-all/app/crates/openless-core/src/expression_observation.rs | A:permits_vocabulary_suggestion,number_signature | S:Reject sensitive inserted text or edit context and any changed span containing numbers or negation. Surrounding number and negation signatures must match; callers still require explicit confirmation.
 credentials.rs[LI8L]: F:Defines Core credential storage and channel contracts with scoped account identities, secret values and revisioned metadata mutations | R:code:openless-all/app/crates/openless-core/src/cloud_providers.rs, code:openless-all/app/crates/openless-core/src/credentials_legacy.rs | A:CredentialStore, ChannelSummary, SecretValue, mutate_channel | S:Secrets and visible channel metadata have distinct interfaces. Retired macOS recognition channels are reconciled without making them active.
 credentials_legacy.rs[IS6L]: F:Reads and converts legacy desktop vault documents and chunk references to current Core credentials and channel metadata | R:code:openless-all/app/crates/openless-core/src/credentials.rs | A:decode_legacy_credentials, LegacyActive | S:Host owns source reads and transactional destination writes. Malformed secret values never appear in error output.
-deepseek_suite.rs[AC5S]: F:Stores the dedicated DeepSeek pipeline configuration and exposes its provider invocation and credential readiness | R:code:openless-all/app/crates/openless-core/src/dictation_context.rs, code:docs/deepseek-suite.md | A:DeepSeekSuiteConfig, credentials_status | S:Suite configuration is separate from traditional and multimodal provider selection.
-deepseek_tts.rs[IN5S]: F:Streams validated text to DeepSeek speech synthesis and passes bounded PCM frames to its consumer | R:code:docs/deepseek-suite.md | A:stream, stream_url | S:Only a successful finish confirms complete output. Invalid text or voice is rejected before connecting.
+deepseek_suite.rs[AC5S]: F:Loads dedicated DeepSeek pipeline credentials, validates voice selection and exposes provider invocation and readiness | R:code:openless-all/app/crates/openless-core/src/dictation_context.rs,code:openless-all/app/crates/openless-core/src/deepseek_tts.rs | A:DeepSeekSuiteConfig,invocation,credentials_status | S:Application-scoped suite configuration is independent of traditional channels. Only stella and tide voices are accepted; non-Deepseek modes delegate readiness to the credential store.
+deepseek_tts.rs[IN5S]: F:Streams validated text over the DeepSeek TTS WebSocket and forwards size-bounded binary PCM frames to a consumer | R:code:openless-all/app/crates/openless-core/src/deepseek_suite.rs | A:stream,stream_url | S:Reject empty or oversized text and unknown voices before connecting. Partial PCM is not completion: require a success finish event and nonempty audio.
 dictation_context.rs[DB7L]: F:Freezes provider identities, style, post-ASR policy, history eligibility and output-target rules for each dictation | R:code:openless-all/app/crates/openless-core/src/dictation_engine.rs,code:openless-all/app/crates/openless-core/src/polish_strategy.rs | A:DictationContext,DictationPolishContext,ProviderInvocation,effective_polish_prompts,eligible_polish_context_turns | S:Capture uses a session snapshot, including the strategy script. Request overrides start empty; short-text skipping remains target-specific and cannot suppress requested translation.
 dictation_engine.rs[AB9L]: F:Orchestrates capture, buffered or live ASR, archive recovery, local standby, polishing and terminal cleanup | R:code:openless-all/app/crates/openless-core/src/ports.rs,code:openless-all/app/crates/openless-core/src/cloud_providers.rs,code:openless-all/app/crates/openless-core/src/long_recording.rs | A:PipelineDictationEngine,LocalStandby,BufferedTranscriptionSession,retry_transcription_from_archive | S:Reject nonzero PCM shorter than 100 ms. Both capture entries spill past 8 MiB only with a healthy processed-PCM archive; raw-only debug archives must not replace enhanced ASR input and retain memory stop protection. Finish validates captured byte length. Long recovery and local standby read sixty-second ranges, never accept a partial segment set. CapturedDurationMs precedes final ASR progress. Cancelled audio cannot enter successors; post-ASR policy uses winning metadata and cloned settings.
 domains.rs[LG8L]: F:Defines host-facing runtime ports and DTOs for recording, QA, selection, agent, remote input and other platform services | R:code:openless-all/app/crates/openless-core/src/api.rs | A:RuntimeRestoreGuard,VoiceEditPlanResult | S:Runtime operations are scoped to the owning turn or session. Serialized remote input status and events exclude pairing credentials.
@@ -338,7 +338,7 @@ polish.rs[AN8L]: F:Builds text-polish requests and streams across compatible, Co
 ports.rs[LG8L]: F:Defines host audio, archive, insertion, transcription, polish and progress contracts | R:code:openless-all/app/crates/openless-core/src/api.rs,code:openless-all/app/src-tauri/src/core_adapters.rs | A:RecordingArchive,EngineProgress,AudioRecorder,TranscriptionSession,TranscriptMetadata | S:Archive handles outlive capture stop. Default range reads still load whole PCM; hosts must override for bounded memory. write_error latches archive health separately from availability. CapturedDurationMs reports PCM duration, not wall time. Missing ASR metadata must remain absent.
 preference_patch.rs[DC6S]: F:Applies field edits to the latest preferences and retries bounded revision conflicts through the strict transaction | R:code:openless-all/app/crates/openless-core/src/api.rs | A:patch_preferences,revision_conflict,update_fields | S:Retry only explicit revision conflicts. Each retry rereads current settings so independent writes remain intact.
 preferences.rs[PD7L]: F:Persists, repairs, merges and snapshots device preferences while maintaining in-memory state and compatibility | R:code:openless-all/app/crates/openless-core/src/persistence.rs, code:openless-all/app/crates/openless-core/src/shared_types.rs | A:PreferencesStore, sync_replace_raw, backup_unparseable_preferences | S:Back up invalid bytes before salvage, preserve unknown compatible keys on save, and keep stale preference writes from rerouting a stored sync token.
-prompt_cache.rs[KP6L]: F:Applies service-specific request cache parameters and stable-prefix reuse where the actual endpoint and model support it | R:code:openless-all/app/crates/openless-core/src/llm_protocol.rs, code:docs/prompt-cache-policy.md | A:apply, supports_usage, apply_anthropic_prefixes | S:Verified origin and path determine eligibility. Caller-provided cache controls own their breakpoint budget.
+prompt_cache.rs[KP6L]: F:Applies verified-origin provider cache controls, hashed stable-prefix affinity, Ark routing headers and usage eligibility | R:code:openless-all/app/crates/openless-core/src/llm_protocol.rs,code:openless-all/app/crates/openless-core/src/polish.rs | A:apply,routing_header,supports_usage,apply_anthropic_prefixes | S:Origin, path, model and wire format gate provider behavior. Affinity hashes omit dynamic context; caller cache controls own breakpoint budgets. Unverified services stay unchanged.
 prompt_compose.rs[KA7L]: F:Composes shared prompts for dictation polish, translation and QA, separating stable instructions from dynamic input | R:code:openless-all/app/crates/openless-core/src/prompts.rs,code:openless-all/app/crates/openless-core/src/dictation_context.rs | A:compose_polish_prompts_for_input,compose_system_prompt,PolishTranslationStream | S:In translation streaming, source text is held until marked target output begins. Preserve stable style prefixes across session context changes.
 prompts.rs[DA6L]: F:Provides prompt templates, bounded untrusted-text envelopes and context helpers for polish, translation and voice editing | R:code:openless-all/app/crates/openless-core/src/prompt_compose.rs | A:MAX_XML_ENVELOPE_CHARS,polish_injection_defense,polish_context_instruction,voice_edit_system_prompt | S:Cursor and selected text are treated as data in bounded envelopes and cannot redefine the instruction contract.
 provider_registry.rs[AB7L]: F:Registers shared transcription, dictation and polish adapters and routes sessions to the chosen provider | R:code:openless-all/app/crates/openless-core/src/provider_resolution.rs, code:openless-all/app/crates/openless-core/src/ports.rs | A:TranscriptionRouter, TextPolisherRouter | S:The session pins its adapter through terminal state even if channel settings change. Missing selected providers fail explicitly.
@@ -374,7 +374,7 @@ main_dictation_trace.rs[RO6S]: F:Samples opt-in recording lifecycle and caption-
 polish_strategy.rs[KC8M]: F:Evaluates bounded local Rhai rules against corrected ASR metadata and validates skip, polish or request decisions | R:code:openless-all/app/crates/openless-core/src/dictation_engine.rs | A:evaluate,PolishStrategyConfig,PolishStrategyInput,PolishStrategyDecision,PolishRequestOverrides | S:Disabled, empty, invalid or failed scripts return None for ordinary policy. Imports and host I/O are unavailable; execution, input and allocation sizes are capped. Unknown keys or incompatible overrides fail open. Missing metadata is unit; temperature is stored in thousandths.
 assistant.rs[AB8S]: F:Runs one cancellable personal-assistant request through bounded model, compaction and read-only tool cycles | R:code:openless-all/app/crates/openless-core/src/assistant_api.rs,code:openless-all/app/crates/openless-core/src/assistant/budget.rs,code:openless-all/app/crates/openless-core/src/assistant/call.rs,code:openless-all/app/crates/openless-core/src/assistant/tools.rs | A:AssistantDependencies,PersonalAssistant,new,AssistantRuntime::run | S:Accept no native writer, clipboard or history-store authority. Complete natural answers end without markers or second review. Limit the loop to 24 model steps and tools to 25 seconds; cancellation blocks late success and closes the event sink. Reuse shared model, search and usage services.
 assistant_api.rs[EB8S]: F:Defines request-scoped assistant runtime, read-only context, events and terminal response contracts | R:code:openless-all/app/crates/openless-core/src/assistant.rs,code:openless-all/app/src-tauri/src/ask_window/context.rs,code:openless-all/app/crates/openless-core/src/qa_service/standalone.rs | A:AssistantRequest,AssistantRuntime,AssistantContextProvider,AssistantContextQuery,AssistantContextResult,AssistantEvent | S:A quoted selection grants no write authority. Runtime receives live dialogue independently of persistent history and no native target or writer. The caller fences event sinks by request; a complete response is terminal without second review, while cancellation returns the typed Cancelled error.
-app_catalog.rs[DB6M]: F:Loads, validates, caches, and queries the public application catalog for macOS bundle and Windows executable matching | R:code:openless-all/app/crates/openless-core/src/app_style_routing.rs,code:docs/development/app-style-routing.md | A:AppCatalog,CatalogCategory,CatalogClient,ClientIdentifiers,AppCatalogStore | S:Rejects schemaVersion != 1, empty categories, or empty bundle prefixes; resolves canonicalClientId before returning matched client.
+app_catalog.rs[DB6M]: F:Loads, validates, caches and queries the public application catalog for macOS bundle and Windows executable matching | R:code:openless-all/app/crates/openless-core/src/app_style_routing.rs,code:openless-all/app/contract/backend-2.0.json | A:AppCatalog,CatalogCategory,CatalogClient,ClientIdentifiers,AppCatalogStore | S:Require schemaVersion 1, valid categories and nonempty bundle prefixes. Prefix matches also need an installed web-app name; resolve canonical aliases. Keep the last good cache on refresh failure.
 app_style_routing.rs[DB7L]: F:Manages device-local app and category style assignments, seen-app history, and scene prompt prefixes | R:code:openless-all/app/crates/openless-core/src/app_catalog.rs,code:openless-all/app/crates/openless-core/src/dictation_context.rs | A:InputApp,AppStyleRouting,AppStyleEntry,AppStyleAssignment | S:Routing state stays device-local; input_scene_prefix emits request-only metadata without reading app history, window titles, or document text.
 long_recording.rs[DR6T]: F:Defines long-recording thresholds, PCM duration calculation, and sentence-preserving text chunking | R:code:openless-all/app/crates/openless-core/src/dictation_engine.rs,code:openless-all/app/crates/openless-core/src/auxiliary.rs | A:THRESHOLD_MS,RECOVERY_CHUNK_BYTES,POLISH_CHUNK_CHARS,duration_ms,text_chunks | S:Recordings over 5 minutes trigger recovery retention; text_chunks preserves every character including boundary whitespace while capping chunks at 4000 chars.
 long_recording_tests.rs[TR5L]: F:Tests long-recording audio retention, 1-minute ASR disconnect replay, and chunked LLM retry without partial typing | R:code:openless-all/app/crates/openless-core/src/long_recording.rs,code:openless-all/app/crates/openless-core/src/dictation_engine.rs | A:long_recording_thirty_one_minutes_keeps_audio_and_retries_only_llm,long_recording_asr_disconnect_replays_every_minute_from_start_through_tail | S:Uses synthetic PCM and loopback HTTP SSE truncation to verify archive retention past 5 minutes and suppression of unverified partial deltas.
@@ -401,7 +401,7 @@ bailian.rs[IN6L]: F:Implements classic DashScope realtime task handshake, paced 
 dashscope_multimodal.rs[IN6L]: F:Transcribes recorded WAV with DashScope batch APIs, supporting synchronous requests and asynchronous upload and polling | R:code:openless-all/app/crates/openless-core/src/provider_rules.rs | A:with_protocol, async_transcription_body | S:Model protocol selects the request path. Transfer URLs are validated and long chunks have separate processing deadlines.
 elevenlabs.rs[IN5L]: F:Sends recorded WAV to ElevenLabs Scribe and parses the resulting text and duration | R:code:openless-all/app/crates/openless-core/src/asr/wav.rs | A:speech_to_text_url | S:Uses multipart file and model_id with the provider-specific credential header.
 frame.rs[KN5M]: F:Encodes and parses Volcengine binary speech frames, message types, sequence flags and error bodies | R:code:openless-all/app/crates/openless-core/src/asr/volcengine.rs | A:ParsedFrame, has_sequence | S:Parse the optional sequence only for qualifying flags. Error frames carry a distinct error code before payload size.
-gemini.rs[IN6L]: F:Runs dedicated Gemini batch transcription through resumable file upload, Interactions polling and cleanup | R:code:openless-all/app/crates/openless-core/src/asr/gemini_live.rs, code:docs/gemini-transcribe.md | A:transcribe_timeout, files_upload_url, cancel_interaction | S:Use the upload resource URI in the transcription interaction. Cancellation addresses both in-flight upload and interaction resources.
+gemini.rs[IN6L]: F:Runs dedicated Gemini batch transcription with resumable WAV upload, Files readiness, Interactions polling and temporary-resource cleanup | R:code:openless-all/app/crates/openless-core/src/asr/gemini_live.rs,code:openless-all/app/crates/openless-core/src/asr/wav.rs | A:GeminiBatchASR,transcribe_timeout,transcribe_wav,files_upload_url,cancel_interaction | S:Pass the uploaded file URI to Interactions, not inline audio. Cancellation and failed uploads trigger bounded cleanup; best-effort file deletion must not discard a successful transcript.
 gemini_live.rs[IN6S]: F:Exposes shared Gemini Live capture, PCM batching, finish and cancellation for traditional and smart transcription | R:code:openless-all/app/crates/openless-core/src/asr/gemini_live/session.rs | A:GeminiLiveASR, finish, consume_pcm_chunk | S:Dropping the session signals cancellation. Audio queues are bounded separately from socket setup and finish deadlines.
 mimo.rs[IN5L]: F:Routes batch audio transcription through MiMo or OrcaRouter chat-completions with WAV input | R:code:openless-all/app/crates/openless-core/src/asr/pcm.rs, code:openless-all/app/crates/openless-core/src/provider_rules.rs | A:cancel, pcm_duration_ms | S:Split oversized audio into request-safe chunks and combine the returned transcripts.
 mod.rs[LB5S]: F:Exports ASR clients and provides shared cancellable WebSocket writes, send pacing and transcript capture | R:code:openless-all/app/crates/openless-core/src/ports.rs | A:RawTranscript,PacedSendClock,send_ws_message_with_timeout,TranscriptCapture | S:Frame deadlines bound writes including writer-lock acquisition. Pacing uses scheduled slots and cancellation interrupts waits.
@@ -754,7 +754,7 @@ i18n.rs[CL5L]: F:Provides Linux locale selection, UI catalogs, strategy settings
 lib.rs[EH7M]: F:Exports the Linux host facade, native adapters, event draining, settings and backend hotkey dispatch | R:code:openless-all/app/linux-egui/src/backend.rs, code:openless-all/app/crates/openless-core/src/api.rs | A:LinuxHost, drain_events, dispatch_hotkey_event | S:Drain reports lag and closure separately from idle. Core is called through typed APIs independently of the window process.
 linux_access.rs[IS5M]: F:Probes Linux network, Secret Service and input integration readiness without modifying native state | R:code:openless-all/app/linux-egui/src/capabilities.rs | A:KeyringState, probe_network, probe_session | S:Probes do not unlock or create collections, read credentials or capture user input. Distinguish temporary from persistent vaults.
 local_hotkeys.rs[DH6L]: F:Matches focused-window shortcut fallback and deduplicates equivalent Fcitx5 plugin and local edges | R:code:openless-all/app/linux-egui/src/hotkeys.rs | A:LocalHotkey, next_local_press_id, HotkeyDeduplicator | S:Local press IDs occupy a separate range. Deduplication applies to matching keys within the time window.
-logging.rs[RO5L]: F:Configures shared Linux file logging, target filters, rotation and runtime log preferences across native processes | R:code:docs/linux-egui-logging.md | A:FilterSpec, write_log_level, rotate_if_needed | S:Routine frame or liveness events stay throttled or debug-level. Rotation retains numbered history.
+logging.rs[RO5L]: F:Configures Linux host and UI file and terminal logging, module filters, startup rotation, persisted levels and diagnostic export | R:code:openless-all/app/linux-egui/src/main.rs | A:init_file_logger,FilterSpec,write_log_level,rotate_if_needed,export_error_logs | S:Environment filters override the saved next-start level. Only the host rotates; retain three archives. Export the active filter and archives oldest-first, not a pending preference.
 main.rs[EG8L]: F:Runs the persistent Linux host, native services, event handling and egui snapshots including polish strategy preferences | R:code:openless-all/app/linux-egui/src/linux_app/window.rs,code:openless-all/app/linux-egui/src/ui/bridge.rs | A:main,linux_app::run | S:The host survives UI Goodbye and republishes on Hello. A UI frame never owns the Core recording lifecycle; incoming snapshots must preserve pending text edits.
 omni_settings.rs[AC5M]: F:Loads, validates and persists Linux multimodal provider settings and reconciles credential save receipts | R:code:openless-all/app/crates/openless-core/src/credentials.rs | A:OmniSettings, validate, merge_receipt, select | S:Retain edits made after submit when merging a receipt for the same provider.
 popup.rs[RM7L]: F:Defines the Linux popup JSONL protocol and supervises separate popup processes, session frames and actions | R:code:openless-all/app/linux-egui/src/popup_window.rs, code:openless-all/app/linux-egui/src/popup_layer.rs | A:PopupSupervisor, POPUP_PROTOCOL_VERSION, read_jsonl, force_x11_for | S:Bound line size and ignore stale popup state. Child exit and reaping occur outside egui frames.
@@ -798,7 +798,7 @@ corrections.rs[CU4M]: F:Renders a Linux correction-rule editor and filtered list
 format.rs[CL3T]: F:Formats Linux frontend durations and local history times with locale-aware templates | R:code:openless-all/app/linux-egui/src/i18n.rs | A:history_duration, step_duration, time_label | S:-
 history.rs[CU6L]: F:Renders Linux history and quick-note lists, detail, retained audio controls and row actions | R:code:openless-all/app/linux-egui/src/linux_app/history.rs, code:openless-all/app/linux-egui/src/audio_player.rs | A:page, list_card, seek_position_ms | S:Seek uses track bounds and clamps outside drags. Record operations reference stable row IDs instead of list positions.
 icons.rs[CU4M]: F:Embeds Linux Lucide SVG assets, rasterizes reusable icon masks and paints tinted controls | R:code:openless-all/app/linux-egui/src/ui/frontend/layout.rs | A:lucide_svg, draw_icon, draw_icon_sized | S:The source is rendered at a larger pixel size than the typical display control.
-layout.rs[CU6L]: F:Provides native Linux title bar, sidebar, panels, segmented controls and shared card layout | R:code:openless-all/app/linux-egui/src/ui/frontend/theme.rs | A:titlebar, sidebar, body_rect, segmented | S:Selected segmented controls use separate ring and shallow shadow tokens.
+layout.rs[CU6L]: F:Provides native Linux title bar, sidebar, window geometry, blurred overlays, shared cards, inputs and segmented controls | R:code:openless-all/app/linux-egui/src/ui/theme.rs,code:openless-all/app/linux-egui/src/ui/frontend/mod.rs | A:titlebar,sidebar,body_rect,segmented,paint_blurred_overlay,fixed_ui | S:Fullscreen or tiled windows remove outer margins and rounding. Fixed-position child UIs must not advance the parent cursor; selected segments use separate ring and shallow shadow tokens.
 marketplace.rs[CU6L]: F:Renders Linux marketplace browsing, pack details, publishing controls and the centered OAuth dialog | R:code:openless-all/app/crates/openless-core/src/marketplace.rs | A:marketplace_detail, market_state_label | S:OAuth status and close controls retain measured layout and operate on the host-reported device flow.
 mod.rs[EU7L]: F:Renders the full Linux shell, page routing, settings overlays and typed frontend actions each frame | R:code:openless-all/app/linux-egui/src/ui/frontend/view_model.rs, code:openless-all/app/linux-egui/src/linux_app/window.rs | A:render | S:Fixed-height dashboard, history and style use their own scroll containers. Render settings overlays after every page, including those special surfaces.
 overview.rs[CU5L]: F:Draws the Linux dashboard with period metrics, activity heatmap and recent dictation | R:code:openless-all/app/linux-egui/src/ui/frontend/view_model.rs | A:stats_section, heatmap_columns, short_duration | S:Heatmap alignment uses the selected calendar year rather than assuming its first day begins the week.
@@ -881,14 +881,14 @@ check-linux-public-surface.ps1[TQ5S]: F:Checks Linux host access through public 
 check-macos-audio-usage-description.sh[XV4T]: F:Checks a built macOS plist contains a nonempty microphone permission purpose string | R:code:openless-all/app/scripts/build-mac.sh | A:- | S:Uses the actual generated plist rather than checking the source declaration alone.
 check-window-hotkey-fallback.mjs[TH4T]: F:Bundles and runs the window hotkey fallback TypeScript check in a temporary Node module | R:code:openless-all/app/src/lib/windowHotkeyFallback.test.ts | A:- | S:-
 ci-artifact-reuse.test.mjs[TV4T]: F:Checks CI target reuse, Windows build parallelism inputs and preservation of native validation harnesses | R:code:.github/workflows/ci.yml | A:step | S:-
-ci-browser-matrix.test.mjs[TQ4T]: F:Checks browser acceptance artifacts and failure propagation through the aggregate UI motion gate | R:code:.github/workflows/ci.yml | A:- | S:Artifact upload remains eligible after a failed browser test. A required failure cannot turn the aggregate green.
+ci-browser-matrix.test.mjs[TQ4T]: F:Checks the two-browser two-shard matrix, timeout layers, cache ownership, artifacts and aggregate failure propagation | R:code:.github/workflows/ci.yml,code:openless-all/app/playwright.config.ts | A:- | S:Shard 1 alone saves browser caches. Failure and acceptance artifacts are unique to each browser and shard.
 ci-cache-sharing.test.mjs[TP5S]: F:Asserts shared CI and release cache keys and correct restore, prime and save conditions for consumers | R:code:.github/workflows/ci.yml, code:.github/workflows/release-tauri.yml | A:sharedKeys | S:Beta owns cache populations while platform release jobs restore the matching dependency caches.
 ci-cache-usage.sh[OP5M]: F:Reads GitHub cache usage and optionally prunes closed PR or superseded branch caches under an explicit budget | R:code:.github/workflows/cache-maintenance.yml | A:family | S:Unreadable PR state keeps its cache. An over-budget report returns failure after permitted pruning.
 ci-cache-usage.test.mjs[TP5M]: F:Verifies cache reporting and pruning policies against isolated GitHub CLI fixtures | R:code:openless-all/app/scripts/ci-cache-usage.sh | A:run, check | S:Records simulated deletion calls locally instead of altering real caches.
 ci-changed-areas.sh[OQ5T]: F:Wraps changed-area graph classification in a CI-safe boolean result | R:code:openless-all/app/scripts/ci-impact.mjs | A:- | S:An unknown, missing or failed classification runs the check. Only a valid false skips it.
-ci-changed-areas.test.mjs[TQ5L]: F:Tests Git change classification, Cargo reachability and CI job wiring against synthetic commits and workflow checks | R:code:openless-all/app/scripts/ci-changed-areas.sh | A:check, reset | S:All Git fixtures are isolated. Failure contracts preserve the decision to run checks when impact is uncertain.
+ci-changed-areas.test.mjs[TQ5L]: F:Tests Git change classification, Cargo reachability and CI job wiring against synthetic commits and workflow checks | R:code:openless-all/app/scripts/ci-changed-areas.sh | A:check, reset | S:Generated baseline and code index alone skip checks; configuration and unknown paths run all checks. Git fixtures are isolated.
 ci-consolidation.test.mjs[TQ5S]: F:Checks consolidated CI, desktop-only gating, isolated provider acceptance and iOS and Windows job obligations | R:code:.github/workflows/ci.yml | A:- | S:The UI aggregate skips provider-only manual acceptance runs while retaining ordinary PR obligations.
-ci-impact.mjs[XQ6M]: F:Determines platform impact using Git changes, manifest closures and evaluated Cargo target clauses | R:code:openless-all/app/scripts/ci-changed-areas.sh | A:classify, decide, buildGraph, closureFor, evaluateCfg | S:Missing diffs, unknown path ownership or metadata failures default to running the affected validation.
+ci-impact.mjs[XQ6M]: F:Determines platform impact using Git changes, manifest closures and evaluated Cargo target clauses | R:code:openless-all/app/scripts/ci-changed-areas.sh | A:classify, decide, buildGraph, closureFor, evaluateCfg | S:Only .aoci/baseline.json and aoci.code.txt are ignored as generated indexes. Unknown paths or metadata failures run affected checks.
 ci-macos-runner-contract.test.mjs[TV4T]: F:Checks macOS runner selection preserves Windows matrix and platform gate coverage | R:code:.github/workflows/ci.yml | A:- | S:-
 ci-performance.test.mjs[TP5M]: F:Exercises aggregate CI scripts, shared Cargo target reuse and Windows installer failure propagation with local fixtures | R:code:.github/workflows/ci.yml, code:.github/workflows/release-tauri.yml | A:runGate | S:The fixture checks actual Cargo freshness and that installer failures cannot be hidden by later steps.
 ci-workflow-behavior.test.mjs[TV5M]: F:Runs selected workflow shell with faked SDK and refresh tools to check caches, retry, emulator cleanup and signing | R:code:.github/workflows/ci.yml, code:.github/workflows/release-harmony.yml | A:fixture, executable | S:The behavior tests do not need real signing credentials and validate retry state through fixture traces.
@@ -1018,7 +1018,7 @@ ts-resolve-hook.mjs[XL3T]: F:Resolves extensionless relative ESM imports to Type
 ui-followups-contract.test.mjs[TU4T]: F:Checks motion, preloaded settings, capsule pill shape, appearance and language controls, and recording style selection contracts. | R:code:openless-all/app/src/app/shell/FloatingShell.tsx,code:openless-all/app/src/features/capsule/CapsuleStyles.css | A:- | S:Settings are ready before the first open to avoid a loading flash.
 upload-appgallery.mjs[OV6M]: F:Authenticates to AppGallery Connect, uploads a signed Harmony package to object storage, and associates it with a release channel. | R:code:.github/workflows/release-harmony.yml,code:openless-all/app/scripts/package-harmony-hap.sh | A:--file; --channel; --release-type; --release-phase; --dry-run; --skip-if-unconfigured | S:The object upload precedes the package association. The resulting package still requires review submission in AppGallery Connect.
 vendor-css-license.test.mjs[TV3T]: F:Checks the shadcn CSS notice is present in the production frontend output and matches the source bytes. | R:code:openless-all/app/public/licenses/shadcn-LICENSE.txt | A:- | S:-
-vendor-dsh-events.sh[OV4T]: F:Copies a local dsh-events checkout into the embedded agent plugin with version provenance and a preserved license. | R:code:openless-all/app/src-tauri/src/coding_agent/dsh.rs | A:Upstream checkout argument | S:Update the embedded Rust version constant after vendoring.
+vendor-dsh-events.sh[OV4T]: F:Legacy helper copies a local dsh-events checkout with version provenance and MIT notice into an obsolete Tauri plugin destination | R:code:openless-all/app/crates/openless-core/src/vendor/dsh-events.js,code:openless-all/app/crates/openless-core/src/coding_agent.rs | A:Upstream checkout argument | S:Still targets app/src-tauri/src/coding_agent/vendor and asks to bump a legacy dsh.rs constant; Core now embeds vendor/dsh-events.js. This helper does not update the current plugin.
 verify-harmony-hap.sh[TV5T]: F:Validates package metadata, native library and version expectations, and optional Harmony signature verification without a device. | R:code:openless-all/app/scripts/package-harmony-hap.sh | A:hap or app path; toolchain; versionName; versionCode; --allow-unsigned | S:For an APP pack, inspect metadata in the inner HAP but verify the outer pack signature.
 verify-linux-egui-packages.sh[TV5T]: F:Checks Linux egui DEB and RPM checksums, executable dependencies, desktop metadata, and installed Fcitx addon files. | R:code:openless-all/app/scripts/package-linux-egui.sh | A:CARGO_TARGET_DIR | S:Validate the staged artifacts directly without a GUI or AppImage.
 verify-release-ci.mjs[TV5T]: F:Validates a complete CI job report for the release source and requires macOS, Windows, and Android gates. | R:code:openless-all/app/scripts/verify-release-ci.test.mjs | A:verifyReleaseCi; REQUIRED_RELEASE_GATES; report path | S:Reject a partial job list even if it happens to include all named gates.
@@ -2374,520 +2374,6 @@ KeepAliveCompatibility.json[FR4T]: F:Bundles an empty device and system compatib
 LocalizationSources.json[FL5L]: F:Records original and added native iOS localization keys with source locations and translation provenance. | R:code:openless-all/ios/Resources/en.lproj/Localizable.strings,code:openless-all/ios/scripts/test-interface-resources.py | A:scope; entries; callsites; translationSource | S:Static inventory records provenance and cannot prove runtime presentation coverage.
 PrivacyInfo.xcprivacy[FS5T]: F:Declares tracking and collection configuration and platform reasons for UserDefaults, timestamps, and boot time APIs. | R:code:openless-all/ios/project.yml | A:NSPrivacyTracking; NSPrivacyCollectedDataTypes; NSPrivacyAccessedAPITypes | S:-
 
-===/<repository>/openless-all/ios/Resources/Licenses/===
-GlobalRefresh-PiP-NOTICE.txt[SV4T]: F:Records GlobalRefresh-PiP original and maintained project attribution and the source revision used by the iOS coexistence adapter. | R:code:openless-all/ios/App/PiPCoexistenceAdapter.swift | A:- | S:Retain both project attributions and links.
-KeyboardKit-LICENSE.txt[SV3T]: F:Preserves the bundled KeyboardKit MIT license and original copyright notice. | R:code:openless-all/ios/project.yml | A:- | S:-
-OpenLess-LICENSE.txt[SV4L]: F:Carries the OpenLess AGPL version 3 license text in the iOS attribution bundle. | R:- | A:- | S:-
-SPDX-Apache-2.0.txt[SV3T]: F:Carries standard SPDX Apache 2.0 text used in the iOS dependency notices. | R:code:openless-all/ios/scripts/collect-rust-licenses.py | A:- | S:-
-SPDX-MIT.txt[SV3T]: F:Preserves standard SPDX MIT license text with upstream copyright placeholders for generated notices. | R:code:openless-all/ios/scripts/collect-rust-licenses.py | A:- | S:-
-SymSpell-LICENSE.txt[SV3T]: F:Carries Wolf Garbe's MIT attribution for SymSpell in the iOS resources. | R:- | A:- | S:-
-boost-LICENSE.txt[SV3T]: F:Preserves Boost Software License 1.0 permission and disclaimer text for the iOS dependency bundle. | R:- | A:- | S:-
-darts-LICENSE.txt[SV3T]: F:Carries Susumu Yata's BSD 2-Clause license and attribution for Darts. | R:- | A:- | S:-
-leveldb-LICENSE.txt[SV3T]: F:Preserves the LevelDB authors' BSD redistribution conditions and attribution. | R:- | A:- | S:-
-librime-LICENSE.txt[SV3T]: F:Preserves the RIME developers' BSD license and copyright in the iOS attribution bundle. | R:- | A:- | S:-
-marisa-trie-LICENSE.txt[SV3T]: F:Records the BSD 2-Clause and LGPL alternatives and notices for libmarisa and its tools. | R:- | A:- | S:-
-onnxruntime-LICENSE.txt[SV3T]: F:Carries Microsoft's MIT attribution for ONNX Runtime bundled with local speech. | R:code:openless-all/ios/Packages/LocalSpeech/Package.swift | A:- | S:-
-opencc-LICENSE.txt[SV3T]: F:Preserves the Apache 2.0 license text carried for OpenCC. | R:- | A:- | S:-
-pinyin-simp-LICENSE.txt[SV3M]: F:Includes Apache 2.0 license terms for the bundled pinyin-simp material. | R:- | A:- | S:-
-prediction-data-LICENSE.txt[SV5T]: F:Records pinned Rime Ice and SymSpell prediction data, upstream license and Ngram attribution, and offline transformations. | R:code:openless-all/ios/Resources/Prediction/manifest.json,code:openless-all/ios/scripts/build-predictions.py | A:- | S:Keep the SQLite data read-only and on-device, without persisting the user's words or document text.
-rapidjson-LICENSE.txt[SV3T]: F:Preserves RapidJSON MIT attribution and lists the separately licensed BSD and JSON source components. | R:- | A:- | S:-
-rime-ice-LICENSE.txt[SV3L]: F:Carries GPLv3 license text for bundled Rime Ice dictionary source material. | R:code:openless-all/ios/Resources/Licenses/prediction-data-LICENSE.txt | A:- | S:-
-sherpa-onnx-LICENSE.txt[SV3M]: F:Carries Apache 2.0 terms for the staged Sherpa ONNX iOS library. | R:code:openless-all/ios/Packages/LocalSpeech/Package.swift | A:- | S:-
-yaml-cpp-LICENSE.txt[SV3T]: F:Preserves the yaml-cpp MIT terms and Jesse Beder copyright in the mobile dependency bundle. | R:- | A:- | S:-
-
-===/<repository>/openless-all/ios/Resources/Licenses/Rust/===
-aead-0.6.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for the aead 0.6.1 dependency. | R:- | A:- | S:-
-aead-0.6.1-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto and MobileCoin MIT attribution for aead 0.6.1. | R:- | A:- | S:-
-aes-0.9.3-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for AES 0.9.3. | R:- | A:- | S:-
-aes-0.9.3-LICENSE-MIT.txt[SV2T]: F:Preserves the AES 0.9.3 MIT notice from RustCrypto and its original author. | R:- | A:- | S:-
-aho-corasick-1.1.5-COPYING.txt[SV2T]: F:Records the choice between MIT and Unlicense for aho-corasick 1.1.5. | R:- | A:- | S:-
-aho-corasick-1.1.5-LICENSE-MIT.txt[SV2T]: F:Carries the MIT notice for aho-corasick 1.1.5. | R:- | A:- | S:-
-aho-corasick-1.1.5-UNLICENSE.txt[SV2T]: F:Carries the aho-corasick 1.1.5 public-domain dedication and warranty disclaimer. | R:- | A:- | S:-
-anyhow-1.0.104-LICENSE-APACHE.txt[SV2S]: F:Bundles Apache 2.0 terms for the anyhow 1.0.104 dependency. | R:- | A:- | S:-
-anyhow-1.0.104-LICENSE-MIT.txt[SV2T]: F:Preserves the complementary MIT permission and disclaimer text for anyhow 1.0.104. | R:- | A:- | S:-
-anymap3-1.1.0-COPYING.txt[SV2T]: F:Documents the anymap3 1.1.0 choice of Blue Oak, MIT, and Apache 2.0 terms. | R:- | A:- | S:-
-argon2-0.6.0-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for the Argon2 0.6.0 dependency. | R:- | A:- | S:-
-argon2-0.6.0-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto MIT notice for Argon2 0.6.0. | R:- | A:- | S:-
-array-init-2.1.0-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 license text for array-init 2.1.0. | R:- | A:- | S:-
-array-init-2.1.0-LICENSE-MIT.txt[SV2T]: F:Preserves the array-init 2.1.0 authors' MIT notice. | R:- | A:- | S:-
-atomic-waker-1.1.2-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 license for atomic-waker 1.1.2. | R:- | A:- | S:-
-atomic-waker-1.1.2-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT permission and disclaimer text for atomic-waker 1.1.2. | R:- | A:- | S:-
-atomic-waker-1.1.2-LICENSE-THIRD-PARTY.txt[SV3T]: F:Preserves Apache and MIT attribution for Tokio-derived material used by atomic-waker. | R:- | A:- | S:-
-autocfg-1.5.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for autocfg 1.5.1. | R:- | A:- | S:-
-autocfg-1.5.1-LICENSE-MIT.txt[SV2T]: F:Carries Josh Stone's autocfg 1.5.1 MIT notice. | R:- | A:- | S:-
-base16ct-0.2.0-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 terms for base16ct 0.2.0. | R:- | A:- | S:-
-base16ct-0.2.0-LICENSE-MIT.txt[SV2T]: F:Carries base16ct 0.2.0 MIT attribution to its original author and RustCrypto. | R:- | A:- | S:-
-base64-0.22.1-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 license for base64 0.22.1. | R:- | A:- | S:-
-base64-0.22.1-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT license and Alice Maz copyright for base64 0.22.1. | R:- | A:- | S:-
-base64-0.23.1-LICENSE-APACHE.txt[SV2M]: F:Carries the base64 0.23.1 Apache 2.0 license. | R:- | A:- | S:-
-base64-0.23.1-LICENSE-MIT.txt[SV2T]: F:Carries the updated base64 0.23.1 MIT attribution to Alice Maz and Marshall Pierce. | R:- | A:- | S:-
-base64ct-1.8.3-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for base64ct 1.8.3. | R:- | A:- | S:-
-base64ct-1.8.3-LICENSE-MIT.txt[SV2T]: F:Preserves the base64ct 1.8.3 original author and RustCrypto MIT notices. | R:- | A:- | S:-
-bitflags-2.13.2-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 text for bitflags 2.13.2. | R:- | A:- | S:-
-bitflags-2.13.2-LICENSE-MIT.txt[SV2T]: F:Carries the Rust Project MIT attribution for bitflags 2.13.2. | R:- | A:- | S:-
-blake2-0.11.0-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for blake2 0.11.0. | R:- | A:- | S:-
-blake2-0.11.0-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto and Artyom Pavlov MIT notice for blake2 0.11.0. | R:- | A:- | S:-
-block-buffer-0.10.4-LICENSE-APACHE.txt[SV2M]: F:Preserves the Apache 2.0 alternative for block-buffer 0.10.4. | R:- | A:- | S:-
-block-buffer-0.10.4-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT permission and attribution for block-buffer 0.10.4. | R:- | A:- | S:-
-block-buffer-0.12.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 text for block-buffer 0.12.1. | R:- | A:- | S:-
-block-buffer-0.12.1-LICENSE-MIT.txt[SV2T]: F:Carries the updated RustCrypto MIT notice for block-buffer 0.12.1. | R:- | A:- | S:-
-bumpalo-3.20.3-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for bumpalo 3.20.3. | R:- | A:- | S:-
-bumpalo-3.20.3-LICENSE-MIT.txt[SV2T]: F:Preserves the original MIT notice and disclaimer for bumpalo 3.20.3. | R:- | A:- | S:-
-bytecheck-0.8.3-LICENSE.txt[SV2T]: F:Preserves the bytecheck 0.8.3 MIT notice and David Koloski copyright. | R:- | A:- | S:-
-bytecheck_derive-0.8.3-LICENSE.txt[SV2T]: F:Carries the David Koloski MIT attribution for the bytecheck derive crate. | R:- | A:- | S:-
-bytes-1.12.1-LICENSE.txt[SV2T]: F:Bundles the bytes 1.12.1 MIT license and Carl Lerche copyright. | R:- | A:- | S:-
-bzip2-0.6.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for the bzip2 0.6.1 Rust dependency. | R:- | A:- | S:-
-bzip2-0.6.1-LICENSE-MIT.txt[SV2T]: F:Preserves the contributor MIT notice for bzip2 0.6.1. | R:- | A:- | S:-
-cc-1.9.0-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 terms for cc 1.9.0. | R:- | A:- | S:-
-cc-1.9.0-LICENSE-MIT.txt[SV2T]: F:Preserves Alex Crichton's MIT notice for the cc 1.9.0 build dependency. | R:- | A:- | S:-
-cfg-if-1.0.5-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 terms for cfg-if 1.0.5. | R:- | A:- | S:-
-cfg-if-1.0.5-LICENSE-MIT.txt[SV2T]: F:Carries the cfg-if 1.0.5 MIT notice. | R:- | A:- | S:-
-cfg_aliases-0.2.2-LICENSE.txt[SV2T]: F:Carries Katharos Technology's MIT attribution for cfg_aliases 0.2.2. | R:- | A:- | S:-
-cfg_aliases-0.2.2-NOTICES.md.txt[SV3T]: F:Records the cfg_aliases macro's third-party Tectonic target_cfg attribution and MIT terms. | R:- | A:- | S:-
-chacha20-0.10.2-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for chacha20 0.10.2. | R:- | A:- | S:-
-chacha20-0.10.2-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT license and copyright for chacha20 0.10.2. | R:- | A:- | S:-
-chacha20poly1305-0.11.0-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for chacha20poly1305 0.11.0. | R:- | A:- | S:-
-chacha20poly1305-0.11.0-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto MIT notice for chacha20poly1305 0.11.0. | R:- | A:- | S:-
-chrono-0.4.45-LICENSE.txt.txt[SV2M]: F:Records the original Chrono attribution and both MIT and Apache 2.0 alternatives. | R:- | A:- | S:-
-cipher-0.5.2-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for cipher 0.5.2. | R:- | A:- | S:-
-cipher-0.5.2-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto's MIT notice for cipher 0.5.2. | R:- | A:- | S:-
-cmov-0.5.4-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 license text for cmov 0.5.4. | R:- | A:- | S:-
-cmov-0.5.4-LICENSE-MIT.txt[SV2T]: F:Carries the MIT terms and RustCrypto attribution for cmov 0.5.4. | R:- | A:- | S:-
-const-oid-0.10.2-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 alternative for const-oid 0.10.2. | R:- | A:- | S:-
-const-oid-0.10.2-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT notice for const-oid 0.10.2. | R:- | A:- | S:-
-const-oid-0.9.6-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for the separately bundled const-oid 0.9.6. | R:- | A:- | S:-
-const-oid-0.9.6-LICENSE-MIT.txt[SV2T]: F:Preserves the earlier RustCrypto MIT attribution for const-oid 0.9.6. | R:- | A:- | S:-
-constant_time_eq-0.6.1-LICENSE-APACHE.txt[SV2S]: F:Carries Apache 2.0 terms for constant_time_eq 0.6.1. | R:- | A:- | S:-
-constant_time_eq-0.6.1-LICENSE-CC0.txt[SV2S]: F:Carries the CC0 1.0 Universal waiver and fallback terms for constant_time_eq 0.6.1. | R:- | A:- | S:-
-constant_time_eq-0.6.1-LICENSE-MIT0.txt[SV2T]: F:Carries the MIT No Attribution permission and disclaimer text for constant_time_eq 0.6.1. | R:- | A:- | S:-
-core-foundation-0.10.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 text for core-foundation 0.10.1. | R:- | A:- | S:-
-core-foundation-0.10.1-LICENSE-MIT.txt[SV2T]: F:Preserves Mozilla Foundation's MIT attribution for core-foundation 0.10.1. | R:- | A:- | S:-
-core-foundation-sys-0.8.7-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for core-foundation-sys 0.8.7. | R:- | A:- | S:-
-core-foundation-sys-0.8.7-LICENSE-MIT.txt[SV2T]: F:Preserves the Mozilla Foundation MIT notice for core-foundation-sys 0.8.7. | R:- | A:- | S:-
-cpubits-0.1.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for cpubits 0.1.1. | R:- | A:- | S:-
-cpubits-0.1.1-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto MIT notice for cpubits 0.1.1. | R:- | A:- | S:-
-cpufeatures-0.2.17-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 text for cpufeatures 0.2.17. | R:- | A:- | S:-
-cpufeatures-0.2.17-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto MIT attribution for cpufeatures 0.2.17. | R:- | A:- | S:-
-cpufeatures-0.3.1-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 option for cpufeatures 0.3.1. | R:- | A:- | S:-
-cpufeatures-0.3.1-LICENSE-MIT.txt[SV2T]: F:Carries the updated RustCrypto MIT notice for cpufeatures 0.3.1. | R:- | A:- | S:-
-crc32fast-1.5.2-LICENSE-APACHE.txt[SV2M]: F:Preserves the Apache 2.0 option for crc32fast 1.5.2. | R:- | A:- | S:-
-crc32fast-1.5.2-LICENSE-MIT.txt[SV2T]: F:Carries contributor copyright and MIT license text for crc32fast 1.5.2. | R:- | A:- | S:-
-crypto-bigint-0.5.5-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for crypto-bigint 0.5.5. | R:- | A:- | S:-
-crypto-bigint-0.5.5-LICENSE-MIT.txt[SV2T]: F:Preserves the crypto-bigint 0.5.5 MIT license from RustCrypto. | R:- | A:- | S:-
-crypto-common-0.1.7-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for the crypto-common 0.1.7 dependency. | R:- | A:- | S:-
-crypto-common-0.1.7-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto MIT notice for crypto-common 0.1.7. | R:- | A:- | S:-
-crypto-common-0.2.2-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for crypto-common 0.2.2. | R:- | A:- | S:-
-crypto-common-0.2.2-LICENSE-MIT.txt[SV2T]: F:Preserves the updated crypto-common 0.2.2 MIT text and RustCrypto attribution. | R:- | A:- | S:-
-ctutils-0.4.3-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 license for ctutils 0.4.3. | R:- | A:- | S:-
-ctutils-0.4.3-LICENSE-MIT.txt[SV2T]: F:Includes RustCrypto's MIT notice for ctutils 0.4.3. | R:- | A:- | S:-
-curve25519-dalek-4.1.3-LICENSE.txt[SV3T]: F:Carries BSD-style redistribution terms and original Curve25519 Dalek and Go ed25519 attribution. | R:- | A:- | S:-
-data-encoding-2.11.1-LICENSE.txt[SV2T]: F:Carries the MIT license and Julien Cretin attribution for data-encoding 2.11.1. | R:- | A:- | S:-
-deflate64-0.1.12-LICENSE.txt[SV2T]: F:Preserves the .NET Foundation and contributors' MIT notice for deflate64 0.1.12. | R:- | A:- | S:-
-der-0.7.10-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 terms for der 0.7.10. | R:- | A:- | S:-
-der-0.7.10-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto MIT attribution and permission terms for der 0.7.10. | R:- | A:- | S:-
-deranged-0.5.9-LICENSE-Apache.txt[SV2M]: F:Includes Apache 2.0 text for deranged 0.5.9. | R:- | A:- | S:-
-deranged-0.5.9-LICENSE-MIT.txt[SV2T]: F:Carries the deranged 0.5.9 MIT license and Jacob Pratt et al. notice. | R:- | A:- | S:-
-digest-0.10.7-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for digest 0.10.7. | R:- | A:- | S:-
-digest-0.10.7-LICENSE-MIT.txt[SV2T]: F:Preserves Artyom Pavlov's digest 0.10.7 MIT attribution. | R:- | A:- | S:-
-digest-0.11.3-LICENSE-APACHE.txt[SV2M]: F:Carries the separately bundled digest 0.11.3 Apache 2.0 text. | R:- | A:- | S:-
-digest-0.11.3-LICENSE-MIT.txt[SV2T]: F:Carries RustCrypto and Artyom Pavlov's MIT notice for digest 0.11.3. | R:- | A:- | S:-
-displaydoc-0.2.7-LICENSE-APACHE.txt[SV2M]: F:Includes the displaydoc 0.2.7 Apache 2.0 license text. | R:- | A:- | S:-
-displaydoc-0.2.7-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT permission and disclaimer text for displaydoc 0.2.7. | R:- | A:- | S:-
-easyfft-0.4.2-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for the easyfft 0.4.2 dependency. | R:- | A:- | S:-
-easyfft-0.4.2-LICENSE-MIT.txt[SV2T]: F:Carries the RustFFT copyright and MIT text distributed for easyfft 0.4.2. | R:- | A:- | S:-
-ecdsa-0.16.9-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 terms for ecdsa 0.16.9. | R:- | A:- | S:-
-ecdsa-0.16.9-LICENSE-MIT.txt[SV2T]: F:Carries RustCrypto's MIT notice for ecdsa 0.16.9. | R:- | A:- | S:-
-ed25519-2.2.3-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for ed25519 2.2.3. | R:- | A:- | S:-
-ed25519-2.2.3-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT notice for ed25519 2.2.3. | R:- | A:- | S:-
-ed25519-dalek-2.2.0-LICENSE.txt[SV2T]: F:Carries the ed25519-dalek 2.2.0 BSD-style redistribution conditions and author notice. | R:- | A:- | S:-
-elliptic-curve-0.13.8-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 alternative for elliptic-curve 0.13.8. | R:- | A:- | S:-
-elliptic-curve-0.13.8-LICENSE-MIT.txt[SV2T]: F:Preserves the elliptic-curve 0.13.8 MIT terms with RustCrypto attribution. | R:- | A:- | S:-
-equivalent-1.0.3-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 text for equivalent 1.0.3. | R:- | A:- | S:-
-equivalent-1.0.3-LICENSE-MIT.txt[SV2T]: F:Includes MIT permission, copyright, and disclaimer text for equivalent 1.0.3. | R:- | A:- | S:-
-errno-0.3.14-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for errno 0.3.14. | R:- | A:- | S:-
-errno-0.3.14-LICENSE-MIT.txt[SV2T]: F:Preserves Chris Wong's MIT notice for errno 0.3.14. | R:- | A:- | S:-
-fastrand-2.5.0-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for fastrand 2.5.0. | R:- | A:- | S:-
-fastrand-2.5.0-LICENSE-MIT.txt[SV2T]: F:Carries the fastrand 2.5.0 MIT permission and liability disclaimer. | R:- | A:- | S:-
-ferrous-opencc-0.4.0-UPSTREAM-NOTICE.txt[SV3T]: F:Records the ferrous-opencc 0.4.0 upstream package identity and declared Apache 2.0 terms. | R:- | A:- | S:-
-ferrous-opencc-compiler-0.4.0-UPSTREAM-NOTICE.txt[SV3T]: F:Records the separately attributed ferrous-opencc compiler 0.4.0 identity and Apache 2.0 notice. | R:- | A:- | S:-
-ff-0.13.1-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 terms for the ff 0.13.1 dependency. | R:- | A:- | S:-
-ff-0.13.1-LICENSE-MIT.txt[SV2T]: F:Preserves Sean Bowe's MIT notice for ff 0.13.1. | R:- | A:- | S:-
-filetime-0.2.29-LICENSE-APACHE.txt[SV2M]: F:Includes the filetime 0.2.29 Apache 2.0 license text. | R:- | A:- | S:-
-filetime-0.2.29-LICENSE-MIT.txt[SV2T]: F:Preserves the author copyright and MIT license for filetime 0.2.29. | R:- | A:- | S:-
-find-msvc-tools-0.1.15-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for find-msvc-tools 0.1.15. | R:- | A:- | S:-
-find-msvc-tools-0.1.15-LICENSE-MIT.txt[SV2T]: F:Carries the find-msvc-tools 0.1.15 author and MIT notice. | R:- | A:- | S:-
-flate2-1.1.10-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 text for flate2 1.1.10. | R:- | A:- | S:-
-flate2-1.1.10-LICENSE-MIT.txt[SV2T]: F:Carries the flate2 1.1.10 MIT license and updated copyright range. | R:- | A:- | S:-
-form_urlencoded-1.2.2-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 terms for form_urlencoded 1.2.2. | R:- | A:- | S:-
-form_urlencoded-1.2.2-LICENSE-MIT.txt[SV2T]: F:Preserves the rust-url developers' MIT attribution for form_urlencoded 1.2.2. | R:- | A:- | S:-
-fst-0.4.7-COPYING.txt[SV2T]: F:Records that fst 0.4.7 offers either the Unlicense or MIT terms. | R:- | A:- | S:-
-fst-0.4.7-LICENSE-MIT.txt[SV2T]: F:Carries the MIT permission and Andrew Gallant attribution for fst 0.4.7. | R:- | A:- | S:-
-fst-0.4.7-UNLICENSE.txt[SV2T]: F:Carries the public-domain dedication and disclaimer for fst 0.4.7. | R:- | A:- | S:-
-futures-channel-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for futures-channel 0.3.34. | R:- | A:- | S:-
-futures-channel-0.3.34-LICENSE-MIT.txt[SV2T]: F:Carries the Tokio and original author MIT notice for futures-channel 0.3.34. | R:- | A:- | S:-
-futures-core-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Preserves the futures-core 0.3.34 Apache 2.0 text. | R:- | A:- | S:-
-futures-core-0.3.34-LICENSE-MIT.txt[SV2T]: F:Preserves the Tokio and original author MIT notice for futures-core 0.3.34. | R:- | A:- | S:-
-futures-io-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 alternative for futures-io 0.3.34. | R:- | A:- | S:-
-futures-io-0.3.34-LICENSE-MIT.txt[SV2T]: F:Preserves the futures-io 0.3.34 MIT copyright and permission notice. | R:- | A:- | S:-
-futures-macro-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for the futures-macro procedural macro crate. | R:- | A:- | S:-
-futures-macro-0.3.34-LICENSE-MIT.txt[SV2T]: F:Carries the futures-macro MIT permissions and Tokio attribution. | R:- | A:- | S:-
-futures-sink-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 text for futures-sink 0.3.34. | R:- | A:- | S:-
-futures-sink-0.3.34-LICENSE-MIT.txt[SV2T]: F:Preserves the original and Tokio MIT license notice for futures-sink. | R:- | A:- | S:-
-futures-task-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for futures-task 0.3.34. | R:- | A:- | S:-
-futures-task-0.3.34-LICENSE-MIT.txt[SV2T]: F:Carries the MIT attribution for futures-task 0.3.34, including the Tokio authors. | R:- | A:- | S:-
-futures-util-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 alternative for futures-util 0.3.34. | R:- | A:- | S:-
-futures-util-0.3.34-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT license and copyright notices for futures-util 0.3.34. | R:- | A:- | S:-
-generic-array-0.14.7-LICENSE.txt[SV2T]: F:Carries the generic-array 0.14.7 MIT license and its original copyright notice. | R:- | A:- | S:-
-generic_singleton-0.5.3-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 terms for generic_singleton 0.5.3. | R:- | A:- | S:-
-generic_singleton-0.5.3-LICENSE-MIT.txt[SV2T]: F:Preserves the RustFFT developers' MIT notice distributed with generic_singleton 0.5.3. | R:- | A:- | S:-
-getrandom-0.2.17-LICENSE-APACHE.txt[SV2M]: F:Carries the earlier getrandom 0.2.17 Apache 2.0 license text. | R:- | A:- | S:-
-getrandom-0.2.17-LICENSE-MIT.txt[SV2T]: F:Preserves rust-random and Rust Project MIT attribution for getrandom 0.2.17. | R:- | A:- | S:-
-getrandom-0.4.3-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for getrandom 0.4.3. | R:- | A:- | S:-
-getrandom-0.4.3-LICENSE-MIT.txt[SV2T]: F:Includes the getrandom 0.4.3 MIT license with the updated rust-random copyright range. | R:- | A:- | S:-
-group-0.13.0-LICENSE-APACHE.txt[SV2M]: F:Preserves the Apache 2.0 alternative for group 0.13.0. | R:- | A:- | S:-
-group-0.13.0-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT permission and disclaimer text for group 0.13.0. | R:- | A:- | S:-
-hashbrown-0.17.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 text for hashbrown 0.17.1. | R:- | A:- | S:-
-hashbrown-0.17.1-LICENSE-MIT.txt[SV2T]: F:Preserves Amanieu d'Antras's MIT notice for hashbrown 0.17.1. | R:- | A:- | S:-
-hex-0.4.3-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for hex 0.4.3. | R:- | A:- | S:-
-hex-0.4.3-LICENSE-MIT.txt[SV2T]: F:Carries the Rust Project and rust-hex developers' MIT attribution. | R:- | A:- | S:-
-hkdf-0.12.4-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for hkdf 0.12.4. | R:- | A:- | S:-
-hkdf-0.12.4-LICENSE-MIT.txt[SV2T]: F:Preserves the original author and RustCrypto MIT notices for hkdf. | R:- | A:- | S:-
-hmac-0.12.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 text for hmac 0.12.1. | R:- | A:- | S:-
-hmac-0.12.1-LICENSE-MIT.txt[SV2T]: F:Carries Artyom Pavlov's original MIT attribution for hmac 0.12.1. | R:- | A:- | S:-
-hmac-0.13.0-LICENSE-APACHE.txt[SV2M]: F:Preserves the separately bundled hmac 0.13.0 Apache 2.0 terms. | R:- | A:- | S:-
-hmac-0.13.0-LICENSE-MIT.txt[SV2T]: F:Includes the hmac 0.13.0 MIT notice and original copyright. | R:- | A:- | S:-
-http-1.5.0-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 alternative for the http 1.5.0 crate. | R:- | A:- | S:-
-http-1.5.0-LICENSE-MIT.txt[SV2T]: F:Carries the http-rs authors' MIT notice for http 1.5.0. | R:- | A:- | S:-
-http-body-1.1.0-LICENSE.txt[SV2T]: F:Preserves the Hyper contributors' MIT terms and copyright for http-body. | R:- | A:- | S:-
-http-body-util-0.1.5-LICENSE.txt[SV2T]: F:Includes the MIT attribution for the separately packaged http-body-util crate. | R:- | A:- | S:-
-httparse-1.10.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for httparse 1.10.1. | R:- | A:- | S:-
-httparse-1.10.1-LICENSE-MIT.txt[SV2T]: F:Preserves the original author MIT notice for httparse 1.10.1. | R:- | A:- | S:-
-hybrid-array-0.4.15-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 license text for hybrid-array 0.4.15. | R:- | A:- | S:-
-hybrid-array-0.4.15-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT license and copyright for hybrid-array. | R:- | A:- | S:-
-hyper-1.12.0-LICENSE.txt[SV2T]: F:Preserves the Hyper 1.12.0 MIT permission, disclaimer and author attribution. | R:- | A:- | S:-
-hyper-rustls-0.27.10-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for hyper-rustls 0.27.10. | R:- | A:- | S:-
-hyper-rustls-0.27.10-LICENSE-ISC.txt[SV2T]: F:Carries the ISC permission and original copyright notice bundled with hyper-rustls. | R:- | A:- | S:-
-hyper-rustls-0.27.10-LICENSE-MIT.txt[SV2T]: F:Preserves the separate MIT license alternative and original attribution for hyper-rustls. | R:- | A:- | S:-
-hyper-util-0.1.21-LICENSE.txt[SV2T]: F:Carries the MIT license and original author copyright for hyper-util 0.1.21. | R:- | A:- | S:-
-iana-time-zone-0.1.65-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for iana-time-zone 0.1.65. | R:- | A:- | S:-
-iana-time-zone-0.1.65-LICENSE-MIT.txt[SV2T]: F:Preserves Andrew D. Straw's MIT notice for iana-time-zone 0.1.65. | R:- | A:- | S:-
-icu_collections-2.3.0-LICENSE.txt[SV2T]: F:Carries Unicode License V3 for ICU collections 2.3.0. | R:- | A:- | S:-
-icu_locale_core-2.3.0-LICENSE.txt[SV2T]: F:Preserves the Unicode V3 copyright and permission notice for ICU locale core. | R:- | A:- | S:-
-icu_normalizer-2.3.0-LICENSE.txt[SV2T]: F:Bundles Unicode License V3 for the ICU normalizer code. | R:- | A:- | S:-
-icu_normalizer_data-2.3.0-LICENSE.txt[SV2T]: F:Carries the Unicode V3 terms for the separately bundled ICU normalization data. | R:- | A:- | S:-
-icu_properties-2.3.0-LICENSE.txt[SV2T]: F:Preserves Unicode License V3 for ICU property lookup code. | R:- | A:- | S:-
-icu_properties_data-2.3.0-LICENSE.txt[SV2T]: F:Carries the Unicode V3 attribution for ICU property data. | R:- | A:- | S:-
-icu_provider-2.3.1-LICENSE.txt[SV2T]: F:Bundles the Unicode V3 license and permission notice for icu_provider 2.3.1. | R:- | A:- | S:-
-idna-1.1.0-LICENSE-APACHE.txt[SV2M]: F:Carries the idna 1.1.0 Apache 2.0 alternative. | R:- | A:- | S:-
-idna-1.1.0-LICENSE-MIT.txt[SV2T]: F:Preserves the rust-url developers' MIT attribution for idna 1.1.0. | R:- | A:- | S:-
-idna_adapter-1.2.2-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for idna_adapter 1.2.2. | R:- | A:- | S:-
-idna_adapter-1.2.2-LICENSE-MIT.txt[SV2T]: F:Carries the MIT permission and rust-url copyright notice for idna_adapter 1.2.2. | R:- | A:- | S:-
-indexmap-2.14.2-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 license text for indexmap 2.14.2. | R:- | A:- | S:-
-indexmap-2.14.2-LICENSE-MIT.txt[SV2T]: F:Carries MIT permission and copyright text for indexmap 2.14.2. | R:- | A:- | S:-
-inout-0.2.5-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 alternative for inout 0.2.5. | R:- | A:- | S:-
-inout-0.2.5-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto and Artyom Pavlov MIT notices for inout 0.2.5. | R:- | A:- | S:-
-ipnet-2.12.2-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for ipnet 2.12.2. | R:- | A:- | S:-
-ipnet-2.12.2-LICENSE-MIT.txt[SV2T]: F:Carries the Juniper Networks copyright and MIT license for ipnet 2.12.2. | R:- | A:- | S:-
-itoa-1.0.18-LICENSE-APACHE.txt[SV2S]: F:Includes Apache 2.0 terms for itoa 1.0.18. | R:- | A:- | S:-
-itoa-1.0.18-LICENSE-MIT.txt[SV2T]: F:Preserves the complementary MIT permission and disclaimer for itoa 1.0.18. | R:- | A:- | S:-
-jobserver-0.1.35-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 text for jobserver 0.1.35. | R:- | A:- | S:-
-jobserver-0.1.35-LICENSE-MIT.txt[SV2T]: F:Includes the jobserver 0.1.35 original MIT notice. | R:- | A:- | S:-
-jsonwebtoken-11.1.0-LICENSE.txt[SV2T]: F:Preserves the MIT license and Vincent Prouillet copyright for jsonwebtoken 11.1.0. | R:- | A:- | S:-
-lazy_static-1.5.1-LICENSE-APACHE.txt[SV2M]: F:Bundles the lazy_static 1.5.1 Apache 2.0 text. | R:- | A:- | S:-
-lazy_static-1.5.1-LICENSE-MIT.txt[SV2T]: F:Carries MIT permission and disclaimer text for lazy_static 1.5.1. | R:- | A:- | S:-
-libbz2-rs-sys-0.2.5-LICENSE.txt[SV3T]: F:Preserves redistribution terms and attribution for original bzip2, libbzip2, and the Rust translation. | R:- | A:- | S:-
-libc-0.2.191-LICENSE-APACHE.txt[SV2S]: F:Includes the Apache 2.0 alternative for libc 0.2.191. | R:- | A:- | S:-
-libc-0.2.191-LICENSE-MIT.txt[SV2T]: F:Preserves the Rust Project MIT license notice for libc 0.2.191. | R:- | A:- | S:-
-libm-0.2.16-LICENSE.txt.txt[SV3M]: F:Carries libm's overall MIT license and separately attributed terms for incorporated parts, including musl notices. | R:- | A:- | S:-
-litemap-0.8.3-LICENSE.txt[SV2T]: F:Carries Unicode License V3 copyright and permission terms for litemap 0.8.3. | R:- | A:- | S:-
-lock_api-0.4.14-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for lock_api 0.4.14. | R:- | A:- | S:-
-lock_api-0.4.14-LICENSE-MIT.txt[SV2T]: F:Preserves the Rust Project MIT notice accompanying lock_api 0.4.14. | R:- | A:- | S:-
-log-0.4.34-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 alternative for the log 0.4.34 facade. | R:- | A:- | S:-
-log-0.4.34-LICENSE-MIT.txt[SV2T]: F:Carries the Rust Project copyright and MIT text for log 0.4.34. | R:- | A:- | S:-
-lru-slab-0.1.3-LICENSE-APACHE.txt[SV2M]: F:Carries the lru-slab 0.1.3 Apache 2.0 terms. | R:- | A:- | S:-
-lru-slab-0.1.3-LICENSE-MIT.txt[SV2T]: F:Preserves the lru-slab developers' MIT notice. | R:- | A:- | S:-
-lru-slab-0.1.3-LICENSE-ZLIB.txt[SV2T]: F:Carries the Zlib-style license and warranty disclaimer for lru-slab. | R:- | A:- | S:-
-lzma-rust2-0.22.0-LICENSE.txt[SV2M]: F:Bundles Apache 2.0 terms for lzma-rust2 0.22.0. | R:- | A:- | S:-
-manifest.json[FV5L]: F:Lists iOS bundled Rust dependency names, versions, license expressions and source repositories with exact notice checksums. | R:code:openless-all/ios/scripts/collect-rust-licenses.py,code:openless-all/ios/CoreHost/Cargo.lock | A:name; version; license; repository; files | S:Keep attribution version and hashes bound to the collected upstream notice bytes.
-md-5-0.11.0-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 alternative for md-5 0.11.0. | R:- | A:- | S:-
-md-5-0.11.0-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto and Artyom Pavlov MIT notices for md-5 0.11.0. | R:- | A:- | S:-
-memchr-2.8.3-COPYING.txt[SV2T]: F:Records the choice between Unlicense and MIT for memchr 2.8.3. | R:- | A:- | S:-
-memchr-2.8.3-LICENSE-MIT.txt[SV2T]: F:Bundles Andrew Gallant's MIT notice for memchr 2.8.3. | R:- | A:- | S:-
-memchr-2.8.3-UNLICENSE.txt[SV2T]: F:Preserves the public-domain dedication and disclaimer option for memchr 2.8.3. | R:- | A:- | S:-
-micyou-dsp-0.1.0-LICENSE-AEC7.txt.txt[SV3T]: F:Carries the AEC7 MIT attribution included with the MicYou DSP crate. | R:- | A:- | S:-
-micyou-dsp-0.1.0-LICENSE-PureVox.txt.txt[SV3T]: F:Carries the PureVox MIT notice included with the iOS MicYou DSP dependency. | R:- | A:- | S:-
-micyou-dsp-0.1.0-LICENSE-RNNoise.txt.txt[SV3T]: F:Preserves the RNNoise and Xiph-related BSD-style terms bundled with MicYou DSP. | R:- | A:- | S:-
-micyou-dsp-0.1.0-LICENSE.txt[SV4L]: F:Preserves GPLv3 and the MicYou Plugin Exception 1.0 for the bundled MicYou DSP crate. | R:code:openless-all/ios/Resources/Licenses/Rust/manifest.json | A:- | S:-
-micyou-infer-0.1.0-LICENSE.txt[SV4L]: F:Carries GPLv3 and the MicYou Plugin Exception 1.0 for the separately bundled inference crate. | R:code:openless-all/ios/Resources/Licenses/Rust/manifest.json | A:- | S:-
-mime-0.3.17-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 license text for mime 0.3.17. | R:- | A:- | S:-
-mime-0.3.17-LICENSE-MIT.txt[SV2T]: F:Preserves the original MIT attribution for mime 0.3.17. | R:- | A:- | S:-
-mime_guess-2.0.5-LICENSE.txt[SV2T]: F:Carries Austin Bonander's MIT license for mime_guess 2.0.5. | R:- | A:- | S:-
-mio-1.2.4-LICENSE.txt[SV2T]: F:Preserves the MIT permission and MIO contributor copyright notice. | R:- | A:- | S:-
-munge-0.4.7-LICENSE.txt[SV2T]: F:Carries the MIT license and David Koloski copyright for munge 0.4.7. | R:- | A:- | S:-
-munge_macro-0.4.7-LICENSE.txt[SV2T]: F:Preserves the same author's MIT attribution for the separately bundled munge macro crate. | R:- | A:- | S:-
-nnnoiseless-0.5.2-COPYING.txt[SV3T]: F:Carries BSD-style source and binary redistribution conditions and contributor notices for nnnoiseless. | R:- | A:- | S:-
-num-bigint-dig-0.8.6-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for num-bigint-dig 0.8.6. | R:- | A:- | S:-
-num-bigint-dig-0.8.6-LICENSE-MIT.txt[SV2T]: F:Preserves the Rust Project MIT notice for num-bigint-dig 0.8.6. | R:- | A:- | S:-
-num-complex-0.4.6-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 alternative for num-complex 0.4.6. | R:- | A:- | S:-
-num-complex-0.4.6-LICENSE-MIT.txt[SV2T]: F:Carries the Rust Project MIT copyright and conditions for num-complex 0.4.6. | R:- | A:- | S:-
-num-conv-0.2.2-LICENSE-Apache.txt[SV2S]: F:Preserves Apache 2.0 terms for num-conv 0.2.2. | R:- | A:- | S:-
-num-conv-0.2.2-LICENSE-MIT.txt[SV2T]: F:Carries Jacob Pratt's MIT notice for num-conv 0.2.2. | R:- | A:- | S:-
-num-integer-0.1.47-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 text for num-integer 0.1.47. | R:- | A:- | S:-
-num-integer-0.1.47-LICENSE-MIT.txt[SV2T]: F:Preserves the num-integer 0.1.47 Rust Project MIT attribution. | R:- | A:- | S:-
-num-iter-0.1.46-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for num-iter 0.1.46. | R:- | A:- | S:-
-num-iter-0.1.46-LICENSE-MIT.txt[SV2T]: F:Preserves the Rust Project MIT notice for num-iter 0.1.46. | R:- | A:- | S:-
-num-traits-0.2.19-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 license text for num-traits 0.2.19. | R:- | A:- | S:-
-num-traits-0.2.19-LICENSE-MIT.txt[SV2T]: F:Carries Rust Project copyright and MIT terms for num-traits 0.2.19. | R:- | A:- | S:-
-once_cell-1.21.4-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 license for once_cell 1.21.4. | R:- | A:- | S:-
-once_cell-1.21.4-LICENSE-MIT.txt[SV2T]: F:Preserves the complementary once_cell 1.21.4 MIT permission and disclaimer. | R:- | A:- | S:-
-p256-0.13.2-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 alternative for p256 0.13.2. | R:- | A:- | S:-
-p256-0.13.2-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT terms for p256 0.13.2. | R:- | A:- | S:-
-p384-0.13.1-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 text for p384 0.13.1. | R:- | A:- | S:-
-p384-0.13.1-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto MIT notice for the separately bundled p384 crate. | R:- | A:- | S:-
-parking_lot-0.12.5-LICENSE-APACHE.txt[SV2M]: F:Preserves the parking_lot 0.12.5 Apache 2.0 alternative. | R:- | A:- | S:-
-parking_lot-0.12.5-LICENSE-MIT.txt[SV2T]: F:Carries the Rust Project MIT attribution for parking_lot 0.12.5. | R:- | A:- | S:-
-parking_lot_core-0.9.12-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for parking_lot_core 0.9.12. | R:- | A:- | S:-
-parking_lot_core-0.9.12-LICENSE-MIT.txt[SV2T]: F:Preserves the Rust Project MIT notice for parking_lot_core. | R:- | A:- | S:-
-password-hash-0.6.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 text for password-hash 0.6.1. | R:- | A:- | S:-
-password-hash-0.6.1-LICENSE-MIT.txt[SV2T]: F:Includes RustCrypto's MIT notice for password-hash 0.6.1. | R:- | A:- | S:-
-pbkdf2-0.13.0-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for pbkdf2 0.13.0. | R:- | A:- | S:-
-pbkdf2-0.13.0-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT terms and original and RustCrypto copyrights for pbkdf2 0.13.0. | R:- | A:- | S:-
-pem-rfc7468-0.7.0-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for pem-rfc7468 0.7.0. | R:- | A:- | S:-
-pem-rfc7468-0.7.0-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto MIT notice for pem-rfc7468 0.7.0. | R:- | A:- | S:-
-percent-encoding-2.3.2-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 alternative for percent-encoding 2.3.2. | R:- | A:- | S:-
-percent-encoding-2.3.2-LICENSE-MIT.txt[SV2T]: F:Preserves the rust-url developers' MIT copyright and permission notice for percent-encoding. | R:- | A:- | S:-
-phc-0.6.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 license text for phc 0.6.1. | R:- | A:- | S:-
-phc-0.6.1-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT terms for phc 0.6.1. | R:- | A:- | S:-
-phf-0.13.1-LICENSE.txt[SV2T]: F:Carries the shared authors' MIT notice for the phf 0.13.1 map crate. | R:- | A:- | S:-
-phf_codegen-0.13.1-LICENSE.txt[SV2T]: F:Preserves the MIT terms and attribution for the PHF code generator crate. | R:- | A:- | S:-
-phf_generator-0.13.1-LICENSE.txt[SV2T]: F:Includes the separately bundled PHF generator MIT license. | R:- | A:- | S:-
-phf_macros-0.13.1-LICENSE.txt[SV2T]: F:Carries MIT license and attribution for the PHF macros crate. | R:- | A:- | S:-
-phf_shared-0.13.1-LICENSE.txt[SV2T]: F:Preserves original PHF MIT attribution for the shared helper crate. | R:- | A:- | S:-
-pin-project-lite-0.2.17-LICENSE-APACHE.txt[SV2S]: F:Bundles the Apache 2.0 alternative for pin-project-lite 0.2.17. | R:- | A:- | S:-
-pin-project-lite-0.2.17-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT permission and disclaimer text for pin-project-lite. | R:- | A:- | S:-
-pkcs1-0.7.5-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 license terms for pkcs1 0.7.5. | R:- | A:- | S:-
-pkcs1-0.7.5-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT notice for pkcs1 0.7.5. | R:- | A:- | S:-
-pkcs8-0.10.2-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for pkcs8 0.10.2. | R:- | A:- | S:-
-pkcs8-0.10.2-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto MIT permission notice for pkcs8 0.10.2. | R:- | A:- | S:-
-pkg-config-0.3.34-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for the pkg-config 0.3.34 build dependency. | R:- | A:- | S:-
-pkg-config-0.3.34-LICENSE-MIT.txt[SV2T]: F:Preserves the pkg-config 0.3.34 MIT copyright and permission text. | R:- | A:- | S:-
-poly1305-0.9.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for poly1305 0.9.1. | R:- | A:- | S:-
-poly1305-0.9.1-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto's MIT attribution for poly1305 0.9.1. | R:- | A:- | S:-
-potential_utf-0.1.6-LICENSE.txt[SV2T]: F:Carries Unicode License V3 for the potential_utf 0.1.6 dependency. | R:- | A:- | S:-
-powerfmt-0.2.1-LICENSE-Apache.txt[SV2M]: F:Includes the Apache 2.0 alternative for powerfmt 0.2.1. | R:- | A:- | S:-
-powerfmt-0.2.1-LICENSE-MIT.txt[SV2T]: F:Preserves the powerfmt 0.2.1 MIT notice and original attribution. | R:- | A:- | S:-
-ppmd-rust-1.5.1-LICENSE-CC0.md.txt[SV2S]: F:Carries CC0 1.0 Universal waiver and fallback terms for ppmd-rust 1.5.1. | R:- | A:- | S:-
-ppmd-rust-1.5.1-LICENSE-MIT-0.md.txt[SV2T]: F:Preserves the ppmd-rust authors' MIT No Attribution alternative. | R:- | A:- | S:-
-ppv-lite86-0.2.21-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for ppv-lite86 0.2.21. | R:- | A:- | S:-
-ppv-lite86-0.2.21-LICENSE-MIT.txt[SV2T]: F:Preserves the CryptoCorrosion contributors' MIT notice for ppv-lite86. | R:- | A:- | S:-
-primal-check-0.3.4-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for primal-check 0.3.4. | R:- | A:- | S:-
-primal-check-0.3.4-LICENSE-MIT.txt[SV2T]: F:Carries Huon Wilson's original MIT notice for primal-check. | R:- | A:- | S:-
-primeorder-0.13.6-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for primeorder 0.13.6. | R:- | A:- | S:-
-primeorder-0.13.6-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT notice for primeorder 0.13.6. | R:- | A:- | S:-
-proc-macro2-1.0.107-LICENSE-APACHE.txt[SV2S]: F:Bundles the Apache 2.0 alternative for proc-macro2 1.0.107. | R:- | A:- | S:-
-proc-macro2-1.0.107-LICENSE-MIT.txt[SV2T]: F:Preserves the proc-macro2 1.0.107 MIT permission and disclaimer. | R:- | A:- | S:-
-ptr_meta-0.3.2-LICENSE.txt[SV2T]: F:Carries the ptr_meta 0.3.2 MIT license and David Koloski notice. | R:- | A:- | S:-
-ptr_meta_derive-0.3.2-LICENSE.txt[SV2T]: F:Carries the original author's MIT notice for the ptr_meta derive crate. | R:- | A:- | S:-
-quinn-0.11.12-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for quinn 0.11.12. | R:- | A:- | S:-
-quinn-0.11.12-LICENSE-MIT.txt[SV2T]: F:Preserves the Quinn developers' MIT notice for quinn 0.11.12. | R:- | A:- | S:-
-quinn-proto-0.11.19-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 alternative for the separately packaged quinn-proto crate. | R:- | A:- | S:-
-quinn-proto-0.11.19-LICENSE-MIT.txt[SV2T]: F:Carries Quinn's MIT attribution for quinn-proto 0.11.19. | R:- | A:- | S:-
-quinn-udp-0.5.16-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 text for quinn-udp 0.5.16. | R:- | A:- | S:-
-quinn-udp-0.5.16-LICENSE-MIT.txt[SV2T]: F:Includes the Quinn developer MIT copyright and permission notice for quinn-udp. | R:- | A:- | S:-
-quote-1.0.47-LICENSE-APACHE.txt[SV2S]: F:Bundles Apache 2.0 terms for quote 1.0.47. | R:- | A:- | S:-
-quote-1.0.47-LICENSE-MIT.txt[SV2T]: F:Preserves the complementary MIT permission text for quote 1.0.47. | R:- | A:- | S:-
-rancor-0.1.3-LICENSE.txt[SV2T]: F:Carries David Koloski's MIT terms and copyright for rancor 0.1.3. | R:- | A:- | S:-
-rand-0.10.3-LICENSE-APACHE.txt[SV2S]: F:Carries Apache 2.0 terms for rand 0.10.3. | R:- | A:- | S:-
-rand-0.10.3-LICENSE-MIT.txt[SV2T]: F:Preserves the Rand and Rust Project MIT attribution for rand 0.10.3. | R:- | A:- | S:-
-rand-0.8.8-LICENSE-APACHE.txt[SV2S]: F:Bundles Apache 2.0 terms for the older rand 0.8.8 dependency. | R:- | A:- | S:-
-rand-0.8.8-LICENSE-MIT.txt[SV2T]: F:Carries MIT copyright and permission notices for rand 0.8.8. | R:- | A:- | S:-
-rand_chacha-0.3.1-LICENSE-APACHE.txt[SV2M]: F:Includes the rand_chacha 0.3.1 Apache 2.0 license. | R:- | A:- | S:-
-rand_chacha-0.3.1-LICENSE-MIT.txt[SV2T]: F:Preserves the Rand and Rust Project MIT notices for rand_chacha 0.3.1. | R:- | A:- | S:-
-rand_core-0.10.1-LICENSE-APACHE.txt[SV2S]: F:Bundles the Apache 2.0 alternative for rand_core 0.10.1. | R:- | A:- | S:-
-rand_core-0.10.1-LICENSE-MIT.txt[SV2T]: F:Preserves the updated Rand Project MIT attribution for rand_core 0.10.1. | R:- | A:- | S:-
-rand_core-0.6.4-LICENSE-APACHE.txt[SV2S]: F:Carries Apache 2.0 terms for the earlier rand_core 0.6.4 dependency. | R:- | A:- | S:-
-rand_core-0.6.4-LICENSE-MIT.txt[SV2T]: F:Carries Rand and Rust Project MIT copyright and conditions for rand_core 0.6.4. | R:- | A:- | S:-
-rand_pcg-0.10.2-LICENSE-APACHE.txt[SV2S]: F:Includes Apache 2.0 license text for rand_pcg 0.10.2. | R:- | A:- | S:-
-rand_pcg-0.10.2-LICENSE-MIT.txt[SV2T]: F:Preserves PCG and Rand contributors' MIT notices for rand_pcg 0.10.2. | R:- | A:- | S:-
-realfft-3.5.0-UPSTREAM-NOTICE.txt[SV3T]: F:Records the realfft 3.5.0 upstream package, MIT declaration and SPDX source for the standard license text. | R:- | A:- | S:-
-regex-1.13.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for regex 1.13.1. | R:- | A:- | S:-
-regex-1.13.1-LICENSE-MIT.txt[SV2T]: F:Carries the Rust Project's MIT attribution for regex 1.13.1. | R:- | A:- | S:-
-regex-automata-0.4.18-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 alternative for regex-automata 0.4.18. | R:- | A:- | S:-
-regex-automata-0.4.18-LICENSE-MIT.txt[SV2T]: F:Preserves the Rust Project MIT notice for regex-automata. | R:- | A:- | S:-
-regex-syntax-0.8.11-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 license text for regex-syntax 0.8.11. | R:- | A:- | S:-
-regex-syntax-0.8.11-LICENSE-MIT.txt[SV2T]: F:Carries the MIT permissions and Rust Project copyright for regex-syntax. | R:- | A:- | S:-
-rend-0.5.4-LICENSE.txt[SV2T]: F:Preserves the original author attribution and MIT license for rend 0.5.4. | R:- | A:- | S:-
-reqwest-0.12.28-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 alternative for reqwest 0.12.28. | R:- | A:- | S:-
-reqwest-0.12.28-LICENSE-MIT.txt[SV2T]: F:Preserves the reqwest 0.12.28 MIT notice and original copyright. | R:- | A:- | S:-
-rfc6979-0.4.0-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for rfc6979 0.4.0. | R:- | A:- | S:-
-rfc6979-0.4.0-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto's MIT attribution for rfc6979 0.4.0. | R:- | A:- | S:-
-ring-0.17.14-LICENSE-BoringSSL.txt[SV3M]: F:Carries Apache 2.0 and earlier Go and Chromium attribution terms for BoringSSL code included in ring. | R:code:openless-all/ios/Resources/Licenses/Rust/ring-0.17.14-LICENSE.txt | A:- | S:-
-ring-0.17.14-LICENSE-other-bits.txt[SV3T]: F:Preserves the ISC-style terms and Brian Smith attribution for other ring code. | R:code:openless-all/ios/Resources/Licenses/Rust/ring-0.17.14-LICENSE.txt | A:- | S:-
-ring-0.17.14-LICENSE.txt[SV3T]: F:Explains the per-file attribution split between new ring code, BoringSSL sources and the once_cell polyfill. | R:- | A:- | S:-
-rkyv-0.8.18-LICENSE.txt[SV2T]: F:Carries the MIT terms and original copyright for rkyv 0.8.18. | R:- | A:- | S:-
-rkyv_derive-0.8.18-LICENSE.txt[SV2T]: F:Preserves the author MIT notice for the separately bundled rkyv derive crate. | R:- | A:- | S:-
-rsa-0.9.10-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for rsa 0.9.10. | R:- | A:- | S:-
-rsa-0.9.10-LICENSE-MIT.txt[SV2T]: F:Carries MIT permission and disclaimer text for rsa 0.9.10. | R:- | A:- | S:-
-rustc-hash-2.1.3-LICENSE-APACHE.txt[SV2S]: F:Includes the Apache 2.0 alternative for rustc-hash 2.1.3. | R:- | A:- | S:-
-rustc-hash-2.1.3-LICENSE-MIT.txt[SV2T]: F:Preserves the rustc-hash 2.1.3 MIT permission and warranty disclaimer. | R:- | A:- | S:-
-rustc_version-0.4.1-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 text for rustc_version 0.4.1. | R:- | A:- | S:-
-rustc_version-0.4.1-LICENSE-MIT.txt[SV2T]: F:Carries Rust Project MIT attribution for rustc_version 0.4.1. | R:- | A:- | S:-
-rustfft-6.4.1-LICENSE-APACHE.txt[SV2M]: F:Bundles the RustFFT 6.4.1 Apache 2.0 license. | R:- | A:- | S:-
-rustfft-6.4.1-LICENSE-MIT.txt[SV2T]: F:Preserves the MIT terms and RustFFT developer copyright for rustfft 6.4.1. | R:- | A:- | S:-
-rustix-1.1.5-LICENSE-APACHE.txt[SV2M]: F:Carries the base Apache 2.0 license for rustix 1.1.5. | R:- | A:- | S:-
-rustix-1.1.5-LICENSE-Apache-2.0_WITH_LLVM-exception.txt[SV3M]: F:Preserves the Apache 2.0 text with LLVM exceptions shipped separately for rustix. | R:- | A:- | S:-
-rustix-1.1.5-LICENSE-MIT.txt[SV2T]: F:Carries the complementary MIT permission and warranty disclaimer for rustix 1.1.5. | R:- | A:- | S:-
-rustls-0.23.46-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 license alternative for rustls 0.23.46. | R:- | A:- | S:-
-rustls-0.23.46-LICENSE-ISC.txt[SV2T]: F:Preserves the ISC terms and copyright notice for rustls 0.23.46. | R:- | A:- | S:-
-rustls-0.23.46-LICENSE-MIT.txt[SV2T]: F:Carries the distinct MIT permission and original attribution for rustls. | R:- | A:- | S:-
-rustls-pki-types-1.15.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for rustls-pki-types 1.15.1. | R:- | A:- | S:-
-rustls-pki-types-1.15.1-LICENSE-MIT.txt[SV2T]: F:Preserves the original copyright and MIT license for rustls-pki-types 1.15.1. | R:- | A:- | S:-
-rustls-webpki-0.103.15-LICENSE.txt[SV2T]: F:Carries the default ISC-style terms and exception wording for rustls-webpki 0.103.15. | R:- | A:- | S:-
-rustversion-1.0.23-LICENSE-APACHE.txt[SV2S]: F:Includes the Apache 2.0 license for the rustversion 1.0.23 crate. | R:- | A:- | S:-
-rustversion-1.0.23-LICENSE-MIT.txt[SV2T]: F:Preserves the rustversion 1.0.23 MIT permission and disclaimer. | R:- | A:- | S:-
-ryu-1.0.23-LICENSE-APACHE.txt[SV2S]: F:Carries Apache 2.0 terms for ryu 1.0.23. | R:- | A:- | S:-
-ryu-1.0.23-LICENSE-BOOST.txt[SV2T]: F:Carries the Boost Software License 1.0 alternative for ryu 1.0.23. | R:- | A:- | S:-
-scopeguard-1.2.0-LICENSE-APACHE.txt[SV2M]: F:Bundles the scopeguard 1.2.0 Apache 2.0 license. | R:- | A:- | S:-
-scopeguard-1.2.0-LICENSE-MIT.txt[SV2T]: F:Preserves the scopeguard developers' MIT attribution and permission. | R:- | A:- | S:-
-sec1-0.7.3-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for sec1 0.7.3. | R:- | A:- | S:-
-sec1-0.7.3-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto's MIT notice for sec1 0.7.3. | R:- | A:- | S:-
-security-framework-3.7.0-LICENSE-APACHE.txt[SV2M]: F:Bundles the Apache 2.0 alternative for security-framework 3.7.0. | R:- | A:- | S:-
-security-framework-3.7.0-LICENSE-MIT.txt[SV2T]: F:Carries the MIT terms and Steven Fackler copyright for security-framework. | R:- | A:- | S:-
-security-framework-sys-2.17.0-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for the security-framework-sys 2.17.0 binding crate. | R:- | A:- | S:-
-security-framework-sys-2.17.0-LICENSE-MIT.txt[SV2T]: F:Preserves Steven Fackler's MIT notice for security-framework-sys. | R:- | A:- | S:-
-semver-1.0.28-LICENSE-APACHE.txt[SV2S]: F:Bundles the semver 1.0.28 Apache 2.0 license. | R:- | A:- | S:-
-semver-1.0.28-LICENSE-MIT.txt[SV2T]: F:Preserves the complementary MIT terms for semver 1.0.28. | R:- | A:- | S:-
-serde-1.0.229-LICENSE-APACHE.txt[SV2S]: F:Includes the Serde 1.0.229 Apache 2.0 license text. | R:- | A:- | S:-
-serde-1.0.229-LICENSE-MIT.txt[SV2T]: F:Carries MIT permission and disclaimer text for Serde 1.0.229. | R:- | A:- | S:-
-serde_core-1.0.229-LICENSE-APACHE.txt[SV2S]: F:Carries Apache 2.0 terms for the serde_core crate. | R:- | A:- | S:-
-serde_core-1.0.229-LICENSE-MIT.txt[SV2T]: F:Preserves the separately bundled serde_core 1.0.229 MIT text. | R:- | A:- | S:-
-serde_derive-1.0.229-LICENSE-APACHE.txt[SV2S]: F:Includes Apache 2.0 terms for Serde's derive macro crate. | R:- | A:- | S:-
-serde_derive-1.0.229-LICENSE-MIT.txt[SV2T]: F:Carries MIT terms for the serde_derive 1.0.229 dependency. | R:- | A:- | S:-
-serde_json-1.0.154-LICENSE-APACHE.txt[SV2S]: F:Preserves the serde_json 1.0.154 Apache 2.0 alternative. | R:- | A:- | S:-
-serde_json-1.0.154-LICENSE-MIT.txt[SV2T]: F:Carries the MIT permission and disclaimer for serde_json 1.0.154. | R:- | A:- | S:-
-serde_urlencoded-0.7.1-LICENSE-APACHE.txt[SV2S]: F:Bundles Apache 2.0 terms for serde_urlencoded 0.7.1. | R:- | A:- | S:-
-serde_urlencoded-0.7.1-LICENSE-MIT.txt[SV2T]: F:Preserves the original author copyright and MIT notice for serde_urlencoded. | R:- | A:- | S:-
-sha1-0.11.0-LICENSE-APACHE.txt[SV2M]: F:Carries the Apache 2.0 terms for sha1 0.11.0. | R:- | A:- | S:-
-sha1-0.11.0-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto and Artyom Pavlov MIT attribution for sha1 0.11.0. | R:- | A:- | S:-
-sha2-0.10.9-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for sha2 0.10.9. | R:- | A:- | S:-
-sha2-0.10.9-LICENSE-MIT.txt[SV2T]: F:Carries original and Mozilla MIT attribution bundled with sha2 0.10.9. | R:- | A:- | S:-
-sha2-0.11.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for the separately packaged sha2 0.11.1. | R:- | A:- | S:-
-sha2-0.11.1-LICENSE-MIT.txt[SV2T]: F:Carries the RustCrypto and Artyom Pavlov MIT notices for sha2 0.11.1. | R:- | A:- | S:-
-shlex-2.0.1-LICENSE-APACHE.txt[SV2T]: F:Preserves shlex's short Apache 2.0 notice and original author copyright. | R:- | A:- | S:-
-shlex-2.0.1-LICENSE-MIT.txt[SV2T]: F:Carries the shlex 2.0.1 MIT alternative and original attribution. | R:- | A:- | S:-
-signature-2.2.0-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 text for signature 2.2.0. | R:- | A:- | S:-
-signature-2.2.0-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT notice for signature 2.2.0. | R:- | A:- | S:-
-simd-adler32-0.3.10-LICENSE.md.txt[SV2T]: F:Preserves the MIT license and Marvin Countryman copyright for simd-adler32. | R:- | A:- | S:-
-simdutf8-0.1.5-LICENSE-Apache.txt[SV2S]: F:Carries Apache 2.0 terms for simdutf8 0.1.5. | R:- | A:- | S:-
-simdutf8-0.1.5-LICENSE-MIT.txt[SV2T]: F:Includes the MIT permission and disclaimer alternative for simdutf8. | R:- | A:- | S:-
-siphasher-1.0.4-COPYING.txt[SV2T]: F:Records Rust Project and Frank Denis attribution and the Apache or MIT choice for siphasher. | R:- | A:- | S:-
-siphasher-1.0.4-LICENSE-APACHE.txt[SV2M]: F:Bundles the siphasher 1.0.4 Apache 2.0 license text. | R:- | A:- | S:-
-siphasher-1.0.4-LICENSE-MIT.txt[SV2T]: F:Carries the MIT permission and conditions for siphasher 1.0.4. | R:- | A:- | S:-
-slab-0.4.12-LICENSE.txt[SV2T]: F:Preserves Carl Lerche's MIT notice for slab 0.4.12. | R:- | A:- | S:-
-smallvec-1.16.3-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for smallvec 1.16.3. | R:- | A:- | S:-
-smallvec-1.16.3-LICENSE-MIT.txt[SV2T]: F:Preserves the Servo Project MIT attribution for smallvec. | R:- | A:- | S:-
-socket2-0.6.5-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for socket2 0.6.5. | R:- | A:- | S:-
-socket2-0.6.5-LICENSE-MIT.txt[SV2T]: F:Carries the original socket2 author copyright and MIT permission notice. | R:- | A:- | S:-
-spin-0.9.9-LICENSE.txt[SV2T]: F:Carries the original author attribution and MIT terms for spin 0.9.9. | R:- | A:- | S:-
-spki-0.7.3-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for spki 0.7.3. | R:- | A:- | S:-
-spki-0.7.3-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT notice for spki 0.7.3. | R:- | A:- | S:-
-stable_deref_trait-1.2.1-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for stable_deref_trait 1.2.1. | R:- | A:- | S:-
-stable_deref_trait-1.2.1-LICENSE-MIT.txt[SV2T]: F:Carries Robert Grosse's MIT notice for stable_deref_trait 1.2.1. | R:- | A:- | S:-
-strength_reduce-0.2.4-LICENSE-APACHE.txt[SV2M]: F:Preserves the strength_reduce 0.2.4 Apache 2.0 alternative. | R:- | A:- | S:-
-strength_reduce-0.2.4-LICENSE-MIT.txt[SV2T]: F:Carries the RustFFT developers' MIT terms distributed with strength_reduce. | R:- | A:- | S:-
-subtle-2.6.1-LICENSE.txt[SV3T]: F:Preserves the BSD-style redistribution conditions and author attribution for subtle 2.6.1. | R:- | A:- | S:-
-syn-2.0.119-LICENSE-APACHE.txt[SV2S]: F:Bundles Apache 2.0 license text for syn 2.0.119. | R:- | A:- | S:-
-syn-2.0.119-LICENSE-MIT.txt[SV2T]: F:Preserves the syn 2.0.119 MIT permission and disclaimer text. | R:- | A:- | S:-
-syn-3.0.9-LICENSE-APACHE.txt[SV2S]: F:Carries Apache 2.0 terms for the separately locked syn 3.0.9. | R:- | A:- | S:-
-syn-3.0.9-LICENSE-MIT.txt[SV2T]: F:Carries the MIT license alternative for syn 3.0.9. | R:- | A:- | S:-
-sync_wrapper-1.0.2-LICENSE.txt[SV2S]: F:Includes the Apache 2.0 license accompanying sync_wrapper 1.0.2. | R:- | A:- | S:-
-synstructure-0.14.0-LICENSE.txt[SV2T]: F:Preserves Nika Layzell's MIT attribution for synstructure 0.14.0. | R:- | A:- | S:-
-tar-0.4.46-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for tar 0.4.46. | R:- | A:- | S:-
-tar-0.4.46-LICENSE-MIT.txt[SV2T]: F:Carries the tar-rs contributors' MIT notice for tar 0.4.46. | R:- | A:- | S:-
-tempfile-3.27.0-LICENSE-APACHE.txt[SV2M]: F:Preserves Apache 2.0 terms for tempfile 3.27.0. | R:- | A:- | S:-
-tempfile-3.27.0-LICENSE-MIT.txt[SV2T]: F:Preserves Steven Allen's MIT license notice for tempfile 3.27.0. | R:- | A:- | S:-
-thiserror-2.0.21-LICENSE-APACHE.txt[SV2S]: F:Carries Apache 2.0 terms for thiserror 2.0.21. | R:- | A:- | S:-
-thiserror-2.0.21-LICENSE-MIT.txt[SV2T]: F:Preserves the thiserror 2.0.21 MIT permission and disclaimer. | R:- | A:- | S:-
-thiserror-impl-2.0.21-LICENSE-APACHE.txt[SV2S]: F:Bundles Apache 2.0 terms for the thiserror implementation crate. | R:- | A:- | S:-
-thiserror-impl-2.0.21-LICENSE-MIT.txt[SV2T]: F:Carries the MIT license alternative for thiserror-impl 2.0.21. | R:- | A:- | S:-
-time-0.3.55-LICENSE-Apache.txt[SV2S]: F:Includes Apache 2.0 text for time 0.3.55. | R:- | A:- | S:-
-time-0.3.55-LICENSE-MIT.txt[SV2T]: F:Carries Jacob Pratt and contributors' MIT attribution for time 0.3.55. | R:- | A:- | S:-
-time-core-0.1.9-LICENSE-Apache.txt[SV2S]: F:Bundles the separately packaged time-core 0.1.9 Apache 2.0 license. | R:- | A:- | S:-
-time-core-0.1.9-LICENSE-MIT.txt[SV2T]: F:Preserves the time-core 0.1.9 MIT terms and contributor attribution. | R:- | A:- | S:-
-tinystr-0.8.4-LICENSE.txt[SV2T]: F:Carries Unicode License V3 terms and copyright notice for tinystr 0.8.4. | R:- | A:- | S:-
-tinyvec-1.13.3-LICENSE-APACHE.md.txt[SV2M]: F:Includes the Apache 2.0 alternative for tinyvec 1.13.3. | R:- | A:- | S:-
-tinyvec-1.13.3-LICENSE-MIT.md.txt[SV2T]: F:Carries the tinyvec 1.13.3 MIT permissions and disclaimer. | R:- | A:- | S:-
-tinyvec-1.13.3-LICENSE-ZLIB.md.txt[SV2T]: F:Preserves the original author notice and Zlib-style terms for tinyvec. | R:- | A:- | S:-
-tokio-1.53.3-LICENSE.txt[SV2T]: F:Preserves Tokio contributors' MIT attribution for the main Tokio runtime crate. | R:- | A:- | S:-
-tokio-macros-2.7.2-LICENSE.txt[SV2T]: F:Carries the Tokio macros MIT terms and Yoshua Wuyts copyright. | R:- | A:- | S:-
-tokio-rustls-0.26.6-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for tokio-rustls 0.26.6. | R:- | A:- | S:-
-tokio-rustls-0.26.6-LICENSE-MIT.txt[SV2T]: F:Preserves the tokio-rustls 0.26.6 MIT license and original author notice. | R:- | A:- | S:-
-tokio-tungstenite-0.30.0-LICENSE.txt[SV2T]: F:Preserves the original author MIT notices for tokio-tungstenite 0.30.0. | R:- | A:- | S:-
-tokio-util-0.7.20-LICENSE.txt[SV2T]: F:Carries the Tokio contributors' MIT license for tokio-util 0.7.20. | R:- | A:- | S:-
-tower-0.5.3-LICENSE.txt[SV2T]: F:Preserves the Tower contributors' MIT permission notice for tower 0.5.3. | R:- | A:- | S:-
-tower-http-0.6.11-LICENSE.txt[SV2T]: F:Carries the separate tower-http 0.6.11 MIT terms and Tower contributor copyright. | R:- | A:- | S:-
-tower-layer-0.3.3-LICENSE.txt[SV2T]: F:Preserves the Tower contributors' MIT notice for the tower-layer crate. | R:- | A:- | S:-
-tower-service-0.3.3-LICENSE.txt[SV2T]: F:Carries the tower-service 0.3.3 MIT permission and contributors' attribution. | R:- | A:- | S:-
-tracing-0.1.44-LICENSE.txt[SV2T]: F:Preserves the Tokio contributors' MIT notice for tracing 0.1.44. | R:- | A:- | S:-
-tracing-core-0.1.36-LICENSE.txt[SV2T]: F:Carries the separately bundled tracing-core MIT text and Tokio copyright. | R:- | A:- | S:-
-transpose-0.2.3-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for transpose 0.2.3. | R:- | A:- | S:-
-transpose-0.2.3-LICENSE-MIT.txt[SV2T]: F:Preserves transpose developers' MIT attribution for transpose 0.2.3. | R:- | A:- | S:-
-try-lock-0.2.5-LICENSE.txt[SV2T]: F:Includes the MIT terms and both author copyright lines for try-lock 0.2.5. | R:- | A:- | S:-
-tungstenite-0.30.0-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for tungstenite 0.30.0. | R:- | A:- | S:-
-tungstenite-0.30.0-LICENSE-MIT.txt[SV2T]: F:Preserves the original author MIT notices for the tungstenite crate. | R:- | A:- | S:-
-typed-path-0.12.3-LICENSE-APACHE.txt[SV2S]: F:Includes Apache 2.0 license text for typed-path 0.12.3. | R:- | A:- | S:-
-typed-path-0.12.3-LICENSE-MIT.txt[SV2T]: F:Carries the complementary typed-path 0.12.3 MIT terms. | R:- | A:- | S:-
-typenum-1.20.1-LICENSE-APACHE.txt[SV2M]: F:Bundles the typenum 1.20.1 Apache 2.0 license. | R:- | A:- | S:-
-typenum-1.20.1-LICENSE-MIT.txt[SV2T]: F:Preserves the typenum 1.20.1 MIT terms and original copyright. | R:- | A:- | S:-
-typenum-1.20.1-LICENSE.txt[SV2T]: F:Records typenum 1.20.1's MIT or Apache 2.0 license expression. | R:- | A:- | S:-
-unicase-2.10.0-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for unicase 2.10.0. | R:- | A:- | S:-
-unicase-2.10.0-LICENSE-MIT.txt[SV2T]: F:Preserves the original unicase MIT license and copyright. | R:- | A:- | S:-
-unicode-ident-1.0.27-LICENSE-APACHE.txt[SV2S]: F:Includes the Apache 2.0 alternative for unicode-ident 1.0.27. | R:- | A:- | S:-
-unicode-ident-1.0.27-LICENSE-MIT.txt[SV2T]: F:Carries the unicode-ident MIT permission and disclaimer. | R:- | A:- | S:-
-unicode-ident-1.0.27-LICENSE-UNICODE.txt[SV3T]: F:Preserves the Unicode License V3 notice distributed with unicode-ident data. | R:- | A:- | S:-
-unicode-normalization-0.1.26-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for unicode-normalization 0.1.26. | R:- | A:- | S:-
-unicode-normalization-0.1.26-LICENSE-MIT.txt[SV2T]: F:Carries the Rust Project MIT notice for unicode-normalization. | R:- | A:- | S:-
-unicode-normalization-0.1.26-LICENSE-UNICODE.txt[SV3T]: F:Carries Unicode License V3 copyright and permission terms for unicode-normalization data. | R:- | A:- | S:-
-universal-hash-0.6.1-LICENSE-APACHE.txt[SV2M]: F:Includes the Apache 2.0 alternative for universal-hash 0.6.1. | R:- | A:- | S:-
-universal-hash-0.6.1-LICENSE-MIT.txt[SV2T]: F:Preserves RustCrypto MIT attribution for universal-hash 0.6.1. | R:- | A:- | S:-
-untrusted-0.9.0-LICENSE.txt.txt[SV2T]: F:Preserves Brian Smith's ISC-style copyright, permission and disclaimer for untrusted 0.9.0. | R:- | A:- | S:-
-url-2.5.8-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for url 2.5.8. | R:- | A:- | S:-
-url-2.5.8-LICENSE-MIT.txt[SV2T]: F:Carries the rust-url developers' MIT license and copyright for the url crate. | R:- | A:- | S:-
-utf8_iter-1.0.4-LICENSE-APACHE.txt[SV2M]: F:Carries the utf8_iter 1.0.4 Apache 2.0 alternative. | R:- | A:- | S:-
-utf8_iter-1.0.4-LICENSE-MIT.txt[SV2T]: F:Preserves the Mozilla Foundation MIT notice for utf8_iter 1.0.4. | R:- | A:- | S:-
-uuid-1.28.0-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 terms for uuid 1.28.0. | R:- | A:- | S:-
-uuid-1.28.0-LICENSE-MIT.txt[SV2T]: F:Preserves the UUID 1.28.0 MIT license and Rust Project and contributor notices. | R:- | A:- | S:-
-version_check-0.9.5-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 terms for version_check 0.9.5. | R:- | A:- | S:-
-version_check-0.9.5-LICENSE-MIT.txt[SV2T]: F:Carries the original author MIT notice for version_check 0.9.5. | R:- | A:- | S:-
-want-0.3.2-LICENSE.txt[SV2T]: F:Carries the MIT license and Sean McArthur copyright for want 0.3.2. | R:- | A:- | S:-
-webpki-roots-0.26.11-LICENSE.txt[SV3T]: F:Preserves CDLA Permissive 2.0 data-sharing terms for the webpki-roots 0.26.11 root data. | R:- | A:- | S:-
-webpki-roots-1.0.9-LICENSE.txt[SV3T]: F:Carries the CDLA Permissive 2.0 terms for separately bundled webpki-roots 1.0.9 data. | R:- | A:- | S:-
-writeable-0.6.4-LICENSE.txt[SV2T]: F:Includes Unicode License V3 terms and copyright notice for writeable 0.6.4. | R:- | A:- | S:-
-xattr-1.6.1-LICENSE-APACHE.txt[SV2M]: F:Bundles Apache 2.0 text for xattr 1.6.1. | R:- | A:- | S:-
-xattr-1.6.1-LICENSE-MIT.txt[SV2T]: F:Preserves Steven Allen's MIT license notice for xattr 1.6.1. | R:- | A:- | S:-
-yoke-0.8.3-LICENSE.txt[SV2T]: F:Carries Unicode License V3 terms for yoke 0.8.3. | R:- | A:- | S:-
-yoke-derive-0.8.4-LICENSE.txt[SV2T]: F:Preserves Unicode License V3 attribution for the yoke derive crate. | R:- | A:- | S:-
-zerocopy-0.8.63-LICENSE-APACHE.txt[SV2M]: F:Includes the zerocopy 0.8.63 Apache 2.0 alternative. | R:- | A:- | S:-
-zerocopy-0.8.63-LICENSE-BSD.txt[SV2T]: F:Carries the Fuchsia authors' BSD redistribution terms for zerocopy. | R:- | A:- | S:-
-zerocopy-0.8.63-LICENSE-MIT.txt[SV2T]: F:Preserves Fuchsia MIT attribution and permission terms for zerocopy. | R:- | A:- | S:-
-zerofrom-0.1.8-LICENSE.txt[SV2T]: F:Bundles Unicode License V3 copyright and permission terms for zerofrom. | R:- | A:- | S:-
-zerofrom-derive-0.1.8-LICENSE.txt[SV2T]: F:Carries the Unicode V3 license notice for the zerofrom derive crate. | R:- | A:- | S:-
-zeroize-1.9.1-LICENSE-APACHE.txt[SV2M]: F:Includes Apache 2.0 text for zeroize 1.9.1. | R:- | A:- | S:-
-zeroize-1.9.1-LICENSE-MIT.txt[SV2T]: F:Preserves the RustCrypto MIT notice for zeroize 1.9.1. | R:- | A:- | S:-
-zeroize_derive-1.5.0-LICENSE-APACHE.txt[SV2M]: F:Carries Apache 2.0 terms for the zeroize derive crate. | R:- | A:- | S:-
-zeroize_derive-1.5.0-LICENSE-MIT.txt[SV2T]: F:Carries the separately bundled RustCrypto MIT permission notice for zeroize_derive. | R:- | A:- | S:-
-zerotrie-0.2.5-LICENSE.txt[SV2T]: F:Includes the Unicode License V3 notice for zerotrie 0.2.5. | R:- | A:- | S:-
-zerovec-0.11.8-LICENSE.txt[SV2T]: F:Carries Unicode License V3 copyright and permission terms for zerovec 0.11.8. | R:- | A:- | S:-
-zerovec-derive-0.11.6-LICENSE.txt[SV2T]: F:Preserves the Unicode V3 notice for the zerovec derive crate. | R:- | A:- | S:-
-zip-9.0.5-LICENSE.txt[SV2T]: F:Preserves the zip 9.0.5 MIT license and original author copyright. | R:- | A:- | S:-
-zlib-rs-0.6.8-LICENSE.txt[SV3T]: F:Carries the Zlib license conditions and Trifecta Tech Foundation attribution for zlib-rs. | R:- | A:- | S:-
-zmij-1.0.23-LICENSE-MIT.txt[SV2T]: F:Includes the MIT permission and disclaimer terms for zmij 1.0.23. | R:- | A:- | S:-
-zopfli-0.8.4-COPYING.txt[SV2M]: F:Preserves Apache 2.0 license text for zopfli 0.8.4. | R:- | A:- | S:-
-zstd-0.14.3-LICENSE.txt[SV2T]: F:Carries BSD 3-Clause terms and Alexandre Bury attribution for zstd 0.14.3. | R:- | A:- | S:-
-zstd-safe-8.2.0-LICENSE.txt[SV2T]: F:Preserves the separate zstd-safe 8.2.0 BSD 3-Clause license. | R:- | A:- | S:-
-zstd-sys-2.1.2+zstd.1.5.7-LICENSE.BSD-3-Clause.txt[SV3T]: F:Preserves the distinct BSD 3-Clause notice for automatically generated zstd-sys bindings. | R:- | A:- | S:-
-zstd-sys-2.1.2+zstd.1.5.7-LICENSE.txt[SV2T]: F:Carries the main bundled BSD 3-Clause license for the zstd-sys Rust package. | R:- | A:- | S:-
-
 ===/<repository>/openless-all/ios/Resources/Prediction/===
 manifest.json[FV5T]: F:Pins Rime Ice and SymSpell inputs and hashes, derived prediction row counts, and generated SQLite size and digest. | R:code:openless-all/ios/scripts/build-predictions.py,code:openless-all/ios/Keyboard/KeyboardPredictionEngine.swift | A:Prediction manifest format 1 | S:Bind both downloaded inputs and derived output bytes to the versioned manifest.
 
@@ -2925,10 +2411,10 @@ audio-smoke.swift[TH5T]: F:Compares native PCM conversion and drain against the 
 bootstrap-local-speech.sh[OV5T]: F:Fetches and verifies the pinned SenseVoice model and iOS Sherpa ONNX and ONNX Runtime XCFrameworks. | R:code:openless-all/ios/Packages/LocalSpeech/Package.swift | A:HF_ENDPOINT | S:Use verified cached files or download to staging, and check bytes before extracting or moving them into bundle inputs.
 bootstrap.sh[OV5T]: F:Installs the pinned iOS toolchain and native dependencies and prepares the staged Core source and prediction inputs. | R:code:openless-all/ios/scripts/prepare-core.py,code:openless-all/ios/scripts/build-rime.sh | A:iOS dependency bootstrap | S:Use pinned checkout and archive identities and install both iOS Rust targets.
 build-core.sh[OV6T]: F:Builds and stages the locked iOS Core Rust static library for device and simulator and checks deployment compatibility. | R:code:openless-all/ios/CoreHost/Cargo.toml,code:openless-all/ios/scripts/validate-deployment.py | A:all; device; simulator | S:Use Rustup's pinned compiler and isolate the deployment-target cache at iOS 16.0.
-build-predictions.py[OV6S]: F:Builds the bounded offline English and Chinese prediction database and dictionary artifacts from verified source files. | R:code:openless-all/ios/Resources/Prediction/manifest.json,code:openless-all/ios/Resources/Licenses/prediction-data-LICENSE.txt | A:Prediction SQLite database and manifest | S:Retain upstream attribution and verify pinned input bytes. Produce deterministic selected vocab and continuation counts.
+build-predictions.py[OV6S]: F:Builds the bounded offline English and Chinese prediction database and dictionary artifacts from verified source files. | R:code:openless-all/ios/Resources/Prediction/manifest.json | A:Prediction SQLite database and manifest | S:Retain upstream attribution and verify pinned input bytes. Produce deterministic selected vocab and continuation counts.
 build-rime.sh[OV6T]: F:Builds static iOS Rime and its dependencies for device or simulator and stages platform libraries and notices. | R:code:openless-all/ios/scripts/bootstrap.sh,code:openless-all/ios/RimeBridge/OLRimeSession.mm | A:all; device; simulator | S:Use the target-specific SDK and preserve vendored dependency attribution in staged resources.
 build.sh[OV6T]: F:Generates and builds the iOS Xcode project against staged native libraries and validates the resulting app bundle. | R:code:openless-all/ios/project.yml,code:openless-all/ios/scripts/validate-product.py | A:Platform; configuration; signing mode | S:Simulator can run unsigned. Unsigned device output is not installable and uses its own validation mode.
-collect-rust-licenses.py[OV5T]: F:Collects attribution for reachable non-dev iOS Rust dependencies and records notice checksums and upstream provenance. | R:code:openless-all/ios/Resources/Licenses/Rust/manifest.json,code:openless-all/ios/CoreHost/Cargo.lock | A:Generated Rust license directory and manifest | S:Exclude machine paths and flag packages for which only SPDX metadata could be collected.
+collect-rust-licenses.py[OV5T]: F:Collects attribution for reachable non-dev iOS Rust dependencies and records notice checksums and upstream provenance. | R:code:openless-all/ios/CoreHost/Cargo.lock | A:Generated Rust license directory and manifest | S:Exclude machine paths and flag packages for which only SPDX metadata could be collected.
 export-ui-evidence.py[XQ4T]: F:Exports XCUITest screenshot attachments under traceable names and maintains the evidence index. | R:code:openless-all/ios/UITests/UIAuditTests.swift | A:XCResult bundle and output directory | S:Preserve failure association metadata and avoid duplicate output names.
 package-ipa.py[OV6T]: F:Validates an unsigned iOS device product and packages it as a verifiable IPA with build, size, and digest evidence. | R:code:openless-all/ios/scripts/validate-product.py | A:app output | S:Verify members, contents and permissions before atomic publication. Require a new destination outside the app bundle and never overwrite.
 prediction-tests.swift[TB5T]: F:Checks real offline keyboard dictionary predictions and measures combined English and Chinese lookup latency. | R:code:openless-all/ios/Keyboard/KeyboardPredictionEngine.swift | A:Prediction SQLite path argument | S:A continuation appends only the remaining suffix so typed input cannot be duplicated.

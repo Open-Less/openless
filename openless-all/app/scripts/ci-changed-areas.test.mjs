@@ -82,6 +82,29 @@ try {
   expect('docs only', every('false'));
   reset();
 
+  // Only these exact generated AOCI index paths are non-product artifacts.
+  for (const files of [
+    { '.aoci/baseline.json': '{}\n' },
+    { 'aoci.code.txt': 'index\n' },
+    { '.aoci/baseline.json': '{}\n', 'aoci.code.txt': 'index\n' },
+  ]) {
+    const label = Object.keys(files).join(' + ');
+    commit(files, 'AOCI index refresh');
+    expect(label, every('false'));
+    reset();
+  }
+  for (const path of ['.aoci/config.json', '.aoci/unknown.json', '.aoci/new-tool.rs']) {
+    commit({ [path]: '{}\n' }, 'AOCI configuration or unknown path');
+    expect(path, every('true'));
+    reset();
+  }
+  commit(
+    { '.aoci/baseline.json': '{}\n', '.github/workflows/ci.yml': 'name: CI\n' },
+    'AOCI index with workflow changes',
+  );
+  expect('AOCI index with workflow changes', every('true'));
+  reset();
+
   // The Linux host is a separate crate in its own target graph.
   commit({ 'openless-all/app/linux-egui/src/ui/theme.rs': 'fn x() {}\n' }, 'linux host source');
   expect('linux host source', {

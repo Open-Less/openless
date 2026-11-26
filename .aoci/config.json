@@ -129,6 +129,17 @@
         "created_by": "aoci-init",
         "order": 106,
         "enabled": true
+      },
+      {
+        "rule_id": "exclude-ios-third-party-licenses",
+        "action": "exclude",
+        "pattern": "openless-all/ios/Resources/Licenses/**",
+        "pattern_kind": "glob",
+        "reason": "Third-party iOS open-source license texts are not product source code",
+        "source": "user",
+        "created_by": "appergb",
+        "order": 200,
+        "enabled": true
       }
     ]
   },

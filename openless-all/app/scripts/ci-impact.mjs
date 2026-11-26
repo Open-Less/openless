@@ -252,6 +252,9 @@ const iosProject = (file) => file.startsWith('openless-all/ios/');
  * shared resource whose native consumers cannot be proven by one package.
  */
 function classify(file, context) {
+  // Generated index refreshes cannot reach product code; other AOCI paths
+  // remain unclassified so configuration and new tooling still fail open.
+  if (file === '.aoci/baseline.json' || file === 'aoci.code.txt') return new Set();
   if (prose(file)) return new Set();
   if (contractSuite(file)) return ALL;
   if (workflowOrTooling(file)) return ALL;

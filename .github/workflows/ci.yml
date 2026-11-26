@@ -225,20 +225,21 @@ jobs:
           retention-days: 7
 
   ui-motion-browsers:
-    name: UI motion / ${{ matrix.browser }}
+    name: UI motion / ${{ matrix.browser }} (${{ matrix.shard }}/2)
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         browser: [chromium, webkit]
+        shard: [1, 2]
     needs: [changes]
-    # One worker per browser keeps timing-sensitive tests isolated; the two
-    # engines run on separate runners instead of serialising ~15 minutes.
+    # One worker per VM keeps timing-sensitive tests isolated; each engine's
+    # two shards run on independent runners.
     if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     # A hung Chromium/WebKit process must not hold the runner after the step cap.
     # Includes cold browser setup and leaves time to upload a failed trace.
-    timeout-minutes: 40
+    timeout-minutes: 50
     defaults:
       run:
         working-directory: openless-all/app
@@ -266,7 +267,7 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           # Browser revisions follow Playwright, not unrelated npm lock changes.
-          # Cache only this engine; the other matrix leg owns its own download.
+          # Cache only this engine; its shards share the same browser revision.
           key: playwright-v2-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ matrix.browser }}-${{ steps.playwright_version.outputs.version }}
       - name: Install Playwright system dependencies
         # Browser libraries are about 114MB. Eight minutes dies while a trickling
@@ -287,19 +288,19 @@ jobs:
         timeout-minutes: 10
         run: npx playwright install "${{ matrix.browser }}"
       - name: Save Playwright browsers on beta builds
-        if: steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        if: matrix.shard == 1 && steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
       - name: Run UI motion checks
-        timeout-minutes: 20
-        run: npm run test:ui-motion -- --project=${{ matrix.browser }}
+        timeout-minutes: 30
+        run: npm run test:ui-motion -- --project=${{ matrix.browser }} --shard=${{ matrix.shard }}/2
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           retention-days: 7
-          name: ui-motion-failure-${{ matrix.browser }}
+          name: ui-motion-failure-${{ matrix.browser }}-shard-${{ matrix.shard }}
           path: |
             openless-all/app/test-results/
             openless-all/app/playwright-report/
@@ -307,7 +308,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-acceptance-${{ matrix.browser }}
+          name: ui-acceptance-${{ matrix.browser }}-shard-${{ matrix.shard }}
           path: openless-all/app/test-results/**/acceptance-*.png
           retention-days: 7
           if-no-files-found: ignore

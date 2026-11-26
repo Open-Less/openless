@@ -8,6 +8,7 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   timeout: 30_000,
+  globalTimeout: process.env.CI ? 25 * 60_000 : undefined,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: previewOrigin,
