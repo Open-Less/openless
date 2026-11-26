@@ -137,7 +137,7 @@ use std::time::Duration;
 
 const LOG_ROTATE_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(target_os = "macos")]
-const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
+const OPENLESS_BUNDLE_ID: &str = crate::persistence::BUNDLE_ID;
 
 #[cfg(target_os = "macos")]
 static LESS_COMPUTER_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
@@ -2081,14 +2081,14 @@ pub fn log_dir_path() -> std::path::PathBuf {
             return std::path::PathBuf::from(home)
                 .join("Library")
                 .join("Logs")
-                .join("OpenLess");
+                .join(crate::persistence::APP_DIR_NAME);
         }
     }
     #[cfg(target_os = "windows")]
     {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             return std::path::PathBuf::from(local)
-                .join("OpenLess")
+                .join(crate::persistence::APP_DIR_NAME)
                 .join("Logs");
         }
     }
@@ -2098,7 +2098,7 @@ pub fn log_dir_path() -> std::path::PathBuf {
             return std::path::PathBuf::from(home)
                 .join(".local")
                 .join("share")
-                .join("OpenLess")
+                .join(crate::persistence::APP_DIR_NAME)
                 .join("logs");
         }
     }
@@ -2113,7 +2113,7 @@ pub fn log_dir_path() -> std::path::PathBuf {
     }
     #[cfg(not(target_os = "android"))]
     {
-        std::env::temp_dir().join("OpenLess")
+        std::env::temp_dir().join(crate::persistence::APP_DIR_NAME)
     }
 }
 
