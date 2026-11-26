@@ -26,6 +26,14 @@ import kotlin.math.abs
 internal fun shouldIgnoreOverlayRecordingFrame(processing: Boolean, message: String?): Boolean =
     processing && message.isNullOrBlank()
 
+internal fun isOverlayRootLive(isAttachedToWindow: Boolean, hasParent: Boolean): Boolean =
+    isAttachedToWindow || hasParent
+
+internal fun shouldHandleOverlayServiceInteraction(
+    destroyed: Boolean,
+    isCurrentInstance: Boolean,
+): Boolean = !destroyed && isCurrentInstance
+
 /** Foreground service + TYPE_APPLICATION_OVERLAY floating dictation control. */
 class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateListener {
 
@@ -52,6 +60,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             if (wasRecording && !value) demoteFromRecordingForeground()
         }
     private var processing = false
+    private var destroyed = false
     private var keyboardVisible = false
     private var armed = false
     private var dragStartX = 0
@@ -136,6 +145,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     override fun onDestroy() {
+        destroyed = true
         if (OpenLessOverlayBridge.listener === this) {
             OpenLessOverlayBridge.listener = null
         }
@@ -354,6 +364,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         layoutParams = params
         iconContainer = root
         (root.getChildAt(0) as? ImageView)?.let { iconButton = it }
+        root.setOnClickListener { handleIconClick() }
         applyOverlaySize(root)
         attachDragHandler(root, params)
         clampToScreen(params)
@@ -369,7 +380,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             return@withOverlayLock
         }
         val root = overlayRoots.lastOrNull() ?: rootView
-        if (root == null || !root.isAttachedToWindow) {
+        if (root == null || !isOverlayRootLive(root.isAttachedToWindow, root.parent != null)) {
             Log.i(TAG, "overlay refresh skipped roots=0")
             return@withOverlayLock
         }
@@ -384,16 +395,19 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun reconcileOverlayRoots() {
-        val roots =
+        val candidates =
             synchronized(overlayRoots) {
-                (overlayRoots + listOfNotNull(rootView))
-                    .distinct()
-                    .filter { it.isAttachedToWindow }
-                    .also {
-                        overlayRoots.clear()
-                        overlayRoots.addAll(it)
-                    }
+                (overlayRoots + listOfNotNull(rootView)).distinct()
             }
+        val (roots, detachedRoots) =
+            candidates.partition { isOverlayRootLive(it.isAttachedToWindow, it.parent != null) }
+        detachedRoots.forEach { staleRoot ->
+            removeOverlayRoot(staleRoot)
+        }
+        synchronized(overlayRoots) {
+            overlayRoots.clear()
+            overlayRoots.addAll(roots)
+        }
         if (roots.isEmpty()) {
             rootView = null
             layoutParams = null
@@ -416,14 +430,26 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun removeOverlayRoot(view: FrameLayout) {
+        view.setOnClickListener(null)
+        view.setOnTouchListener(null)
         try {
-            if (view.isAttachedToWindow) {
-                windowManager?.removeViewImmediate(view)
-            }
+            // Do not gate on isAttachedToWindow: WindowManager.addView() registers the
+            // view synchronously, while isAttachedToWindow remains false until the first
+            // ViewRootImpl traversal. Skipping removeViewImmediate() in that window leaks
+            // an orphaned overlay when ACTION_HIDE arrives right after ACTION_SHOW.
+            windowManager?.removeViewImmediate(view)
+        } catch (_: IllegalArgumentException) {
+            // View was already detached from WindowManager.
         } catch (error: Throwable) {
             Log.w(TAG, "remove overlay root failed", error)
         }
     }
+
+    private fun isActiveService(): Boolean =
+        shouldHandleOverlayServiceInteraction(
+            destroyed = destroyed,
+            isCurrentInstance = instance === this,
+        )
 
     private fun buildIconButton(): ImageView {
         return ImageView(this).apply {
@@ -458,6 +484,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun handleIconClick() {
+        if (!isActiveService()) return
         if (processing) return
         if (recording) {
             stopRecordingFromOverlay()
@@ -484,6 +511,15 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun attachDragHandler(view: View, params: WindowManager.LayoutParams) {
         view.setOnTouchListener { touchedView, event ->
+            if (!isActiveService()) {
+                val orphaned = synchronized(overlayRoots) { overlayRoots.none { it === touchedView } }
+                if (orphaned) {
+                    touchedView.setOnTouchListener(null)
+                    touchedView.setOnClickListener(null)
+                    (touchedView as? FrameLayout)?.let { removeOverlayRoot(it) }
+                }
+                return@setOnTouchListener false
+            }
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     dragging = false
