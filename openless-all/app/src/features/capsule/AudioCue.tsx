@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { createCapsuleSubscriptions } from '../../api/dictation';
 import { getSettings } from '../../api/preferences';
 import { getRuntimeEnvironment } from '../../runtime/environment';
-import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../../lib/audioCue';
+import { disposeAudioCue, playRecordStartCue, stopAudioCue } from '../../lib/audioCue';
 import type { CapsuleState } from '../../api/contracts';
 
 export function AudioCueListener() {
@@ -23,11 +23,13 @@ export function AudioCueListener() {
       if ((await events.label()) !== 'capsule' || disposed) return;
       owned = true;
       prevStateRef.current = 'idle';
-      primeAudioCue();
       if (
         !(await events.preferences((next) => {
           preferenceRevision += 1;
-          if (next) audioCueEnabledRef.current = next.audioCueOnRecord !== false;
+          if (next) {
+            audioCueEnabledRef.current = next.audioCueOnRecord !== false;
+            if (!audioCueEnabledRef.current) disposeAudioCue();
+          }
         }))
       )
         return;
@@ -47,13 +49,14 @@ export function AudioCueListener() {
       const preferences = await getSettings();
       if (!disposed && observed === preferenceRevision) {
         audioCueEnabledRef.current = preferences.audioCueOnRecord !== false;
+        if (!audioCueEnabledRef.current) disposeAudioCue();
       }
     })().catch(() => {});
 
     return () => {
       disposed = true;
       events.dispose();
-      if (owned) stopAudioCue();
+      if (owned) disposeAudioCue();
     };
   }, [audioCueRuntimeEnabled]);
 
