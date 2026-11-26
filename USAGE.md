@@ -54,7 +54,7 @@ Linux runs on a native `egui` host with no Tauri or WebKitGTK dependency.
 
 1. Download the unsigned `OpenLess_harmony_arm64.hap` from the release assets.
 2. Sign it for your device before installing (devices reject unsigned HAPs; debug certificate must match bundle `openless.hm.com` and profile must include your device). DevEco Studio automatic signing handles this, or place signing files in `~/.local/share/harmony/signing/local-test` (`OPENLESS_HARMONY_SIGNING_DIR`).
-3. Install with DevEco Studio or `hdc`. Open the main app once to configure speech services before using the input method. See [openless-all/app/harmony/README.md](openless-all/app/harmony/README.md).
+3. Install with DevEco Studio or `hdc`. Open the main app once to configure speech services before using the input method.
 
 ---
 

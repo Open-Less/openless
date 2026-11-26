@@ -58,7 +58,7 @@
 
 ### Linux（自动化暂停）
 
-- Linux 专用 CI 与自动发布挂载当前处于暂停状态；源码、本地打包脚本与 [Linux 宿主说明](docs/development/linux.md) 持续维护。
+- Linux 专用 CI 与自动发布挂载当前处于暂停状态；源码与本地打包脚本持续维护。
 - 手动打包或分发 `.deb` / `.rpm` 前，须递增 `openless-all/app/linux-egui/package-revision`（如 `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`），并对该确切候选版本完成真机安装与听写验收。Linux 不提供 AppImage 或应用内更新器。
 
 ## 5. HarmonyOS 打包、签名与 AppGallery Connect

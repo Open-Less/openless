@@ -58,7 +58,7 @@ Pushing a `v*-tauri` tag triggers a single entry point: `.github/workflows/relea
 
 ### Linux (Paused Automation)
 
-- Linux CI and automatic release attachment are currently paused. Linux source, local build/packaging scripts, and [Linux host docs](docs/development/linux.md) remain maintained.
+- Linux CI and automatic release attachment are currently paused. Linux source and local build/packaging scripts remain maintained.
 - Before manually distributing or attaching Linux packages (`.deb` / `.rpm`), increment `openless-all/app/linux-egui/package-revision` (e.g. `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`) and complete exact-candidate on-device installation and dictation acceptance. Linux has no AppImage or in-app updater.
 
 ## 5. HarmonyOS Packaging, Signing & AppGallery Connect

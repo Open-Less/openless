@@ -53,7 +53,7 @@ cargo test --locked -p openless-core
 
 The root Rust workspace (`openless-all/app/Cargo.toml`) covers `openless-core`, `micyou-dsp`, `micyou-infer`, `openless-capsule`, `native-capsule`, `linux-egui`, and `harmony/rust`, excluding `src-tauri` so core and Linux checks run independently without Tauri or WebKitGTK.
 
-`linux-egui` talks to `openless-core` in-process via the typed Rust `contract` module and communicates with its UI subprocess over Unix sockets (JSONL v2). Text insertion uses Fcitx5 (`scripts/linux-fcitx5-plugin`). See the [Linux host & egui interface guide](../docs/development/linux.md) for architecture, contract baseline, and logging.
+`linux-egui` talks to `openless-core` in-process via the typed Rust `contract` module and communicates with its UI subprocess over Unix sockets (JSONL v2). Text insertion uses Fcitx5 (`scripts/linux-fcitx5-plugin`).
 
 Run tests and local packaging on Linux:
 
@@ -145,7 +145,7 @@ cd openless-all/app
 bash scripts/build-harmony-frontend.sh
 ```
 
-Unsigned HAP output is placed under `app/harmony/openless-project/entry/build/default/outputs/default/`. See [`app/harmony/README.md`](app/harmony/README.md) for full toolchain, local packaging, and debug device signing details, and [`RELEASING.md`](../RELEASING.md) for release signing and AppGallery uploads.
+Unsigned HAP output is placed under `app/harmony/openless-project/entry/build/default/outputs/default/`. See [`RELEASING.md`](../RELEASING.md) for release signing and AppGallery uploads.
 
 ## iOS Build
 

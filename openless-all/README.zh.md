@@ -53,7 +53,7 @@ cargo test --locked -p openless-core
 
 根 Rust workspace（`openless-all/app/Cargo.toml`）包含 `openless-core`、`micyou-dsp`、`micyou-infer`、`openless-capsule`、`native-capsule`、`linux-egui` 与 `harmony/rust`，排除 `src-tauri`，因此 Core 与 Linux 检查不依赖 Tauri 或 WebKitGTK。
 
-`linux-egui` 在进程内直接调用 `openless_core::contract` 类型化 Rust 接口，常驻宿主与界面子进程经 Unix Socket（JSONL v2）交换状态快照和事件，并通过 Fcitx5 插件（`scripts/linux-fcitx5-plugin`）落字。详细接口、基线与日志说明见 [Linux 宿主与 egui 接口说明](../docs/development/linux.md)。
+`linux-egui` 在进程内直接调用 `openless_core::contract` 类型化 Rust 接口，常驻宿主与界面子进程经 Unix Socket（JSONL v2）交换状态快照和事件，并通过 Fcitx5 插件（`scripts/linux-fcitx5-plugin`）落字。
 
 Linux 本地测试与打包：
 
@@ -145,7 +145,7 @@ cd openless-all/app
 bash scripts/build-harmony-frontend.sh
 ```
 
-未签名 HAP 输出到 `app/harmony/openless-project/entry/build/default/outputs/default/`。完整工具链、本地打包与真机调试签名见 [`app/harmony/README.zh.md`](app/harmony/README.zh.md)，正式签名与 AppGallery 上传流程见 [`RELEASING.zh.md`](../RELEASING.zh.md)。
+未签名 HAP 输出到 `app/harmony/openless-project/entry/build/default/outputs/default/`。正式签名与 AppGallery 上传流程见 [`RELEASING.zh.md`](../RELEASING.zh.md)。
 
 ## iOS 构建
 

@@ -54,7 +54,7 @@ Linux 使用原生 `egui` 宿主，不依赖 Tauri 或 WebKitGTK。
 
 1. 从同一 Release 下载未签名的 `OpenLess_harmony_arm64.hap`。
 2. 安装到手机/平板前需使用匹配包名 `openless.hm.com` 且包含本机的调试证书与 Profile 签名（可使用 DevEco Studio 自动签名，或将签名材料放入 `~/.local/share/harmony/signing/local-test`，可通过 `OPENLESS_HARMONY_SIGNING_DIR` 覆盖）。
-3. 通过 DevEco Studio 或 `hdc` 安装；首次请先打开主应用完成语音服务配置再切换输入法。构建与签名详情见 [openless-all/app/harmony/README.zh.md](openless-all/app/harmony/README.zh.md)。
+3. 通过 DevEco Studio 或 `hdc` 安装；首次请先打开主应用完成语音服务配置再切换输入法。
 
 ---
 

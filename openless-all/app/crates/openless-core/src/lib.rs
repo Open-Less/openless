@@ -109,8 +109,8 @@ mod shortcut_types;
 /// Version of the public host-facing DTO/event/lifecycle contract.
 ///
 /// This is independent from the application release version.  Increment the
-/// major component for a breaking host contract change and document the
-/// migration in `docs/development/linux.md`.
+/// major component for a breaking host contract change and update
+/// `openless-all/app/contract/backend-2.0.json`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{
