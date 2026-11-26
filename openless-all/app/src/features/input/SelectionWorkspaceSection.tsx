@@ -19,6 +19,22 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [extraControlsOpen, setExtraControlsOpen] = useState(false);
+  const [openPanelBusy, setOpenPanelBusy] = useState(false);
+  const [openPanelError, setOpenPanelError] = useState('');
+
+  const openPanel = async () => {
+    if (openPanelBusy) return;
+    setOpenPanelBusy(true);
+    setOpenPanelError('');
+    try {
+      await openVoiceEditWindow();
+    } catch (error) {
+      setOpenPanelError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpenPanelBusy(false);
+    }
+  };
+
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -51,7 +67,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
 
       {showVoice && (
         <SettingRow label={t('voiceEdit.title')} desc={t('voiceEdit.description')}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
             <Toggle
               on={prefs.voiceEditEnabled}
               onToggle={(next) =>
@@ -60,8 +76,9 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
             />
             <button
               type="button"
-              disabled={!prefs.voiceEditEnabled}
-              onClick={() => void openVoiceEditWindow()}
+              disabled={!prefs.voiceEditEnabled || openPanelBusy}
+              aria-busy={openPanelBusy}
+              onClick={() => void openPanel()}
               style={{
                 background: 'transparent',
                 border: '0.5px solid var(--ol-line)',
@@ -74,8 +91,13 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 opacity: prefs.voiceEditEnabled ? 1 : 0.5,
               }}
             >
-              {t('voiceEdit.openPanel')}
+              {openPanelBusy ? t('common.loading') : t('voiceEdit.openPanel')}
             </button>
+            {openPanelError ? (
+              <div role="alert" style={{ flexBasis: '100%', fontSize: 11, color: 'var(--ol-err)' }}>
+                {t('common.operationFailed')}: {openPanelError}
+              </div>
+            ) : null}
           </div>
         </SettingRow>
       )}
