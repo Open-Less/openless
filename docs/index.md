@@ -21,6 +21,7 @@
 - **听写与模型**：[语音链路与服务渠道](development/speech.md) · [本地模型管理](development/local-models.md)
 - **录音翻译**：[同段 Shift 开关、次数与验收范围](development/shift-translation.md)
 - **长录音**：[超过 5 分钟的整段保留与中断恢复](development/long-recording.md)
+- **随便问**：[提交、工具、附件与原生写回](development/ask.md)
 - **文字处理**：[问答与选区调用](architecture.md#问答与选区) · [转写后的自定义润色策略](development/polish-strategy.md) · [按输入应用选择风格包](development/app-style-routing.md)
 - **应用与模型目录**：[Agent 客户端、Harness 与模型研究表](research/agent-app-model-catalog.md) · [外部目录与分类接口](development/app-style-routing.md#分类目录-api)
 - **数据与安全**：[云同步与旧快照协议](development/cloud-sync.md) · [v1 扩展与跨版本保留](development/sync-v1-compatibility.md) · [远程输入协议](development/remote-input.md) · [WebView 内容安全策略](development/webview-security.md)

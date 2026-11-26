@@ -47,6 +47,8 @@ flowchart LR
 
 ### 问答与选区
 
+桌面独立 Ask 窗口由 [ask-window](../openless-all/app/ask-window/) 与 [原生 Ask 宿主](../openless-all/app/src-tauri/src/ask_window/) 管理。提交、工具、附件及安全写回见[随便问接口](development/ask.md)；公开 Beta 的入口是否开放仍取决于[构建标记](development/delivery.md)。
+
 桌面问答窗口由 [windowRoutes.tsx](../openless-all/app/src/app/windowRoutes.tsx) 分派。界面发送 `qa_submit_text` 等命令给 [Tauri 问答适配](../openless-all/app/src-tauri/src/commands/qa.rs)，由 [Core 问答服务](../openless-all/app/crates/openless-core/src/qa_service.rs) 管理会话、请求和结果事件。[选区语音服务](../openless-all/app/crates/openless-core/src/selection_voice_service.rs) 根据语音意图生成编辑预览或问答，确认写回时由宿主复核原输入目标。Linux 的问答界面经 Linux 宿主调用同一业务层。
 
 系统选区润色/翻译保留完整选中文字，先写入同一历史记录的 `rawTranscript`，再保护原文剪贴板，最后发送完整模型请求。原文、原控件和原范围分别核对；服务拒绝或输出不完整不能替换选区。剪贴板兜底、原位置续接和平台验收边界见[选区全文与原文保护](development/selection-originals.md)。
