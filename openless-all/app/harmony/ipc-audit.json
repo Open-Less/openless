@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 203,
+  "total": 190,
   "wired": 108,
-  "missing": 95,
+  "missing": 82,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -66,13 +66,6 @@
         "src/lib/ipc/dictation.ts"
       ],
       "implementation": "arkts"
-    },
-    {
-      "name": "cancel_selection_polish_preview",
-      "calledFrom": [
-        "src/lib/ipc/selection-polish-preview.ts"
-      ],
-      "implementation": "unimplemented"
     },
     {
       "name": "cancel_selection_voice_intent_prompt",
@@ -306,13 +299,6 @@
       "implementation": "unimplemented"
     },
     {
-      "name": "confirm_selection_polish_preview",
-      "calledFrom": [
-        "src/lib/ipc/selection-polish-preview.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
       "name": "confirm_selection_voice_intent_prompt",
       "calledFrom": [
         "src/lib/ipc/selection-voice-preview.ts"
@@ -537,23 +523,9 @@
       "implementation": "rust"
     },
     {
-      "name": "get_qa_hotkey_label",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
       "name": "get_remote_input_status",
       "calledFrom": [
         "src/lib/ipc/remote-server.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "get_selection_polish_preview",
-      "calledFrom": [
-        "src/lib/ipc/selection-polish-preview.ts"
       ],
       "implementation": "unimplemented"
     },
@@ -866,62 +838,6 @@
       "implementation": "rust"
     },
     {
-      "name": "qa_cancel_turn",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_get_snapshot",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_set_edit_instruction_mode",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_stop_recording",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_submit_text",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_toggle_recording",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_window_dismiss",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "qa_window_set_expanded",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
       "name": "read_audio_recording",
       "calledFrom": [
         "src/lib/ipc/history.ts"
@@ -1191,13 +1107,6 @@
       "name": "set_open_app_hotkey",
       "calledFrom": [
         "src/lib/ipc/hotkeys.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "set_qa_hotkey",
-      "calledFrom": [
-        "src/lib/ipc/qa.ts"
       ],
       "implementation": "unimplemented"
     },

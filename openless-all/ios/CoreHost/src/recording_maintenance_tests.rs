@@ -476,3 +476,19 @@ fn maintenance_bounds_directory_scan_before_any_mutation() {
     assert!(read_journal(&owner.recordings_directory, &id).unwrap() == Some(Journal::Capturing));
     ol_ios_destroy(handle);
 }
+
+#[tokio::test]
+async fn archive_range_reads_keep_pcm_bounds_and_secure_open_validation() {
+    let directory = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("openless-ios-range-{}", uuid::Uuid::new_v4()));
+    let archive = WavArchive::create(&directory, SessionId::new()).unwrap();
+    archive.append(&[1, 2, 3, 4, 5, 6]);
+    archive.finish();
+    assert_eq!(archive.pcm_byte_len().await.unwrap(), 6);
+    assert_eq!(archive.read_pcm_range(2, 4).await.unwrap(), [3, 4, 5, 6]);
+    assert!(archive.read_pcm_range(4, 4).await.is_err());
+    archive.discard().await.unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}

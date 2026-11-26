@@ -23,7 +23,10 @@ for (const [id, area] of [
     `${includeNonDesktop} && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.${area} != 'false'`,
   );
 }
-assert.equal(ci.jobs['ui-motion'].if, `always() && !(${desktopOnly})`);
+assert.equal(
+  ci.jobs['ui-motion'].if,
+  `(github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && !(${desktopOnly})`,
+);
 assert.equal(
   ci.jobs['windows-checks']['runs-on'],
   "${{ needs.changes.outputs.desktop-only == 'false' && 'ubuntu-latest' || 'macos-latest' }}",

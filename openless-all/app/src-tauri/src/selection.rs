@@ -1360,7 +1360,6 @@ mod macos_ax {
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
-        fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> u8;
         fn AXUIElementCreateSystemWide() -> AxUiElementRef;
         fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
         fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, seconds: f32) -> AxError;

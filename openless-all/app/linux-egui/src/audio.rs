@@ -295,51 +295,10 @@ impl Drop for LinuxActiveRecording {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+mod archive;
 #[cfg(target_os = "linux")]
-struct LinuxRecordingArchive {
-    path: std::path::PathBuf,
-    available: Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[cfg(target_os = "linux")]
-impl openless_core::RecordingArchive for LinuxRecordingArchive {
-    fn is_available(&self) -> bool {
-        self.available.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
-        let path = self.path.clone();
-        Box::pin(async move {
-            let wav = tokio::fs::read(path).await.map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::Persistence,
-                    format!("read Linux recording archive: {error}"),
-                )
-            })?;
-            canonical_wav_pcm(&wav).map(ToOwned::to_owned)
-        })
-    }
-
-    fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
-        let path = self.path.clone();
-        let available = Arc::clone(&self.available);
-        Box::pin(async move {
-            match tokio::fs::remove_file(path).await {
-                Ok(()) => available.store(false, std::sync::atomic::Ordering::Release),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    available.store(false, std::sync::atomic::Ordering::Release);
-                }
-                Err(error) => {
-                    return Err(BackendError::new(
-                        BackendErrorCode::Persistence,
-                        format!("discard Linux recording archive: {error}"),
-                    ));
-                }
-            }
-            Ok(())
-        })
-    }
-}
+use archive::LinuxRecordingArchive;
 
 #[cfg(target_os = "linux")]
 impl ActiveRecording for LinuxActiveRecording {

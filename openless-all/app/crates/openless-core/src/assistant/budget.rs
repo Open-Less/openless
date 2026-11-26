@@ -516,6 +516,7 @@ fn intent_text(message: &AskModelMessage) -> &str {
     }
 }
 
+#[cfg(test)]
 fn message_text(message: &AskModelMessage) -> String {
     message
         .parts

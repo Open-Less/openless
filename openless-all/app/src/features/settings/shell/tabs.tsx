@@ -741,7 +741,6 @@ export function AdvancedTab({
             {item.id === 'polishStrategy' && <PolishStrategySection />}
             {item.id === 'webSearch' && <WebSearchSection />}
             {item.id === 'intentRouting' && <IntentRoutingSection />}
-            {item.id === 'polishStrategy' && <PolishStrategySection />}
             {item.id === 'startupDiagnostics' && <StartupDiagnostics />}
             {item.id === 'customSyncServer' && page === item.id && <CustomSyncServerSection />}
             {item.id === 'debug' && <DebugToolsSection />}

@@ -589,8 +589,8 @@ assert.match(
 );
 assert.match(
   historyCommand,
-  /pub async fn retranscribe_recording\([^]*?retranscription::retranscribe_recording_with_path\(&core, session_id, existing_recording_path\)\.await/,
-  'the registered history command must forward Core and the real recording resolver',
+  /pub async fn retranscribe_recording\([^]*?let path = existing_recording_path\(&session_id\)\?;\s*let _lease = crate::persistence::acquire_recording_archive_lease\(&path\);\s*retranscription::retranscribe_recording_with_path\(&core, session_id, \|_\| Ok\(path\)\)\.await/,
+  'the registered history command must resolve and lease the recording before forwarding Core and its path',
 );
 assert.match(
   historyRetranscription,

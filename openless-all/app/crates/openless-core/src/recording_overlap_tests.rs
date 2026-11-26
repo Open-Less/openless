@@ -42,7 +42,7 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
             );
             let owner = self.owner.clone();
             Box::pin(async move {
-                consumer.consume_pcm_chunk(&[index as u8, 1]);
+                consumer.consume_pcm_chunk(&[index as u8, 1].repeat(1_600));
                 consumer.consume_pcm_chunk(&[index as u8, 2]);
                 Ok(Box::new(Recording {
                     owner,
@@ -575,8 +575,12 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                     sessions.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
                     [first, second]
                 );
-                assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
-                assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
+                let mut expected_first = [1u8, 1].repeat(1_600);
+                expected_first.extend_from_slice(&[1, 2, 1, 3]);
+                let mut expected_second = [2u8, 1].repeat(1_600);
+                expected_second.extend_from_slice(&[2, 2, 2, 3]);
+                assert_eq!(*sessions[0].1.pcm.lock().unwrap(), expected_first);
+                assert_eq!(*sessions[1].1.pcm.lock().unwrap(), expected_second);
                 let history = backend.list_history().unwrap();
                 assert!(history.iter().any(|entry| entry.id == second.to_string()
                     && entry.raw_transcript == "second"
@@ -635,7 +639,7 @@ async fn rapid_three_submissions_keep_pcm_and_join_final_input_before_the_next()
             _: Arc<dyn RecordingProgressSink>,
         ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
             let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-            consumer.consume_pcm_chunk(&[n as u8, 1]);
+            consumer.consume_pcm_chunk(&[n as u8, 1].repeat(1_600));
             consumer.consume_pcm_chunk(&[n as u8, 2]);
             Box::pin(
                 async move { Ok(Box::new(Recording(n, consumer)) as Box<dyn ActiveRecording>) },
@@ -725,9 +729,13 @@ async fn rapid_three_submissions_keep_pcm_and_join_final_input_before_the_next()
             // performs only final delivery, whose ordering is asserted below.
             let preferences = crate::shared_types::UserPreferences::default();
             assert_eq!(context.insertion.streaming, preferences.streaming_insert);
-            assert_eq!(context.insertion.composition_input,
-                cfg!(target_os = "windows") && preferences.windows_composition_input
-                    && preferences.windows_insertion_mode == crate::shared_types::WindowsInsertionMode::Tsf);
+            assert_eq!(
+                context.insertion.composition_input,
+                cfg!(target_os = "windows")
+                    && preferences.windows_composition_input
+                    && preferences.windows_insertion_mode
+                        == crate::shared_types::WindowsInsertionMode::Tsf
+            );
             let session = Arc::new(Insertion {
                 calls: self.calls.clone(),
                 entered: self.entered.clone(),
@@ -862,7 +870,9 @@ async fn rapid_three_submissions_keep_pcm_and_join_final_input_before_the_next()
         assert_eq!(*calls.lock().unwrap(), expected);
         for (index, item) in audio.lock().unwrap().iter().enumerate() {
             let n = index as u8 + 1;
-            assert_eq!(*item.pcm.lock().unwrap(), [n, 1, n, 2, n, 3]);
+            let mut expected = [n, 1].repeat(1_600);
+            expected.extend_from_slice(&[n, 2, n, 3]);
+            assert_eq!(*item.pcm.lock().unwrap(), expected);
         }
         let history = backend.list_history().unwrap();
         for (index, id) in ids.iter().enumerate().skip(1) {

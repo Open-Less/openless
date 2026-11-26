@@ -940,7 +940,6 @@ mod platform {
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
                 reset_shared_held_state(&ctx.shared);
-                crate::recording_companion::reset_held();
                 if let Some(pending) = ctx.pending_space.lock().take() {
                     pending.replay(std::ptr::null_mut());
                 }

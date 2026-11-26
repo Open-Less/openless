@@ -336,7 +336,8 @@ async fn delayed_preview_confirmation_must_not_apply_old_text_to_a_new_qa_turn()
         voice.preview(current.conversation_id).await.unwrap(),
         preview
     );
-    assert!(backend.list_history().unwrap().is_empty());
+    // Original-selection protection persists a draft before native application.
+    assert!(backend.list_history().unwrap().iter().all(|entry| entry.insert_status == openless_core::HistoryInsertStatus::NotRequested));
     qa.dismiss().await.unwrap();
     drop(backend);
     std::fs::remove_dir_all(data_dir).unwrap();
@@ -396,7 +397,7 @@ async fn completed_preview_confirmation_must_not_dismiss_a_reopened_qa_panel() {
             "old apply cleanup must not request HideQa for B"
         );
         assert_eq!(
-            backend.list_history().unwrap()[0].insert_status,
+            backend.list_history().unwrap().iter().find(|entry| entry.id == ticket.session_id.to_string()).unwrap().insert_status,
             openless_core::HistoryInsertStatus::PasteSent
         );
         qa.dismiss().await.unwrap();
@@ -433,7 +434,8 @@ async fn qa_preview_confirmation_retries_native_failure_and_closes_only_its_owne
         .await
         .unwrap()
         .is_some());
-    assert!(backend.list_history().unwrap().is_empty());
+    // Original-selection protection persists a draft before native application.
+    assert!(backend.list_history().unwrap().iter().all(|entry| entry.insert_status == openless_core::HistoryInsertStatus::NotRequested));
 
     let ticket = qa
         .begin_edit_preview_apply(turn, "replacement".into())
