@@ -1,4 +1,6 @@
 #![cfg(test)]
+#[path = "limited_tests.rs"]
+mod limited_tests;
 // Seam scanner looks for #[cfg(test)] (inner attr alone is not enough).
 #[cfg(test)]
 mod __runtime_seam_test_marker {}
