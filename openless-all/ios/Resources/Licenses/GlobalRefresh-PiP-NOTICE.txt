@@ -1,0 +1,19 @@
+GlobalRefresh-PiP
+
+Original project:
+https://github.com/CaiWanFeng/PiP
+Original author: CaiWanFeng
+
+Current project:
+https://github.com/Yoroin/GlobalRefresh-PiP
+Maintainer: Yoroin
+
+When modifying, distributing, or publishing an app based on this project,
+please retain attribution to both CaiWanFeng and Yoroin, together with the
+corresponding project links.
+
+OpenLess integration:
+The scoped control-style and content-type adapters in App/PiPCoexistenceAdapter.swift
+are adapted from commit 1b62341c1d62308962fb3656192d6783631aa00c of GlobalRefresh-PiP.
+The application-specific lifecycle, audio ownership and transparent content are
+integrated for OpenLess.

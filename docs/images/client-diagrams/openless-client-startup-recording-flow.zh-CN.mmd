@@ -1,0 +1,34 @@
+%% OpenLess 启动、权限与录音流程
+flowchart TD
+    START([启动或重新打开应用]) --> HANDSHAKE{后端握手成功？}
+    HANDSHAKE -- 否 --> ERROR[CoreStartupScreen\n显示启动失败]
+    HANDSHAKE -- 是 --> CAPS[读取平台能力]
+    CAPS --> STATE[读取持久化引导状态\n受启动超时保护]
+    STATE --> CREDS[读取凭据状态\n受启动超时保护]
+    CREDS --> GUIDE{首次引导已完成？}
+    GUIDE -- 否 --> ONBOARD[显示桌面首次引导]
+    ONBOARD --> SAVE[交接前保存引导状态]
+    SAVE --> PERM
+    GUIDE -- 是 --> PERM{必需权限缺失？}
+    PERM -- 是 --> AUTH[显示权限步骤]
+    AUTH --> TCC[清理过期辅助功能 TCC\n重新请求系统授权]
+    TCC --> SETTINGS[仍未授权时\n打开系统设置]
+    SETTINGS --> PERM
+    PERM -- 否 --> READY[进入可用状态]
+    READY --> SILENT{启用静默启动？}
+    SILENT -- 是 --> TRAY[隐藏主窗口\n保留托盘与快捷键]
+    SILENT -- 否 --> MAIN[显示主界面 WebView]
+    TRAY --> MAIN
+
+    MAIN --> RECORD
+    HOTKEY[录音快捷键] --> RECORD{录音会话启动成功？}
+    RECORD -- 否 --> IDLE[保持空闲]
+    RECORD -- 是 --> CUE[常驻胶囊接收录音边沿\n播放提示音]
+    CUE --> PCM[录音器采集有界 PCM]
+    PCM --> STREAM[语音识别与润色流式处理]
+    STREAM --> EVENTS[发送 capsule:state 与 backend:event]
+    EVENTS --> CAPSULE[胶囊显示音量、文本与状态]
+    EVENTS --> INSERT[插入最终文本或流式文本]
+    INSERT --> END[完成、取消或出错]
+    END --> EXIT[胶囊退出动画\n停止提示音并释放临时资源]
+    MAIN -. 录音中打开主界面 .-> NOAUDIO[主界面不订阅 AudioCueListener\n不会重复播放录音提示音]

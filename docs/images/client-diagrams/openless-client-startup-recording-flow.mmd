@@ -1,0 +1,34 @@
+%% OpenLess startup, permission, and recording flow
+flowchart TD
+    START([App launch / reopen]) --> HANDSHAKE{Backend handshake succeeds?}
+    HANDSHAKE -- no --> ERROR[CoreStartupScreen\nshow failure]
+    HANDSHAKE -- yes --> CAPS[Load platform capabilities]
+    CAPS --> STATE[Read persisted onboarding state\nwith bounded startup deadline]
+    STATE --> CREDS[Read credential status\nwith bounded startup deadline]
+    CREDS --> GUIDE{Guide unfinished?}
+    GUIDE -- yes --> ONBOARD[Show DesktopOnboarding]
+    ONBOARD --> SAVE[Persist guide state before handoff]
+    SAVE --> PERM
+    GUIDE -- no --> PERM{Required permission missing?}
+    PERM -- yes --> AUTH[Show permission step]
+    AUTH --> TCC[Reset stale Accessibility TCC\nrequest system authorization prompt]
+    TCC --> SETTINGS[If still not granted:\nopen System Settings]
+    SETTINGS --> PERM
+    PERM -- no --> READY[Gate ready]
+    READY --> SILENT{start_minimized enabled?}
+    SILENT -- yes --> TRAY[Keep main hidden; tray / hotkey can reopen]
+    SILENT -- no --> MAIN[Show main WebView]
+    TRAY --> MAIN
+
+    MAIN --> RECORD
+    HOTKEY[Recording hotkey] --> RECORD{Recording session starts?}
+    RECORD -- no --> IDLE[Remain idle]
+    RECORD -- yes --> CUE[Resident capsule receives\nrecording edge + audio cue]
+    CUE --> PCM[Recorder captures bounded PCM]
+    PCM --> STREAM[ASR / polish streaming]
+    STREAM --> EVENTS[Emit capsule:state + backend:event]
+    EVENTS --> CAPSULE[Capsule renders level / text / status]
+    EVENTS --> INSERT[Insert final or streamed text]
+    INSERT --> END[Done / cancelled / error]
+    END --> EXIT[Capsule exit animation\nstop cue / release transient resources]
+    MAIN -. opening main during recording .-> NOAUDIO[Main WebView has no AudioCueListener\nno replayed start sound]
