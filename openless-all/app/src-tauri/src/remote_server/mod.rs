@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::State,
-    response::{Html, IntoResponse},
+    http::{header, HeaderValue},
+    response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
@@ -155,6 +156,17 @@ fn is_private_lan(ip: &Ipv4Addr) -> bool {
             || (o[0] == 172 && (16..=31).contains(&o[1])))
 }
 
+/// The listener binds 0.0.0.0 so it survives interface changes, but only the private
+/// LAN ranges advertised in [`access_urls`] (and loopback) may reach the PIN prompt.
+/// A machine with a public or CGNAT address must not expose remote typing beyond the LAN.
+fn is_allowed_peer(ip: IpAddr) -> bool {
+    let allowed = |v4: Ipv4Addr| v4.is_loopback() || is_private_lan(&v4);
+    match ip {
+        IpAddr::V4(v4) => allowed(v4),
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().is_some_and(allowed),
+    }
+}
+
 /// All LAN IPv4 addresses of this machine (filtering loopback / link-local / non-private ranges from virtual adapters).
 pub fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
     let mut out: Vec<Ipv4Addr> = Vec::new();
@@ -270,6 +282,40 @@ fn build_router(state: Arc<WsState>) -> Router {
         .route("/cert.mobileconfig", get(mobileconfig_handler))
         .route("/ws", get(ws_upgrade))
         .with_state(state)
+        .layer(axum::middleware::map_response(security_headers))
+}
+
+async fn security_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
+
+/// CSP for the recording page. The single inline bootstrap script carries PC-injected
+/// values, so it is allowed by the hash of the exact bytes served instead of
+/// `'unsafe-inline'`. `blob:` is required for the AudioWorklet module built in app.js.
+fn index_csp(html: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let inline = html
+        .split_once("<script>")
+        .and_then(|(_, rest)| rest.split_once("</script>"))
+        .map(|(script, _)| script)
+        .unwrap_or_default();
+    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(inline.as_bytes()));
+    format!(
+        "default-src 'none'; script-src 'self' blob: 'sha256-{hash}'; style-src 'self'; \
+         img-src 'self'; connect-src 'self' wss:; base-uri 'none'; form-action 'none'; \
+         frame-ancestors 'none'"
+    )
 }
 
 /// The index page injects language and the recording default mode from current PC preferences,
@@ -290,11 +336,11 @@ async fn index_handler(State(state): State<Arc<WsState>>) -> impl IntoResponse {
     } else {
         "toggle"
     };
-    Html(
-        assets::INDEX_HTML
-            .replace("%%OL_LANG%%", &lang)
-            .replace("%%OL_DEFAULT_MODE%%", default_mode),
-    )
+    let html = assets::INDEX_HTML
+        .replace("%%OL_LANG%%", &lang)
+        .replace("%%OL_DEFAULT_MODE%%", default_mode);
+    let csp = index_csp(&html);
+    ([(header::CONTENT_SECURITY_POLICY, csp)], Html(html))
 }
 
 // iOS still requires the user to install the profile and enable full trust.
@@ -367,6 +413,10 @@ pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String
                     // actually reached this machine and from which subnet (debugging "did it
                     // connect to some other device").
                     log::info!("[remote-input] 收到 TCP 连接，来自 {peer}");
+                    if !is_allowed_peer(peer.ip()) {
+                        log::info!("[remote-input] 拒绝非局域网来源 {peer}");
+                        continue;
+                    }
                     let acceptor = acceptor.clone();
                     // Attach the peer IP to the router as an Extension per connection, for PIN
                     // locking by IP.
@@ -858,8 +908,8 @@ mod tests {
     };
 
     use super::{
-        apply_remote_control, backend_event_to_phone, parse_audio_frame, parse_hello_partials,
-        parse_hello_pin,
+        apply_remote_control, assets, backend_event_to_phone, index_csp, is_allowed_peer,
+        parse_audio_frame, parse_hello_partials, parse_hello_pin,
     };
 
     fn backend() -> (
@@ -1132,6 +1182,41 @@ mod tests {
         ));
         assert!(!parse_hello_partials(r#"{"type":"hello","pin":"123456"}"#));
         assert!(!parse_hello_partials(r#"{"type":"other","partials":true}"#));
+    }
+
+    #[test]
+    fn only_private_lan_and_loopback_peers_are_accepted() {
+        for allowed in [
+            "192.168.1.20",
+            "10.0.0.5",
+            "172.20.10.2",
+            "127.0.0.1",
+            "::ffff:192.168.0.9",
+        ] {
+            assert!(is_allowed_peer(allowed.parse().unwrap()), "{allowed}");
+        }
+        for denied in [
+            "8.8.8.8",
+            "100.64.0.1",
+            "169.254.1.1",
+            "172.32.0.1",
+            "2001:db8::1",
+        ] {
+            assert!(!is_allowed_peer(denied.parse().unwrap()), "{denied}");
+        }
+    }
+
+    #[test]
+    fn index_csp_pins_the_served_inline_script_instead_of_allowing_unsafe_inline() {
+        let html = assets::INDEX_HTML
+            .replace("%%OL_LANG%%", "en")
+            .replace("%%OL_DEFAULT_MODE%%", "hold");
+        let csp = index_csp(&html);
+        assert!(!csp.contains("unsafe-inline"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+        let other = index_csp(&html.replace("'hold'", "'toggle'"));
+        assert_ne!(csp, other, "the hash must follow the injected bytes");
+        assert!(index_csp("<script>").contains("sha256-"));
     }
 
     #[test]
