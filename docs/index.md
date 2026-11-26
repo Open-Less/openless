@@ -20,7 +20,7 @@
 
 | 主题 | 文档入口 |
 | --- | --- |
-| 三层架构、模块职责与听写数据流 | [架构与模块说明](architecture.md) · [客户端架构图与 Mermaid 源码](images/client-diagrams/README.md) |
+| 三层架构、全平台客户端形态、验收进度与模块/子文档索引 | [架构、全平台形态与模块索引](architecture.md) · [客户端架构图与 Mermaid 源码](images/client-diagrams/README.md) |
 | 开发者全平台构建指南（macOS / Windows / Linux / Android / HarmonyOS / iOS） | [中文全平台构建指南](../openless-all/README.zh.md) · [English Build Guide](../openless-all/README.md) |
 | Linux 原生 egui 宿主、接口契约与命令事件基线 | [Linux 宿主与 egui 接口说明](development/linux.md) · [命令与事件兼容基线 JSON](linux-egui-command-event-baseline.json) |
 | iOS 原生应用、键盘扩展、构建与签名指南 | [iOS 中文构建指南](../openless-all/ios/README.zh.md) · [iOS English Guide](../openless-all/ios/README.md) |
