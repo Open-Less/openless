@@ -40,7 +40,7 @@ async fn seeded() -> Fixture {
         (
             DocumentKind::Channels,
             "llm:fixture",
-            json!({"id":"fixture","namespace":"llm","providerType":"requesty","name":"Private channel","enabled":true,"order":0,"active":true}),
+            json!({"id":"fixture","namespace":"llm","providerType":"requesty","name":"Private channel","enabled":true,"order":0,"active":true,"configuration":{}}),
         ),
         (
             DocumentKind::ProviderCredentials,
@@ -105,6 +105,18 @@ async fn limited_restore_changes_only_confirmed_vocabulary_and_reference_prefere
     ] {
         assert!(!raw.contains(marker));
     }
+    let installed = full
+        .documents
+        .documents()
+        .documents
+        .iter()
+        .find(|doc| doc.kind == DocumentKind::StylePacks && doc.id == "builtin.light")
+        .unwrap();
+    let style_reference = json!({
+        "id": installed.id,
+        "version": installed.value["pack"]["version"],
+        "originPackId": installed.value["pack"].get("originPackId").cloned().unwrap_or(Value::Null),
+    });
     let remote = changed(&limited.documents, &f, |value| {
         set_phrase(value, "Remote approved");
         for doc in value["documents"]["documents"].as_array_mut().unwrap() {
@@ -112,7 +124,7 @@ async fn limited_restore_changes_only_confirmed_vocabulary_and_reference_prefere
                 doc["value"] = json!("formal");
             }
             if doc["id"] == "marketStyleReference" {
-                doc["value"] = json!({"id":"builtin.light","version":"2.0.0","originPackId":null});
+                doc["value"] = style_reference.clone();
             }
         }
     });
