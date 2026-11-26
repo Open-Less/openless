@@ -79,7 +79,7 @@ OpenLess is a cross-platform, open-source AI voice-input app covering **macOS, W
   <tr>
     <td align="center" width="170">
       <img src="assets/people/tripmc.png" width="80" height="80" alt="TRIP" /><br/>
-      <strong><a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
+      <strong><a href="https://tripcode.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
       <sub>Author</sub>
     </td>
     <td align="center" width="170">

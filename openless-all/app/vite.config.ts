@@ -47,6 +47,9 @@ export default defineConfig(async () => ({
     },
   },
   clearScreen: false,
+  ...(!isHarmony && !isMobileDev
+    ? { optimizeDeps: { entries: ['index.html', 'ask-window/index.html', 'e2e/fixtures/*.html'] } }
+    : {}),
   server: {
     port: 1420,
     strictPort: true,

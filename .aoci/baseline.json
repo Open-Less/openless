@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-26T15:21:21Z",
+  "updated_at": "2026-11-26T15:57:01Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -119,15 +119,15 @@
     },
     "README.md": {
       "role": "index",
-      "sha256": "4b970a38f67b7b80650181712f04d52f9af23a2834225964c2a944008e84e9b6",
-      "size": 19224,
-      "normalized_sha256": "4b970a38f67b7b80650181712f04d52f9af23a2834225964c2a944008e84e9b6"
+      "sha256": "3e3321dac2da9703c324d849a9c3d85f6a86361bffb4ba9054055e5e7089b379",
+      "size": 19226,
+      "normalized_sha256": "3e3321dac2da9703c324d849a9c3d85f6a86361bffb4ba9054055e5e7089b379"
     },
     "README.zh.md": {
       "role": "index",
-      "sha256": "cc938c8c7a77725fbfa222d91e10ef7a9c3c47a527fc183e88765e63984392d6",
-      "size": 20123,
-      "normalized_sha256": "cc938c8c7a77725fbfa222d91e10ef7a9c3c47a527fc183e88765e63984392d6"
+      "sha256": "3e16c18ba8ecf72ff39aebd5e34a0b743c9143adafde3290b77a7c517f24336f",
+      "size": 20125,
+      "normalized_sha256": "3e16c18ba8ecf72ff39aebd5e34a0b743c9143adafde3290b77a7c517f24336f"
     },
     "RELEASING.md": {
       "role": "index",
@@ -155,9 +155,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "4ecf4b091413404de61283c1b4e487680f40f8550f49fa976db8666ef9267964",
-      "size": 690988,
-      "normalized_sha256": "4ecf4b091413404de61283c1b4e487680f40f8550f49fa976db8666ef9267964"
+      "sha256": "6e56fa6e984966cb796a5f1e4777bb436eb2c23701e6473a82b0bbd88d76a317",
+      "size": 691082,
+      "normalized_sha256": "6e56fa6e984966cb796a5f1e4777bb436eb2c23701e6473a82b0bbd88d76a317"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -4943,9 +4943,9 @@
     },
     "openless-all/app/scripts/ci-browser-matrix.test.mjs": {
       "role": "index",
-      "sha256": "6244ba353ce0d915061f45042b0c27d59ba0be0c9702f492ab359c138fc33730",
-      "size": 3272,
-      "normalized_sha256": "6244ba353ce0d915061f45042b0c27d59ba0be0c9702f492ab359c138fc33730"
+      "sha256": "5c1bdda3f60acbcd7df554795d792679dc7e4c7823b306d6726d2aa1cbcb3dd3",
+      "size": 3571,
+      "normalized_sha256": "5c1bdda3f60acbcd7df554795d792679dc7e4c7823b306d6726d2aa1cbcb3dd3"
     },
     "openless-all/app/scripts/ci-cache-sharing.test.mjs": {
       "role": "index",
@@ -11965,9 +11965,9 @@
     },
     "openless-all/app/vite.config.ts": {
       "role": "index",
-      "sha256": "10e82631d07c6b6fe310eb1cc352faa71ce65f00a1b67b4df6aea3cb12b2245e",
-      "size": 3005,
-      "normalized_sha256": "10e82631d07c6b6fe310eb1cc352faa71ce65f00a1b67b4df6aea3cb12b2245e"
+      "sha256": "db2fd88731086c81a8173e24460f3aac1d23b0c0fc567386a2d63f8530c6e7eb",
+      "size": 3149,
+      "normalized_sha256": "db2fd88731086c81a8173e24460f3aac1d23b0c0fc567386a2d63f8530c6e7eb"
     },
     "openless-all/app/windows-ime/OpenLessIme.sln": {
       "role": "index",

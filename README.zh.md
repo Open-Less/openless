@@ -79,7 +79,7 @@ OpenLess 是一款覆盖 **macOS、Windows、Linux、Android、iOS 与 HarmonyOS
   <tr>
     <td align="center" width="170">
       <img src="assets/people/tripmc.png" width="80" height="80" alt="TRIP" /><br/>
-      <strong><a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
+      <strong><a href="https://tripcode.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
       <sub>作者</sub>
     </td>
     <td align="center" width="170">
