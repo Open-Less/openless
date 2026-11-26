@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-25T04:37:25Z",
+  "updated_at": "2026-11-26T08:16:43Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -149,21 +149,21 @@
     },
     "USAGE.md": {
       "role": "index",
-      "sha256": "57a1030a99256e9e1645b7be8bb61627473de240113aa4ebce63f7df08d08a77",
-      "size": 13284,
-      "normalized_sha256": "57a1030a99256e9e1645b7be8bb61627473de240113aa4ebce63f7df08d08a77"
+      "sha256": "54f5ac436d29669cdfb309a18e2eb69e063534c52a17a645f7cb2bc523644a4d",
+      "size": 13183,
+      "normalized_sha256": "54f5ac436d29669cdfb309a18e2eb69e063534c52a17a645f7cb2bc523644a4d"
     },
     "USAGE.zh.md": {
       "role": "index",
-      "sha256": "ad9a1ae600e23cf4da25298a1760d504b38807c2d76c1de1b3ad3e9dbe6ad0a3",
-      "size": 12318,
-      "normalized_sha256": "ad9a1ae600e23cf4da25298a1760d504b38807c2d76c1de1b3ad3e9dbe6ad0a3"
+      "sha256": "8cdd633e583c6a1f2ae0a9b2290c828a11af500ff6e29261b3097f12e3a7cbca",
+      "size": 12253,
+      "normalized_sha256": "8cdd633e583c6a1f2ae0a9b2290c828a11af500ff6e29261b3097f12e3a7cbca"
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "cc05341b71a17c1e322e65cce0e39fbda53d13da5cde45a973e11d3973cc594f",
-      "size": 771412,
-      "normalized_sha256": "cc05341b71a17c1e322e65cce0e39fbda53d13da5cde45a973e11d3973cc594f"
+      "sha256": "6ccc20b4906783d6040a3d627d91b7b57e2238b61160f6fbd4b563e8811bb6ab",
+      "size": 775586,
+      "normalized_sha256": "6ccc20b4906783d6040a3d627d91b7b57e2238b61160f6fbd4b563e8811bb6ab"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -216,9 +216,9 @@
     },
     "docs/ATTRIBUTION.md": {
       "role": "index",
-      "sha256": "e4195c2714e3008569bd2ba72b58c68ea8f105917e9b8b2d9e5f9f9d21ed4076",
-      "size": 2095,
-      "normalized_sha256": "e4195c2714e3008569bd2ba72b58c68ea8f105917e9b8b2d9e5f9f9d21ed4076"
+      "sha256": "abb27c11c12c6241be765e7b7194adc56dcf24b1de74f54ffc4cfadc36dff031",
+      "size": 3047,
+      "normalized_sha256": "abb27c11c12c6241be765e7b7194adc56dcf24b1de74f54ffc4cfadc36dff031"
     },
     "docs/android-ime.md": {
       "role": "index",
@@ -240,9 +240,9 @@
     },
     "docs/architecture.md": {
       "role": "index",
-      "sha256": "784630f5946050dd6c51a70c156e70b765f3ca17d8aea2a97d52e2b14fbf0fb3",
-      "size": 9849,
-      "normalized_sha256": "784630f5946050dd6c51a70c156e70b765f3ca17d8aea2a97d52e2b14fbf0fb3"
+      "sha256": "19a3de332ed1920c4de49965c9a92b1643e71a2a0f402103246b21739b8e7c77",
+      "size": 10173,
+      "normalized_sha256": "19a3de332ed1920c4de49965c9a92b1643e71a2a0f402103246b21739b8e7c77"
     },
     "docs/ask-assistant-backend-handoff.md": {
       "role": "index",
@@ -370,6 +370,12 @@
       "size": 8128,
       "normalized_sha256": "beeadd3e9a1992d66b12d00284fa0a5485fc584e501ada38d22915f7fbd1dfc1"
     },
+    "docs/development/ask.md": {
+      "role": "index",
+      "sha256": "6dbd00e90a89ee9281875c2eb847ebe79b666d1a6909cf905ad69179c527c7f8",
+      "size": 13159,
+      "normalized_sha256": "6dbd00e90a89ee9281875c2eb847ebe79b666d1a6909cf905ad69179c527c7f8"
+    },
     "docs/development/cloud-sync.md": {
       "role": "index",
       "sha256": "e85261809276fd7c732b902e539da0bf09d0a7704091ed0b2d14bbc3ccefda23",
@@ -495,6 +501,12 @@
       "sha256": "a416e94a71f43ca9db041d7ecc890455af8d054b0ff44feb2cfac51689cefba2",
       "size": 1518,
       "normalized_sha256": "a416e94a71f43ca9db041d7ecc890455af8d054b0ff44feb2cfac51689cefba2"
+    },
+    "docs/encrypted-cloud-sync-limited-scope.md": {
+      "role": "index",
+      "sha256": "8ff1f359ccfef38a26e8388ebb3337ecaaf8c20409eb4cc543519b3b8d424bb6",
+      "size": 21006,
+      "normalized_sha256": "8ff1f359ccfef38a26e8388ebb3337ecaaf8c20409eb4cc543519b3b8d424bb6"
     },
     "docs/encrypted-cloud-sync.md": {
       "role": "index",
@@ -717,9 +729,9 @@
     },
     "docs/index.md": {
       "role": "index",
-      "sha256": "60ed63a94b293023b69233bf191eefadcfa0957e731336cff7c4785b7b763aa3",
-      "size": 2912,
-      "normalized_sha256": "60ed63a94b293023b69233bf191eefadcfa0957e731336cff7c4785b7b763aa3"
+      "sha256": "0a3b5b7b1e4f147d0ba756f84e4847ef7dd02775561b864b90f670a4d1452517",
+      "size": 2992,
+      "normalized_sha256": "0a3b5b7b1e4f147d0ba756f84e4847ef7dd02775561b864b90f670a4d1452517"
     },
     "docs/issue-1223-aec-feasibility.md": {
       "role": "index",
@@ -2378,9 +2390,9 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee/adapter.rs": {
       "role": "index",
-      "sha256": "110b89b686fb2f713bb61af9ba1c084f726e843718468a57f815ebe80fdeb8c0",
-      "size": 14283,
-      "normalized_sha256": "110b89b686fb2f713bb61af9ba1c084f726e843718468a57f815ebe80fdeb8c0"
+      "sha256": "b2d1a080325e991db6379476c58cc60fb6e8547a1f96177d286380f585e1da23",
+      "size": 14789,
+      "normalized_sha256": "b2d1a080325e991db6379476c58cc60fb6e8547a1f96177d286380f585e1da23"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee/api.rs": {
       "role": "index",
@@ -2394,6 +2406,12 @@
       "size": 6639,
       "normalized_sha256": "1303c4b453752f6c1ce7cde92e170840f783235db01c0748e0d6e1305c46cd81"
     },
+    "openless-all/app/crates/openless-core/src/cloud_sync_e2ee/limited.rs": {
+      "role": "index",
+      "sha256": "6174b2f37ea7318993f537aa982c3020c8f829ba62fe3e59e834772f0d541ca4",
+      "size": 7436,
+      "normalized_sha256": "6174b2f37ea7318993f537aa982c3020c8f829ba62fe3e59e834772f0d541ca4"
+    },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee/local.rs": {
       "role": "index",
       "sha256": "bb18289d7a95fc20e5973f0e5a687c722a2cbd10af0d1027ea83ea2268bae8d3",
@@ -2402,9 +2420,9 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee/mod.rs": {
       "role": "index",
-      "sha256": "7dd7784ab99ca21f7881804e5d0dee17943a9b29b9ce7b6fd11bd211b8564406",
-      "size": 3716,
-      "normalized_sha256": "7dd7784ab99ca21f7881804e5d0dee17943a9b29b9ce7b6fd11bd211b8564406"
+      "sha256": "d0d564eb3fedc1c8e7a72012c4b9fdce91be951cffccb6a31ecb14432f22b78a",
+      "size": 3957,
+      "normalized_sha256": "d0d564eb3fedc1c8e7a72012c4b9fdce91be951cffccb6a31ecb14432f22b78a"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee/service.rs": {
       "role": "index",
@@ -2426,15 +2444,27 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee/tests.rs": {
       "role": "index",
-      "sha256": "e5b2f3ad7901f19aeb08fb51dc778415acd46b466a7d280c253fbde0c836c6b1",
-      "size": 102269,
-      "normalized_sha256": "e5b2f3ad7901f19aeb08fb51dc778415acd46b466a7d280c253fbde0c836c6b1"
+      "sha256": "502517cf39882dfa1d3a52cf05d3bfb7195020b5d82882eb3739072000a97bc2",
+      "size": 103730,
+      "normalized_sha256": "502517cf39882dfa1d3a52cf05d3bfb7195020b5d82882eb3739072000a97bc2"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_documents/export.rs": {
       "role": "index",
       "sha256": "39022528a38332f384e7bb978c00f062e6d53804c33e32c86fbc94864ead2a5f",
       "size": 16077,
       "normalized_sha256": "39022528a38332f384e7bb978c00f062e6d53804c33e32c86fbc94864ead2a5f"
+    },
+    "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_documents/limited.rs": {
+      "role": "index",
+      "sha256": "590f4235fd1d870911e496d2d1af279a2939e7b44fa3406c8114eef0b51abbf9",
+      "size": 19775,
+      "normalized_sha256": "590f4235fd1d870911e496d2d1af279a2939e7b44fa3406c8114eef0b51abbf9"
+    },
+    "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_documents/limited_tests.rs": {
+      "role": "index",
+      "sha256": "3d3bf6a9b74560b2276ea4ad41bbf414e2438cdd7506fd40e0417ccbcc6be500",
+      "size": 8996,
+      "normalized_sha256": "3d3bf6a9b74560b2276ea4ad41bbf414e2438cdd7506fd40e0417ccbcc6be500"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_documents/merge.rs": {
       "role": "index",
@@ -2444,9 +2474,9 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_documents/mod.rs": {
       "role": "index",
-      "sha256": "4973328117ce62ee78f3daa294bf4f35060da2e76b1007630c27bc2ba390c932",
-      "size": 3833,
-      "normalized_sha256": "4973328117ce62ee78f3daa294bf4f35060da2e76b1007630c27bc2ba390c932"
+      "sha256": "be570551142996327586a3b398b511b608cebc0e4ae2e5173bb5832178848d7b",
+      "size": 4085,
+      "normalized_sha256": "be570551142996327586a3b398b511b608cebc0e4ae2e5173bb5832178848d7b"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_documents/registry.rs": {
       "role": "index",
@@ -2504,15 +2534,15 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_protocol/transport.rs": {
       "role": "index",
-      "sha256": "7a239c96f0aef9a312565e943ee4398b487f26e69f93ef076427e5cb2320f551",
-      "size": 93020,
-      "normalized_sha256": "7a239c96f0aef9a312565e943ee4398b487f26e69f93ef076427e5cb2320f551"
+      "sha256": "ae5794661b61c547a6126036349bb291a2694f1e798d9ff9e6776242d2683262",
+      "size": 94297,
+      "normalized_sha256": "ae5794661b61c547a6126036349bb291a2694f1e798d9ff9e6776242d2683262"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_protocol/types.rs": {
       "role": "index",
-      "sha256": "ffb272f48291eb3cb567601ce93256df804e0b5fd91b2857424acb385da48ef3",
-      "size": 41758,
-      "normalized_sha256": "ffb272f48291eb3cb567601ce93256df804e0b5fd91b2857424acb385da48ef3"
+      "sha256": "b1432f045c25693f6022c88a339e211940cfa4be19b9e11b07e26a841b2520e1",
+      "size": 41956,
+      "normalized_sha256": "b1432f045c25693f6022c88a339e211940cfa4be19b9e11b07e26a841b2520e1"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_protocol/types/tests.rs": {
       "role": "index",
@@ -2534,15 +2564,21 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_store/gate.rs": {
       "role": "index",
-      "sha256": "91ccce6be1156ae7ef446dc95701fed7b4daee3acb066d29722159c60d885ee5",
-      "size": 44107,
-      "normalized_sha256": "91ccce6be1156ae7ef446dc95701fed7b4daee3acb066d29722159c60d885ee5"
+      "sha256": "46e2d179f1166b97263b864c2f6efb74ab43c477accf0696ce7afa55141d3713",
+      "size": 45586,
+      "normalized_sha256": "46e2d179f1166b97263b864c2f6efb74ab43c477accf0696ce7afa55141d3713"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_store/journal.rs": {
       "role": "index",
       "sha256": "ebb709843465fa534936c085c9295cdf494ae975fd44f8ad9d668ae02b7187f4",
       "size": 5606,
       "normalized_sha256": "ebb709843465fa534936c085c9295cdf494ae975fd44f8ad9d668ae02b7187f4"
+    },
+    "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_store/limited_tests.rs": {
+      "role": "index",
+      "sha256": "12eba9113bfbaff617489baff06d61e016ee6c6f7719d6e206cff8682da784bd",
+      "size": 18134,
+      "normalized_sha256": "12eba9113bfbaff617489baff06d61e016ee6c6f7719d6e206cff8682da784bd"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_store/mod.rs": {
       "role": "index",
@@ -2564,9 +2600,9 @@
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_store/tests.rs": {
       "role": "index",
-      "sha256": "9a84802a20dcaf0a4707b2696c29c1747300238e870623c7d618a14031a68755",
-      "size": 67896,
-      "normalized_sha256": "9a84802a20dcaf0a4707b2696c29c1747300238e870623c7d618a14031a68755"
+      "sha256": "4c69616001bdaa5f1562409ed7988cb6443715850a7c80c37d62660ff4ad7646",
+      "size": 67944,
+      "normalized_sha256": "4c69616001bdaa5f1562409ed7988cb6443715850a7c80c37d62660ff4ad7646"
     },
     "openless-all/app/crates/openless-core/src/cloud_sync_e2ee_store/tests/local_migration.rs": {
       "role": "observe",
@@ -5464,11 +5500,17 @@
       "size": 3514,
       "normalized_sha256": "65b9d2e9bbc52b3bd5b5b557c1667bddac3d723d68c411b5f0b9645b8436ca44"
     },
+    "openless-all/app/scripts/audio-cue-listener-contract.test.mjs": {
+      "role": "index",
+      "sha256": "5c335d6878c0f452096bed29d42012636fc36ecec19eaf072ed52faf28be00bd",
+      "size": 1133,
+      "normalized_sha256": "5c335d6878c0f452096bed29d42012636fc36ecec19eaf072ed52faf28be00bd"
+    },
     "openless-all/app/scripts/audio-cue-runtime.test.mjs": {
       "role": "index",
-      "sha256": "a6bd75cbf8bd3d7c259b55cd22d6420873f7fb330f64a5b1d1cfc93eb7bcd4f1",
-      "size": 5258,
-      "normalized_sha256": "a6bd75cbf8bd3d7c259b55cd22d6420873f7fb330f64a5b1d1cfc93eb7bcd4f1"
+      "sha256": "0c9b921d6dca3050a6dd0c1b1056bbb8722999eb96de10db421d444bf0ede082",
+      "size": 9345,
+      "normalized_sha256": "0c9b921d6dca3050a6dd0c1b1056bbb8722999eb96de10db421d444bf0ede082"
     },
     "openless-all/app/scripts/audio-cue-window-contract.test.mjs": {
       "role": "index",
@@ -5526,9 +5568,9 @@
     },
     "openless-all/app/scripts/capsule-ready-replay.test.mjs": {
       "role": "index",
-      "sha256": "93bbf8dbe6e6c5a6299db1942027403c57f0ffb1875d54765dbddc7d538f0fb9",
-      "size": 24488,
-      "normalized_sha256": "93bbf8dbe6e6c5a6299db1942027403c57f0ffb1875d54765dbddc7d538f0fb9"
+      "sha256": "5d240313f94fd6f67a22b66ea98761227e80734a91e21068a9684f43b2b5b391",
+      "size": 24969,
+      "normalized_sha256": "5d240313f94fd6f67a22b66ea98761227e80734a91e21068a9684f43b2b5b391"
     },
     "openless-all/app/scripts/capsule-stacking-webkit.swift": {
       "role": "index",
@@ -6576,9 +6618,15 @@
     },
     "openless-all/app/scripts/voice-edit-open-dispatch-contract.test.mjs": {
       "role": "index",
-      "sha256": "9c0f89a0aebd81706d877f2358cb367be2cdad33054d966b99e9f6424ea81d6f",
-      "size": 3061,
-      "normalized_sha256": "9c0f89a0aebd81706d877f2358cb367be2cdad33054d966b99e9f6424ea81d6f"
+      "sha256": "7b71a3a61f743fc4347127481bf68f7f70737221cae92cca1dad14b69fbd3695",
+      "size": 3149,
+      "normalized_sha256": "7b71a3a61f743fc4347127481bf68f7f70737221cae92cca1dad14b69fbd3695"
+    },
+    "openless-all/app/scripts/voice-edit-window-open-contract.test.mjs": {
+      "role": "index",
+      "sha256": "721d4fd4ce347645add117920afe9f74c3225707891dfa23a01b397bd43c3c9d",
+      "size": 1987,
+      "normalized_sha256": "721d4fd4ce347645add117920afe9f74c3225707891dfa23a01b397bd43c3c9d"
     },
     "openless-all/app/scripts/windows-artifact-acceptance.ps1": {
       "role": "index",
@@ -7037,9 +7085,9 @@
     },
     "openless-all/app/src-tauri/backend-tests/tests/voice_edit_host.rs": {
       "role": "observe",
-      "sha256": "4a1c94a1a262fc7e12bba429de0bfda3e1353620a0968f48104692eda1f1f077",
-      "size": 24595,
-      "normalized_sha256": "4a1c94a1a262fc7e12bba429de0bfda3e1353620a0968f48104692eda1f1f077"
+      "sha256": "762811a57cdb176dde987632f3d347d863a5271240ec1f585445bd083a18c67f",
+      "size": 24704,
+      "normalized_sha256": "762811a57cdb176dde987632f3d347d863a5271240ec1f585445bd083a18c67f"
     },
     "openless-all/app/src-tauri/backend-tests/tests/windows_edit_settle.rs": {
       "role": "observe",
@@ -8003,15 +8051,15 @@
     },
     "openless-all/app/src-tauri/src/commands/voice_edit.rs": {
       "role": "index",
-      "sha256": "ed1ab1cc8e4675a2f052c5f272358b56196387253675f61a855c586dc4e42fd0",
-      "size": 3634,
-      "normalized_sha256": "ed1ab1cc8e4675a2f052c5f272358b56196387253675f61a855c586dc4e42fd0"
+      "sha256": "7302f1592630e5e3414dc733a7e0114d822c6efdddab450d89f58c1c6e2549cb",
+      "size": 3767,
+      "normalized_sha256": "7302f1592630e5e3414dc733a7e0114d822c6efdddab450d89f58c1c6e2549cb"
     },
     "openless-all/app/src-tauri/src/coordinator.rs": {
       "role": "index",
-      "sha256": "15e84b32a7c9c7c5e6c85da360ecc3a0cd88bc51ee88d19dbab011718348bb23",
-      "size": 80647,
-      "normalized_sha256": "15e84b32a7c9c7c5e6c85da360ecc3a0cd88bc51ee88d19dbab011718348bb23"
+      "sha256": "0575534a851709a8000f828352518429944cea6ebd14255436caeee3c99c5ecf",
+      "size": 80973,
+      "normalized_sha256": "0575534a851709a8000f828352518429944cea6ebd14255436caeee3c99c5ecf"
     },
     "openless-all/app/src-tauri/src/coordinator/capsule_focus.rs": {
       "role": "index",
@@ -8051,9 +8099,9 @@
     },
     "openless-all/app/src-tauri/src/coordinator/voice_edit_session.rs": {
       "role": "index",
-      "sha256": "153f45f85915ff58e09c3d792d6bc62aedc1240ed6d7b90fd5824805fa704b22",
-      "size": 25742,
-      "normalized_sha256": "153f45f85915ff58e09c3d792d6bc62aedc1240ed6d7b90fd5824805fa704b22"
+      "sha256": "672449c523afd70200cf9be25eabb0c5b06319986a1a270df6a21765f3bd11e5",
+      "size": 25750,
+      "normalized_sha256": "672449c523afd70200cf9be25eabb0c5b06319986a1a270df6a21765f3bd11e5"
     },
     "openless-all/app/src-tauri/src/coordinator_state.rs": {
       "role": "index",
@@ -8159,9 +8207,9 @@
     },
     "openless-all/app/src-tauri/src/lib.rs": {
       "role": "index",
-      "sha256": "726b9f6f4aacdeda07c04b3a5f4a38a6e70cfde0329f5dabfa56f509099867ca",
-      "size": 167916,
-      "normalized_sha256": "726b9f6f4aacdeda07c04b3a5f4a38a6e70cfde0329f5dabfa56f509099867ca"
+      "sha256": "894233759f022cce02654e45ff203e9ce8933d9551c25d4a23063886906222f8",
+      "size": 168764,
+      "normalized_sha256": "894233759f022cce02654e45ff203e9ce8933d9551c25d4a23063886906222f8"
     },
     "openless-all/app/src-tauri/src/llm_gemini.rs": {
       "role": "index",
@@ -8519,9 +8567,9 @@
     },
     "openless-all/app/src-tauri/src/tauri_coordinator_host.rs": {
       "role": "index",
-      "sha256": "f7827b06901965f9c1b7789412d9a07d098e932a1cb830ff21376a082a5c01b4",
-      "size": 117525,
-      "normalized_sha256": "f7827b06901965f9c1b7789412d9a07d098e932a1cb830ff21376a082a5c01b4"
+      "sha256": "ebf1042494da51db79f845edc5bcb1ce038351b4d362a2fa0438a20037a989fd",
+      "size": 117611,
+      "normalized_sha256": "ebf1042494da51db79f845edc5bcb1ce038351b4d362a2fa0438a20037a989fd"
     },
     "openless-all/app/src-tauri/src/tauri_events.rs": {
       "role": "index",
@@ -9815,9 +9863,9 @@
     },
     "openless-all/app/src/features/capsule/AudioCue.tsx": {
       "role": "index",
-      "sha256": "37134886252e1eed341ca64dc4b5740ba098d4ee4b286b572786ab39ada590b0",
-      "size": 2126,
-      "normalized_sha256": "37134886252e1eed341ca64dc4b5740ba098d4ee4b286b572786ab39ada590b0"
+      "sha256": "c483118e6c952a453517ddf5adc5b2c7d784da2fc707ae933a93e1f1437f9521",
+      "size": 2258,
+      "normalized_sha256": "c483118e6c952a453517ddf5adc5b2c7d784da2fc707ae933a93e1f1437f9521"
     },
     "openless-all/app/src/features/capsule/Capsule.tsx": {
       "role": "index",
@@ -10085,9 +10133,9 @@
     },
     "openless-all/app/src/features/input/SelectionWorkspaceSection.tsx": {
       "role": "index",
-      "sha256": "911a8a935f67d50851b6d53847522ee3692d4ba39bdd6cf29e5540409404a72e",
-      "size": 6000,
-      "normalized_sha256": "911a8a935f67d50851b6d53847522ee3692d4ba39bdd6cf29e5540409404a72e"
+      "sha256": "e41e9708ff0f2bbc0cf09febfe2f2e982c0a3b48113391d7adbbc2384c693b81",
+      "size": 6791,
+      "normalized_sha256": "e41e9708ff0f2bbc0cf09febfe2f2e982c0a3b48113391d7adbbc2384c693b81"
     },
     "openless-all/app/src/features/input/ShortcutsSection.tsx": {
       "role": "index",
@@ -11105,9 +11153,9 @@
     },
     "openless-all/app/src/lib/audioCue.ts": {
       "role": "index",
-      "sha256": "f1d433c8441ceba0b972efcbe183d09b86d916162593a3350a05753269669307",
-      "size": 14790,
-      "normalized_sha256": "f1d433c8441ceba0b972efcbe183d09b86d916162593a3350a05753269669307"
+      "sha256": "e4573776a9d41a3f569508ed34aa264f4fc688ffb22aaaea7ad2bc03c097cdc4",
+      "size": 15317,
+      "normalized_sha256": "e4573776a9d41a3f569508ed34aa264f4fc688ffb22aaaea7ad2bc03c097cdc4"
     },
     "openless-all/app/src/lib/audioDsp.ts": {
       "role": "index",
