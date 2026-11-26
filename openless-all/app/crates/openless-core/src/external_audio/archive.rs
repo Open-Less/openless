@@ -171,6 +171,30 @@ impl RecordingArchive for ExternalRecordingArchive {
         self.available.load(Ordering::Acquire)
     }
 
+    fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+        let path = self.path.clone();
+        Box::pin(async move {
+            let mut file = std::fs::File::open(path).map_err(|error| {
+                BackendError::new(BackendErrorCode::Persistence, error.to_string())
+            })?;
+            crate::audio::canonical_archive_pcm_len(&mut file)
+        })
+    }
+
+    fn read_pcm_range(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+        let path = self.path.clone();
+        Box::pin(async move {
+            let mut file = std::fs::File::open(path).map_err(|error| {
+                BackendError::new(BackendErrorCode::Persistence, error.to_string())
+            })?;
+            crate::audio::read_canonical_archive_pcm_range(&mut file, offset, len)
+        })
+    }
+
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
         let path = self.path.clone();
         Box::pin(async move {
@@ -216,5 +240,35 @@ impl RecordingArchive for ExternalRecordingArchive {
             }
         }
         Box::pin(async move { result })
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+    #[tokio::test]
+    async fn external_archive_reads_ranges_and_refuses_truncated_payloads() {
+        let directory =
+            std::env::temp_dir().join(format!("openless-external-range-{}", uuid::Uuid::new_v4()));
+        let archive = ExternalRecordingArchive::create(
+            &directory,
+            SessionId::new(),
+            &crate::DictationContext::default().recording,
+        )
+        .unwrap();
+        archive.append(&[1, 2, 3, 4, 5, 6]);
+        archive.finish();
+        assert_eq!(archive.pcm_byte_len().await.unwrap(), 6);
+        assert_eq!(archive.read_pcm_range(2, 4).await.unwrap(), [3, 4, 5, 6]);
+        assert!(archive.read_pcm_range(4, 4).await.is_err());
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&archive.path)
+            .unwrap()
+            .set_len(46)
+            .unwrap();
+        assert!(archive.pcm_byte_len().await.is_err());
+        archive.discard().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

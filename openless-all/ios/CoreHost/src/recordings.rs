@@ -234,6 +234,26 @@ impl RecordingArchive for WavArchive {
     fn is_available(&self) -> bool {
         self.state.lock().is_ok_and(|state| state.bytes > 0) && self.path.is_file()
     }
+    fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+        let path = self.path.clone();
+        Box::pin(async move {
+            prepare_directory(path.parent().ok_or_else(storage_error)?)?;
+            let (_, bytes) = open_wav(&path, false)?;
+            Ok(u64::from(bytes))
+        })
+    }
+    fn read_pcm_range(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+        let path = self.path.clone();
+        Box::pin(async move {
+            prepare_directory(path.parent().ok_or_else(storage_error)?)?;
+            let (mut file, _) = open_wav(&path, false)?;
+            openless_core::audio::read_canonical_archive_pcm_range(&mut file, offset, len)
+        })
+    }
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
         let path = self.path.clone();
         Box::pin(async move {

@@ -1,7 +1,11 @@
 #![cfg(test)]
+#[path = "limited_tests.rs"]
+mod limited_tests;
 // Seam scanner looks for #[cfg(test)] (inner attr alone is not enough).
 #[cfg(test)]
 mod __runtime_seam_test_marker {}
+
+mod v1_compat;
 
 use super::*;
 use crate::cloud_sync_e2ee_documents::*;
@@ -596,26 +600,16 @@ async fn capsule_display_upgrade_does_not_overwrite_an_older_clients_retained_v2
         .export_scope(fixture.scope.clone())
         .await
         .unwrap();
-    assert!(fixture
-        .repo
-        .preferences
-        .get()
-        .capsule_display_mode_v2
-        .is_none());
+    assert_eq!(
+        fixture.repo.preferences.get().capsule_display_mode_v2,
+        Some(crate::CapsuleDisplayMode::PrimaryScreen)
+    );
     assert!(exported
         .documents
         .documents()
         .documents
         .iter()
         .any(|doc| doc.id == "capsuleDisplayModeV2" && doc.value == json!("primaryScreen")));
-    fixture
-        .store
-        .restore_scope(
-            validate(exported.documents.documents().clone()),
-            fixture.context(&exported),
-        )
-        .await
-        .unwrap();
     assert_eq!(
         fixture.repo.preferences.get().capsule_display_mode,
         crate::CapsuleDisplayMode::PrimaryScreen

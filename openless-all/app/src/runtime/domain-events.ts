@@ -57,3 +57,17 @@ export function listenStylePackChanges(onChange: () => void): Promise<() => void
       });
   }
 }
+
+/** Usage is invalidated independently of dictation history. */
+export function listenServiceUsageChanges(onChange: () => void): Promise<() => void> {
+  switch (getRuntimeEnvironment().host) {
+    case 'preview':
+      return Promise.resolve(listenPreviewChange('service-usage', onChange));
+    case 'linux':
+    case 'tauri':
+      return listenTauriEvent('service-usage:changed', onChange);
+    case 'harmony':
+      // The Harmony host does not expose the service-usage ledger.
+      return Promise.resolve(() => {});
+  }
+}

@@ -915,7 +915,6 @@ pub(crate) fn apply_focused_selection_target(
 fn apply_selection_target_with_method(
     method: &str, session_id: &str, source: &str, replacement: &str,
 ) -> Result<(), BackendError> {
-    crate::selection::validate_selection_replacement_source(source)?;
     if send_bool_message(method, |message| {
         message.append3(session_id, source, replacement)
     })? {

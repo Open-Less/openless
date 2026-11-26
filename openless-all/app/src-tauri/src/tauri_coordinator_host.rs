@@ -55,7 +55,7 @@ fn capsule_transcript_rail_position(
     translation_active: bool,
     transcript_visible: bool,
 ) -> Option<CapsuleTranscriptRailPosition> {
-    if !transcript_visible && (!translation_active || style == CapsuleStyle::Siri) {
+    if !transcript_visible && (!translation_active || matches!(style, CapsuleStyle::Siri | CapsuleStyle::Classic)) {
         return None;
     }
     match style {
@@ -75,17 +75,10 @@ fn capsule_transcript_rail_position(
             const BODY_BOTTOM_INSET: f64 = 16.0;
             const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
-            const RAIL_GAP: f64 = 8.0;
-            const BADGE_HEIGHT: f64 = 28.0;
-            const BADGE_GAP: f64 = 8.0;
+            const RAIL_GAP: f64 = 24.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
             let gap = RAIL_GAP;
-            let height = if transcript_visible { RAIL_HEIGHT } else { 0.0 }
-                + if translation_active {
-                    BADGE_HEIGHT + if transcript_visible { BADGE_GAP } else { 0.0 }
-                } else {
-                    0.0
-                };
+            let height = RAIL_HEIGHT;
             let top_offset = body_top - RAIL_GAP - height;
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
@@ -180,14 +173,21 @@ fn capsule_control_hit_rect(
         ),
         CapsuleStyle::Siri => unreachable!(),
     };
-    let _ = transcript_visible;
-    let scale =
-        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     // Windows clips the native input region as well as CSS. Include the language
-    // picker only while translation is active; the transcript remains click-through.
+    // picker (at the top above any transcript rail) only while translation is
+    // active; the transcript itself remains in the click-through rail HWND.
     let picker_visible = style == CapsuleStyle::Classic && translation_active;
     let interactive_width = if picker_visible { 260.0 } else { logical_body_width };
-    let interactive_height = logical_body_height + if picker_visible { 36.0 } else { 0.0 };
+    let interactive_height = if picker_visible {
+        logical_body_height
+            + 24.0
+            + 28.0
+            + if transcript_visible { 52.0 + 8.0 } else { 0.0 }
+    } else {
+        logical_body_height
+    };
+    let scale =
+        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     let body_width = (interactive_width * scale).round() as i32;
     let body_height = (interactive_height * scale).round() as i32;
     let bottom_inset = (logical_bottom_inset * scale).round() as i32;
@@ -384,7 +384,7 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
     reassert_spaces: bool,
 ) {
     #[cfg(target_os = "macos")]
-    if true {
+    if crate::desktop_resources::active() {
         if let Ok(raw) = window.ns_window() {
             unsafe {
                 use objc2::{msg_send, runtime::AnyObject};
@@ -410,7 +410,7 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
+pub(crate) fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     show: bool,
 ) -> bool {
@@ -1236,6 +1236,12 @@ impl TauriCapsuleWindow {
     #[cfg(not(mobile))]
     pub(crate) fn set_card_hit_test_mode(&self) -> tauri::Result<()> {
         self.stop_layout_watch();
+        if crate::desktop_resources::active() {
+            if let Some(coordinator) = self.app.try_state::<Arc<crate::coordinator::Coordinator>>()
+            {
+                coordinator.tauri_host().stop_native_capsule();
+            }
+        }
         crate::desktop_resources::ensure_card_window(&self.app)?;
         self.state
             .hit_test_mode
@@ -1501,9 +1507,11 @@ impl TauriCapsuleWindow {
         if let Some(window) = self.window() {
             #[cfg(not(mobile))]
             {
-                self.state
-                    .hit_test_mode
-                    .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
+                if crate::desktop_resources::active() {
+                    self.state
+                        .hit_test_mode
+                        .store(HIT_TEST_MODE_CAPSULE, Ordering::SeqCst);
+                }
                 crate::desktop_resources::hide_capsule_window(&window)?;
             }
             #[cfg(mobile)]
@@ -2205,10 +2213,20 @@ impl TauriCapsuleWindow {
     }
 }
 
+#[cfg(not(mobile))]
+pub(crate) fn notify_service_usage_changed(app: &crate::core_adapters::AppHandleSlot) {
+    let app = app.lock().clone();
+    if let Some(app) = app {
+        let _ = app.emit_to("main", "service-usage:changed", ());
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
     capsule: Arc<CapsuleWindowState>,
+    #[cfg(not(mobile))]
+    native: Arc<Mutex<Option<Arc<crate::native_capsule::NativeCapsule>>>>,
     qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
 }
 
@@ -2220,6 +2238,8 @@ impl TauriCoordinatorHost {
         Self {
             app,
             capsule: Arc::new(CapsuleWindowState::default()),
+            #[cfg(not(mobile))]
+            native: Arc::new(Mutex::new(None)),
             qa_context,
         }
     }
@@ -2229,6 +2249,17 @@ impl TauriCoordinatorHost {
         // `bind` runs in Tauri's `setup`, on the event-loop thread.
         #[cfg(target_os = "windows")]
         let _ = MAIN_THREAD.set(std::thread::current().id());
+        #[cfg(not(mobile))]
+        if crate::desktop_resources::active() {
+            match crate::native_capsule::NativeCapsule::new(app.clone()) {
+                Ok(native) => {
+                    *self.native.lock() = Some(Arc::new(native));
+                }
+                Err(error) => {
+                    log::error!("[native-capsule] {error}; dictation remains available");
+                }
+            }
+        }
         *self.app.lock() = Some(app);
     }
 
@@ -2278,15 +2309,15 @@ impl TauriCoordinatorHost {
     }
 
     #[cfg(not(mobile))]
-    /// 原生胶囊渲染器已删除（原来只在低内存模式下启用，`configure` 始终传 false）。
-    /// 保留这个方法让调用方不必分支：音频提示音仍然在这里起停，胶囊本身由
-    /// Tauri 的 webview 窗口负责。
     pub(crate) fn present_native_capsule(
         &self,
         payload: &CapsulePayload,
-        _epoch: u64,
+        epoch: u64,
         previous: Option<CapsuleState>,
     ) -> bool {
+        if !crate::desktop_resources::active() {
+            return false;
+        }
         if let Some(app) = self.app() {
             let preferences = app
                 .state::<Arc<crate::coordinator::Coordinator>>()
@@ -2306,12 +2337,37 @@ impl TauriCoordinatorHost {
                 crate::native_audio_cue::stop();
             }
         }
-        false
+        if let Some(native) = self.native.lock().as_ref() {
+            if self.capsule.fallback_card_visible.load(Ordering::SeqCst)
+                || self.capsule.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD
+            {
+                native.stop();
+            } else {
+                native.present(payload, epoch, self.capsule.snapshot.lock().text.clone());
+            }
+        }
+        true
     }
 
     #[cfg(not(mobile))]
-    /// 原生胶囊删除后只保留音频提示音的收尾。
+    pub(crate) fn set_native_capsule_locale(&self, locale: String) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.set_locale(locale);
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn refresh_native_capsule_theme(&self) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.refresh_theme();
+        }
+    }
+
+    #[cfg(not(mobile))]
     pub(crate) fn stop_native_capsule(&self) {
+        if let Some(native) = self.native.lock().as_ref() {
+            native.stop();
+        }
         crate::native_audio_cue::stop();
     }
 
@@ -2384,11 +2440,51 @@ impl TauriCoordinatorHost {
             .commit_capsule_payload(payload, captured_revision)
     }
 
+    pub(crate) fn expire_terminal_capsule(&self) -> Option<CapsulePayload> {
+        self.capsule.snapshot.lock().expire_terminal_capsule()
+    }
+
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        #[cfg(not(mobile))]
+        if self.ask_owns_capsule() {
+            return;
+        }
+        #[cfg(not(mobile))]
+        if let openless_core::BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
+            if let Some(native) = self.native.lock().as_ref() {
+                native.update_processing_jobs(jobs);
+            }
+        }
         self.capsule.snapshot.lock().record_backend_event(event);
-        // 原生胶囊删除后，流式文本由 webview 胶囊直接消费 `TranscriptDelta` 事件，
-        // 这里不再需要把 session/text 转交给额外的渲染进程。
+        #[cfg(not(mobile))]
+        if crate::desktop_resources::active()
+            && matches!(
+                event.kind,
+                openless_core::BackendEventKind::TranscriptDelta(_)
+            )
+        {
+            // Streaming text may arrive after capture stops, with no further level frames.
+            let (session_id, text) = {
+                let snapshot = self.capsule.snapshot.lock();
+                (snapshot.session_id.clone(), snapshot.text.clone())
+            };
+            if let (Some(session_id), Some(native)) = (session_id, self.native.lock().as_ref()) {
+                native.update_transcript(&session_id, text);
+            }
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn claim_ask_capsule(&self, session_id: &str) -> u64 {
+        self.capsule.snapshot.lock().claim_ask(session_id)
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn ask_owns_capsule(&self) -> bool {
+        self.app().as_ref()
+            .and_then(|app| app.try_state::<Arc<crate::ask_window::Desktop>>())
+            .is_some_and(|ask| ask.owns_capsule())
     }
 
     pub(crate) fn cache_capsule_display_mode(&self, mode: CapsuleDisplayMode) {
@@ -2485,10 +2581,11 @@ impl TauriCoordinatorHost {
         }
     }
 
-    pub(crate) fn show_voice_edit(&self) {
-        if let Some(app) = self.app() {
-            crate::show_voice_edit_window(&app);
-        }
+    pub(crate) fn show_voice_edit(&self) -> Result<(), String> {
+        let app = self
+            .app()
+            .ok_or_else(|| "Tauri AppHandle is not bound yet".to_string())?;
+        crate::show_voice_edit_window(&app)
     }
 
     pub(crate) fn hide_voice_edit(&self) {
@@ -2944,15 +3041,15 @@ mod tests {
                 classic.top_offset,
                 classic.gap
             ),
-            (460.0, 52.0, 64.0, 8.0)
+            (460.0, 52.0, 48.0, 24.0)
         );
         assert_eq!(
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
-                height: 88.0,
-                top_offset: 28.0,
-                gap: 8.0,
+                height: 52.0,
+                top_offset: 48.0,
+                gap: 24.0,
             })
         );
 
@@ -2980,11 +3077,9 @@ mod tests {
         ] {
             assert_eq!(capsule_transcript_rail_position(style, false, false), None);
         }
-        let classic_badge =
-            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
         assert_eq!(
-            (classic_badge.height, classic_badge.top_offset),
-            (28.0, 88.0)
+            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false),
+            None
         );
         let typeless_badge =
             capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
@@ -3014,6 +3109,24 @@ mod tests {
                 left: 172,
                 right: 288,
                 top: 124,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, false, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 72,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, true, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 12,
                 bottom: 156,
             })
         );

@@ -6,20 +6,6 @@ use openless_core::{
     SessionId,
 };
 
-pub(crate) fn validate_selection_replacement_source(text: &str) -> Result<(), BackendError> {
-    // Same fixed head/tail stand-in as Tauri; merely mentioning the marker
-    // in ordinary text is not a reason to reject a real selection.
-    const MARKER: &str = "\n[\u{2026}truncated\u{2026}]\n";
-    let stand_in_length = 4000 + MARKER.chars().count();
-    if text.contains(MARKER) && text.chars().take(stand_in_length + 1).count() == stand_in_length {
-        return Err(BackendError::new(
-            BackendErrorCode::InvalidArgument,
-            "selectionPolishSelectionTooLong",
-        ));
-    }
-    Ok(())
-}
-
 trait LinuxSelectionBridge: Send + Sync + 'static {
     fn capture_target(&self, session_id: SessionId) -> Result<String, BackendError>;
     fn apply_target(
@@ -108,6 +94,20 @@ impl LinuxSelectionRuntime {
 }
 
 impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
+    fn protect_original(
+        &self,
+        _: SessionId,
+        text: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || crate::fcitx5::copy_to_clipboard(&text))
+                .await
+                .map_err(|error| {
+                    BackendError::new(BackendErrorCode::Platform, error.to_string())
+                })??;
+            Ok(None)
+        })
+    }
     fn capture(
         &self,
         session_id: SessionId,
@@ -138,10 +138,6 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                 }
                 // 只有一条来源：fcitx5 插件（内部直接问 clipboard addon 要 PRIMARY）。
                 let text = bridge.capture_target(session_id)?;
-                if let Err(error) = validate_selection_replacement_source(&text) {
-                    let _ = bridge.cancel_target(session_id);
-                    return Err(error);
-                }
                 *target = Some(LinuxSelectionTarget {
                     session_id,
                     source_text: text.clone(),
@@ -182,7 +178,6 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
         let bridge = Arc::clone(&self.bridge);
         let target = Arc::clone(&self.target);
         Box::pin(async move {
-            validate_selection_replacement_source(&source_text)?;
             tokio::task::spawn_blocking(move || {
                 let mut target = target.lock().expect("Linux selection target lock poisoned");
                 let Some(active) = target.as_mut() else {

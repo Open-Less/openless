@@ -78,7 +78,7 @@ function animate(
 export function useOverlayMotion(
   ref: RefObject<HTMLElement>,
   closing: boolean,
-  variant: 'card' | 'backdrop' | 'sheet' | 'drawer' | 'pop' = 'card',
+  variant: 'card' | 'backdrop' | 'sheet' | 'drawer' | 'side-panel' | 'pop' = 'card',
   enabled = true,
   entrance: 'default' | 'settings' = 'default',
 ) {
@@ -101,7 +101,9 @@ export function useOverlayMotion(
           : {
               opacity: 0,
               transform:
-                variant === 'drawer'
+                variant === 'side-panel'
+                  ? 'translate3d(calc(100% + 16px), 0, 0)'
+                  : variant === 'drawer'
                   ? 'translate3d(12px, 0, 0)'
                   : variant === 'sheet'
                     ? 'translate3d(0, 16px, 0)'
@@ -181,7 +183,7 @@ export function useContentMotion(ref: RefObject<HTMLElement>, key: string) {
 export function useSelectionMotion(
   groupRef: RefObject<HTMLElement>,
   indicatorRef: RefObject<HTMLElement>,
-  selection: string,
+  selection: string | null,
   underline = false,
 ) {
   const reduced = useReducedMotion();
@@ -256,7 +258,7 @@ export function useSelectionMotion(
         void motion.animation.finished.then(motion.cancel).catch(() => {});
       }
     };
-    position(previous.current !== null && previous.current !== selection);
+    position(selection !== null && previous.current !== null && previous.current !== selection);
     previous.current = selection;
     let resizeFrame = 0;
     const observer = new ResizeObserver(() => {

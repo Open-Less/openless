@@ -1,6 +1,6 @@
 // General → Selection Assistant: merges selection polish and selection voice editing so users don't confuse the two jobs.
 
-import type { PlatformCapabilities, SelectionPolishOutputMode } from '../../api/contracts';
+import type { PlatformCapabilities } from '../../api/contracts';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -10,16 +10,10 @@ import { setSelectionPolishHotkey } from '../../api/hotkeys';
 import { listenHostEvent } from '../../lib/hostEventBus';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import { useHotkeySettings } from '../../data/preferences';
-import { Segmented } from '../../components/ui/Segmented';
 import { Card } from '../../ui/layout/Card';
 import { SectionTitle } from '../../ui/layout/SectionTitle';
 import { SettingRow, Toggle } from '../../ui/controls/SettingRow';
 import { SelectionWorkspaceExtraControlsDialog } from './SelectionWorkspaceExtraControlsDialog';
-
-const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [
-  { value: 'directReplace' },
-  { value: 'previewConfirm' },
-];
 
 export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcut?: boolean }) {
   const { t } = useTranslation();
@@ -27,6 +21,22 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [extraControlsOpen, setExtraControlsOpen] = useState(false);
   const [voiceEditNotice, setVoiceEditNotice] = useState('');
+  const [openPanelBusy, setOpenPanelBusy] = useState(false);
+  const [openPanelError, setOpenPanelError] = useState('');
+
+  const openPanel = async () => {
+    if (openPanelBusy) return;
+    setOpenPanelBusy(true);
+    setOpenPanelError('');
+    try {
+      await openVoiceEditWindow();
+      if (platformCaps?.linuxHost) setVoiceEditNotice(t('voiceEditLinuxHint'));
+    } catch (error) {
+      setOpenPanelError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpenPanelBusy(false);
+    }
+  };
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
@@ -35,7 +45,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   useEffect(() => {
     if (!platformCaps?.linuxHost) return;
     const show = listenHostEvent('voice-edit:show', () => setVoiceEditNotice(''));
-    const error = listenHostEvent('voice-edit:error', (message) => setVoiceEditNotice(String(message)));
+    const error = listenHostEvent('voice-edit:error', (message) => setOpenPanelError(String(message)));
     return () => { show(); error(); };
   }, [platformCaps?.linuxHost]);
 
@@ -58,41 +68,15 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   const voiceEnabled = prefs.selectionVoiceEnabled;
   const editPlanFormat = prefs.selectionVoiceEditPlanFormat ?? 'xml';
   const editSystemPrompt = prefs.selectionVoiceEditSystemPrompt ?? '';
-  const deliveryControl = (
-    <Segmented
-      label={t('settings.selectionWorkspace.polishDelivery')}
-      value={prefs.selectionPolishOutputMode}
-      onChange={(next) =>
-        void updatePrefs((current) => ({ ...current, selectionPolishOutputMode: next }))
-      }
-      options={outputOptions.map((option) => ({
-        value: option.value,
-        label: t(`settings.selectionPolish.${option.value}`),
-        // 「预览后确认」在 Linux 上已经打通（润色进 QA 面板预览，确认后替换）。
-        title: t(`settings.selectionPolish.${option.value}Hint`),
-      }))}
-    />
-  );
-
   return (
     <Card>
       <SectionTitle hint={t('settings.selectionWorkspace.hint')}>
         {t('settings.selectionWorkspace.title')}
       </SectionTitle>
 
-      {!showVoice && (
-        // Linux：语音编辑窗口还没做（选区润色本身已经可用），先显示、整块置灰。
-        <SettingRow
-          comingSoon
-          label={t('voiceEdit.title')}
-          desc={t('settings.selectionWorkspace.voiceEditComingSoonDesc')}
-        >
-          <Toggle on={false} />
-        </SettingRow>
-      )}
       {showVoice && (
         <SettingRow label={t('voiceEdit.title')} desc={t('voiceEdit.description')}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
             <Toggle
               on={prefs.voiceEditEnabled}
               onToggle={(next) =>
@@ -101,10 +85,9 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
             />
             <button
               type="button"
-              disabled={!prefs.voiceEditEnabled || (platformCaps.linuxHost && !prefs.selectionPolishHotkey)}
-              onClick={() => void openVoiceEditWindow().then(() => {
-                if (platformCaps.linuxHost) setVoiceEditNotice(t('voiceEditLinuxHint'));
-              }).catch((error) => setVoiceEditNotice(String(error)))}
+              disabled={!prefs.voiceEditEnabled || openPanelBusy || (platformCaps.linuxHost && !prefs.selectionPolishHotkey)}
+              aria-busy={openPanelBusy}
+              onClick={() => void openPanel()}
               style={{
                 background: 'transparent',
                 border: '0.5px solid var(--ol-line)',
@@ -117,9 +100,14 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 opacity: prefs.voiceEditEnabled ? 1 : 0.5,
               }}
             >
-              {platformCaps.linuxHost ? t('voiceEditLinuxArm') : t('voiceEdit.openPanel')}
+              {openPanelBusy ? t('common.loading') : platformCaps.linuxHost ? t('voiceEditLinuxArm') : t('voiceEdit.openPanel')}
             </button>
             {voiceEditNotice && <span role="status">{voiceEditNotice}</span>}
+            {openPanelError ? (
+              <div role="alert" style={{ flexBasis: '100%', fontSize: 11, color: 'var(--ol-err)' }}>
+                {t('common.operationFailed')}: {openPanelError}
+              </div>
+            ) : null}
           </div>
         </SettingRow>
       )}
@@ -145,15 +133,6 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
           />
         </SettingRow>
       )}
-      {showDesktop && (!voiceEnabled || !showVoice) && (
-        <SettingRow
-          label={t('settings.selectionWorkspace.polishDelivery')}
-          desc={!showVoice ? t('settings.selectionWorkspace.polishDeliveryComingSoonDesc') : undefined}
-        >
-          {deliveryControl}
-        </SettingRow>
-      )}
-
       {showVoice && (
         <>
           <SettingRow
@@ -169,12 +148,6 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
           </SettingRow>
           {voiceEnabled && (
             <>
-              <SettingRow
-                label={t('settings.selectionWorkspace.polishDelivery')}
-                desc={t('settings.selectionWorkspace.voiceDeliveryDesc')}
-              >
-                {deliveryControl}
-              </SettingRow>
               <SettingRow
                 label={t('settings.selectionWorkspace.extraControls')}
                 desc={t('settings.selectionWorkspace.extraControlsDesc')}

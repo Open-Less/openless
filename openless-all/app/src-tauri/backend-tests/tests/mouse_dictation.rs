@@ -13,8 +13,6 @@ mod shortcut_binding {
 mod combo_hotkey;
 
 #[allow(dead_code)]
-#[path = "../../src/recording_companion.rs"]
-mod recording_companion;
 
 #[allow(dead_code)]
 #[path = "../../src/mouse_dictation.rs"]

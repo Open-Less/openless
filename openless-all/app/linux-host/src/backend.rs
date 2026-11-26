@@ -521,7 +521,9 @@ mod tests {
             std::process::id(),
             uuid::Uuid::new_v4().simple()
         ));
-        let recorder = FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![(20, 0.5)]);
+        // Core requires at least 100 ms of canonical 16 kHz mono PCM.
+        let pcm = [1, 0, 2, 0].repeat(800);
+        let recorder = FixtureAudioRecorder::new(vec![pcm.clone()], vec![(100, 0.5)]);
         let transcription = FixtureTranscriptionEngine::successful("fixture raw", 20);
         let credentials = Arc::new(InMemoryCredentialStore::default());
         credentials
@@ -557,7 +559,7 @@ mod tests {
         let result = runtime.backend.stop_dictation().await.unwrap();
         assert_eq!(result.raw_text, "fixture raw");
         assert_eq!(result.polished_text, "fixture polished");
-        assert_eq!(transcription.pcm(), vec![1, 0, 2, 0]);
+        assert_eq!(transcription.pcm(), pcm);
         assert_eq!(recorder.stop_count(), 1);
         runtime.backend.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(data_dir);

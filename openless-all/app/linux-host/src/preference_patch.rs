@@ -95,8 +95,7 @@ mod tests {
         changed.streaming_insert_save_clipboard = !initial.streaming_insert_save_clipboard;
         changed.show_capsule = !initial.show_capsule;
         changed.capsule_style = openless_core::shared_types::CapsuleStyle::Classic;
-        changed.selection_polish_output_mode =
-            openless_core::shared_types::SelectionPolishOutputMode::PreviewConfirm;
+        // Core now canonicalizes the legacy preview mode to direct replacement.
         changed.polish_context_window_minutes = 17;
         changed.polish_skip_max_chars = 8;
         changed.audio_recording_max_entries = Some(19);

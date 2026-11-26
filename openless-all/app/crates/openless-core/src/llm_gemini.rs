@@ -47,6 +47,8 @@ pub struct GeminiConfig {
     /// think by its own default; false = send Gemini's native channel-level
     /// minimal thinking config.
     pub thinking_enabled: bool,
+    /// Optional per-request output token cap selected by the polish strategy.
+    pub max_output_tokens: Option<u32>,
 }
 
 impl GeminiConfig {
@@ -62,11 +64,22 @@ impl GeminiConfig {
             temperature: DEFAULT_TEMPERATURE,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             thinking_enabled: false,
+            max_output_tokens: None,
         }
     }
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.thinking_enabled = enabled;
+        self
+    }
+
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = temperature;
+        self
+    }
+
+    pub fn with_max_output_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_tokens;
         self
     }
 }
@@ -169,6 +182,23 @@ impl GeminiProvider {
         let body_text = self.send_unary(&url, &body).await?;
         let raw = extract_assistant_content(&body_text)?;
         Ok(clean_polish_output(&raw))
+    }
+
+    pub(crate) async fn selection_streaming<F, C>(
+        &self,
+        system: String,
+        user: String,
+        on_delta: F,
+        should_cancel: C,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
+        let body = self.build_generate_body(&system, vec![user_content(&user)]);
+        let url = stream_generate_content_url(&self.config.base_url, &self.config.model);
+        self.send_streaming(&url, &body, on_delta, should_cancel)
+            .await
     }
 
     pub async fn polish_streaming<F, C>(
@@ -318,6 +348,9 @@ impl GeminiProvider {
     /// `generationConfig` injection: temperature + channel-level thinkingConfig.
     fn build_generate_body(&self, system_prompt: &str, contents: Vec<Value>) -> Value {
         let mut generation_config = json!({ "temperature": self.config.temperature });
+        if let Some(max_tokens) = self.config.max_output_tokens {
+            generation_config["maxOutputTokens"] = json!(max_tokens);
+        }
         if !self.config.thinking_enabled {
             generation_config["thinkingConfig"] = disabled_thinking_config();
         }
@@ -328,24 +361,39 @@ impl GeminiProvider {
         })
     }
 
-    async fn post(
+    pub(crate) fn ask_config(&self) -> &GeminiConfig {
+        &self.config
+    }
+
+    pub(crate) fn ask_request(&self, body: &Value) -> reqwest::RequestBuilder {
+        let url = stream_generate_content_url(&self.config.base_url, &self.config.model);
+        self.build_request(&crate::net::credential_http_for_url(&url), &url, body, true)
+    }
+
+    fn build_request(
         &self,
+        client: &reqwest::Client,
         url: &str,
         body: &Value,
         sse: bool,
-    ) -> Result<reqwest::Response, LLMError> {
-        let mut request = self
-            .client
-            .post(url)
-            .header("Content-Type", "application/json");
+    ) -> reqwest::RequestBuilder {
+        let mut request = client.post(url).header("Content-Type", "application/json");
         if sse {
             request = request.header("Accept", "text/event-stream");
         }
         if !self.config.api_key.trim().is_empty() {
             request = request.header("x-goog-api-key", self.config.api_key.as_str());
         }
-        request
-            .json(body)
+        request.json(body)
+    }
+
+    async fn post(
+        &self,
+        url: &str,
+        body: &Value,
+        sse: bool,
+    ) -> Result<reqwest::Response, LLMError> {
+        self.build_request(&self.client, url, body, sse)
             .send()
             .await
             .map_err(llm_error_from_reqwest)
@@ -445,6 +493,7 @@ impl GeminiProvider {
         // events by bytes and decoding whole events is always safe.
         let mut byte_buffer: Vec<u8> = Vec::new();
         let mut full_text = String::new();
+        let mut completed = false;
         loop {
             // Same cancel flag as polish.rs streaming — break immediately on
             // user cancel / popover close instead of draining the HTTP body
@@ -479,6 +528,12 @@ impl GeminiProvider {
                             continue;
                         }
                     };
+                    if let Some(reason) = v["candidates"][0]["finishReason"].as_str() {
+                        if reason != "STOP" {
+                            return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+                        }
+                        completed = true;
+                    }
                     // Gemini SSE: candidates[0].content.parts[*].text
                     if let Some(parts) = v["candidates"][0]["content"]["parts"].as_array() {
                         for part in parts {
@@ -494,6 +549,9 @@ impl GeminiProvider {
             }
         }
 
+        if !completed {
+            return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+        }
         log::info!(
             "[llm] HTTP 200 gemini stream done; total chars={}",
             full_text.chars().count()
@@ -731,6 +789,12 @@ fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
     let first = candidates
         .first()
         .ok_or_else(|| LLMError::ParseError("candidates array is empty".into()))?;
+    if first["finishReason"]
+        .as_str()
+        .is_some_and(|reason| reason != "STOP")
+    {
+        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+    }
     let parts = first
         .get("content")
         .and_then(|c| c.get("parts"))
@@ -1113,6 +1177,20 @@ mod tests {
         );
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "SYS");
         assert_eq!(body["contents"][0]["role"], "user");
+    }
+
+    #[test]
+    fn strategy_request_overrides_gemini_generation_config() {
+        let cfg = GeminiConfig::new("k", "gemini-2.5-flash", "https://x/v1beta")
+            .with_temperature(0.7)
+            .with_max_output_tokens(Some(321));
+        let provider = GeminiProvider::new(cfg);
+        let body = provider.build_generate_body("SYS", vec![user_content("hi")]);
+        let temperature = body["generationConfig"]["temperature"]
+            .as_f64()
+            .expect("Gemini temperature should be numeric");
+        assert!((temperature - 0.7).abs() < 1e-6);
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 321);
     }
 
     #[test]

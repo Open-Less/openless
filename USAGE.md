@@ -2,206 +2,161 @@
 
 [English](USAGE.md) | [简体中文](USAGE.zh.md)
 
+> Online documentation is continuously updated at **<https://openless.top/en/docs/>** (Chinese: **<https://openless.top/zh/docs/>**). Use this guide as the in-repo reference for installation, permissions, daily dictation, and troubleshooting.
+
 ## Installation
 
-### macOS
+See also the website download & installation guide: <https://openless.top/en/docs/installation/>.
 
-1. Download `OpenLess_<version>_aarch64.dmg` from [Releases](https://github.com/Open-Less/openless/releases/latest).
-2. Open the dmg and drag OpenLess.app into the Applications folder.
-3. Double-click to launch.
+### macOS (14 Sonoma+)
 
-### Windows
+1. Download `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel) from [GitHub Releases](https://github.com/Open-Less/openless/releases/latest).
+2. Open the DMG and drag **OpenLess.app** into **Applications**.
+3. Launch OpenLess from Applications.
 
-1. Download `OpenLess_<version>_x64-setup.exe` from [Releases](https://github.com/Open-Less/openless/releases/latest).
+You can also install the Stable release via Homebrew (optional update reminder setup in [docs/guides/homebrew.md](docs/guides/homebrew.md)):
+
+```bash
+brew tap Open-Less/openless https://github.com/Open-Less/openless
+brew install --cask openless
+brew update && brew upgrade openless
+```
+
+Published releases follow the signing and notarization checks in [RELEASING.md](RELEASING.md). Separately distributed dev builds may use ad-hoc signing.
+
+### Windows (10+)
+
+1. Download `OpenLess_<version>_x64-setup.exe` or `OpenLess_<version>_x64_en-US.msi` from [GitHub Releases](https://github.com/Open-Less/openless/releases/latest).
 2. Run the installer and follow the prompts.
 3. Launch OpenLess from the Start menu.
 
 ### Linux
 
-Linux runs on a Qt6 WebEngine host (`linux-qt`) over a headless Rust backend (`linux-web`), and does not depend on Tauri or WebKitGTK.
+Linux runs on a native `egui` host with no Tauri or WebKitGTK dependency.
 
-1. No package is shipped with Releases yet: Linux packaging stays paused until the L01–L12 on-device acceptance is complete, so build from source for now (see the build sections in the [README](README.md)).
-2. Requires glibc ≥ 2.39 (Ubuntu 24.04 or an equivalent distribution).
-3. The global hotkey is provided by the fcitx5 plugin: enable the OpenLess addon in fcitx5 and bind a key. There is no in-app updater and no AppImage.
+1. Linux release packaging is currently paused pending on-device acceptance; build from source using [openless-all/README.md#shared-backend-and-linux-host](openless-all/README.md#shared-backend-and-linux-host).
+2. Requires glibc ≥ 2.39 (Ubuntu 24.04 or equivalent).
+3. Global hotkeys are handled by the `fcitx5` plugin — enable the OpenLess addon in `fcitx5` and bind a trigger key. Linux has no AppImage and no in-app updater.
 
-### Android
+### Android (8.0+)
 
-1. Download the APK for your phone, `OpenLess_<version>_arm64-v8a.apk`, from [Releases](https://github.com/Open-Less/openless/releases/latest) (use `armeabi-v7a` for older 32-bit devices).
-2. Allow "install unknown apps" and install it.
-3. Grant microphone permission on the first recording. To insert text with the keyboard, enable the OpenLess keyboard in system settings and set it as the current input method.
-4. In-app updates live under Settings → About & updates.
+1. Download `OpenLess_<version>_arm64-v8a.apk` from [GitHub Releases](https://github.com/Open-Less/openless/releases/latest) (use `armeabi-v7a` for older 32-bit devices).
+2. Allow installing unknown apps and install the APK.
+3. Grant microphone permission on first recording. To dictate into other apps, enable the OpenLess keyboard in system input-method settings and switch to it.
+4. Check for updates under **Settings → About & updates**.
 
-### iOS
+### iOS (16+)
 
-1. There is no downloadable IPA. Build it from the [`openless-all/ios/`](openless-all/ios/README.md) sources with Xcode and sign it with a personal team.
-2. See the [iOS guide](openless-all/ios/README.md) for the full build, install, and keyboard-enable steps.
+1. Pre-signed IPAs are not distributed. Build from `openless-all/ios/` with Xcode and sign with your personal Apple team.
+2. Follow [openless-all/ios/README.md](openless-all/ios/README.md) for build, signing, and keyboard setup.
 
 ### HarmonyOS (adapting)
 
-1. Download the unsigned `OpenLess_harmony_arm64.hap` from the same Release.
-2. Sign it for your own device before installing. A phone or tablet rejects an unsigned HAP: the debug certificate has to match the bundle name `openless.hm.com`, and the debug Profile has to include the target device — a Profile issued for another bundle name cannot be reused. DevEco Studio's automatic signing (Huawei account) does both for you; when building from the CLI, put the certificate and Profile in the local signing directory (default `~/.local/share/harmony/signing/local-test`, override with `OPENLESS_HARMONY_SIGNING_DIR`) and the build emits `entry-default-signed.hap`.
-3. Install the signed HAP with DevEco Studio or `hdc`; AppGallery packages are submitted manually.
-4. Open the main app once to finish provider configuration before the keyboard can reuse the voice settings. There is no update flow yet. See [`harmony/README.md`](openless-all/app/harmony/README.md) for build and signing.
+1. Download the unsigned `OpenLess_harmony_arm64.hap` from the release assets.
+2. Sign it for your device before installing (devices reject unsigned HAPs; debug certificate must match bundle `openless.hm.com` and profile must include your device). DevEco Studio automatic signing handles this, or place signing files in `~/.local/share/harmony/signing/local-test` (`OPENLESS_HARMONY_SIGNING_DIR`).
+3. Install with DevEco Studio or `hdc`. Open the main app once to configure speech services before using the input method.
 
 ---
 
-## First-time setup
+## First-Time Setup
 
-### macOS permissions
+### System Permissions
 
-After the first launch, grant the following in System Settings → Privacy & Security:
+- **macOS**: Open **System Settings → Privacy & Security** and grant **Microphone** and **Accessibility**. After granting Accessibility, **quit OpenLess completely and relaunch** so global hotkeys take effect.
+- **Windows**: Grant **Microphone** permission when prompted, then check **Settings → Permissions & data** to confirm the global hotkey listener is active.
+- **Android**: Grant **Microphone** on first use and enable **OpenLess Keyboard** under System Settings → Language & input. Accessibility is optional and only needed if you enable local vocabulary learning inside supported editors.
+- **iOS**: Grant **Microphone** (and Speech Recognition if used). Enable **Settings → General → Keyboard → Keyboards → Add New Keyboard → OpenLess** and turn on **Allow Full Access** for shared settings and voice control.
+- **HarmonyOS**: Grant **Microphone** and **Network**, then enable **OpenLess InputMethod** in system input-method settings (no accessibility permission required).
 
-1. **Microphone** — lets OpenLess record.
-2. **Accessibility** — lets OpenLess read and write the focused text field. After granting it you must **quit OpenLess completely and relaunch** before the hotkey works.
+### Configure Speech & Model Services
 
-### Windows permissions
+Open **Settings → AI Services & Models** and choose one of three dictation pipelines. Complete step-by-step provider instructions live on the official docs:
 
-1. Grant **microphone** permission when prompted.
-2. Open OpenLess → Settings → Permissions & data and confirm the global hotkey listener shows as running.
+- **Official Setup Guide**: <https://openless.top/en/docs/setup/> (Chinese: <https://openless.top/zh/docs/setup/>)
+- **Quick Reference**: [docs/guides/speech-services.md](docs/guides/speech-services.md)
 
-### Android permissions
+The three pipelines are:
+1. **Traditional (ASR + optional LLM)**: Transcribe via an ASR provider (Volcengine, Alibaba Cloud Bailian, iFlytek RTASR, Tencent Hunyuan, OpenAI-compatible, or local models), then optionally polish/translate with an LLM provider.
+2. **Multimodal (single model)**: Send audio directly to an audio-capable model (Google Gemini, OpenAI Audio, Qwen-Omni) for one-step transcription and rewriting.
+3. **DeepSeek Suite**: Use an official DeepSeek API key for voice dictation, Ask, web search, and spoken readback.
 
-1. **Microphone** — granted on the first recording.
-2. **Input method** — enable the OpenLess keyboard in System Settings → Language & input and set it as the current IME before it can type into other apps.
-3. **Optional: accessibility** — "learn from corrections" reads text in supported editors; without it you can confirm words manually with "Remember a word" in the history detail view.
+All API keys are stored in the OS credential vault (service = `com.openless.app`: macOS Keychain, Windows Credential Manager, Linux Secret Service, iOS Keychain) and are never saved in plaintext config files.
 
-### iOS permissions
+---
 
-1. Grant **microphone** and **speech recognition** when prompted.
-2. **Keyboard** — Settings → General → Keyboard → Keyboards → Add New Keyboard → OpenLess.
-3. **Full Access** — enable it for shared settings and voice control; basic typing does not need it.
+## Daily Usage
 
-### HarmonyOS permissions
+See also <https://openless.top/en/docs/voice-input/> for live examples and polish tips.
 
-1. **Microphone** and **network** permissions use the system declarations.
-2. **Input method** — enable "OpenLess InputMethod" in system input-method settings, then switch to it in a text field; voice results are written through the system-assigned input session, without accessibility.
-3. When the IME is not enabled, copy and paste manually as a fallback.
+### Recording & Continuous Dictation
 
-### Entering credentials
+- **Start / Stop**: Press the global hotkey (defaults: macOS right Option, Windows right Control; Linux via `fcitx5`; mobile via app or keyboard). Both **toggle** and **push-to-talk** modes are supported, plus `MediaPlayPause` for wired headset buttons.
+- **Continuous background dictation**: As soon as you stop recording one segment, it moves to an asynchronous background queue while freezing its target app and cursor context — you can start the next segment immediately, and finished results are inserted in order.
+- **Cancel**: Press `Esc` at any time (recording, polishing, or insertion) to discard the current segment cleanly.
+- **Safe insertion**: Text inserts straight into the focused input field; if an app blocks direct insertion, OpenLess automatically copies the result to your clipboard so nothing is lost.
 
-If you are new to Volcengine ASR, start with the illustrated walkthrough:  
-[OpenLess Volcengine ASR setup](docs/volcengine-setup.md)
+### Output Modes, Style Packs & Marketplace
 
-For iFlytek real-time transcription, see [OpenLess iFlytek ASR setup](docs/xfyun-asr.md) (AppID + API Key, Settings → AI & models → Speech recognition channels → iFlytek real-time transcription).
+Switch modes in the main window, capsule, or Settings:
 
-Open OpenLess → **Settings** and fill in:
-
-| Field | Description |
+| Mode | Behavior |
 | --- | --- |
-| Volcengine App ID | Application ID of the speech recognition service |
-| Volcengine Access Token | Access credential for speech recognition |
-| Volcengine Resource ID | Speech recognition resource ID |
-| Ark API Key | API key for text polishing |
-| Ark Model ID | Model ID to use (for example `doubao-pro-32k`) |
-| Ark Endpoint | Endpoint URL, default `https://ark.cn-beijing.volces.com/api/v3/chat/completions` |
+| **Raw** | Outputs the ASR transcript directly without LLM rewriting |
+| **Light Polish** | Removes filler words, fixes punctuation and self-corrections, keeps your original tone |
+| **Structured (AI Prompt)** | Organizes spoken thoughts into structured context, constraints, and requests ready for ChatGPT / Claude / Cursor |
+| **Formal** | Rewrites spoken input into clean, professional written prose |
 
-Settings take effect immediately after saving; no restart is needed.
+You can also assign **Style Packs** (custom system prompts, hotkey switching, per-app automatic routing) and browse or install community packs from the in-app **Marketplace**. See reference polish examples in [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl).
 
-Volcengine ASR + Ark is the shortest path. Under Settings → AI & models → Speech recognition channels / Text processing channels you can also pick iFlytek real-time ASR, Tencent Hunyuan, Alibaba Bailian, StepFun, Zhipu GLM, Xiaomi MiMo, OpenAI-compatible endpoints, and nearly thirty other ASR providers plus more than twenty polish providers (the full list is in the [README](README.md) "feature status" section). Credentials live in the OS credential vault (service = `com.openless.app`): macOS Keychain, Windows Credential Manager, Linux keyring. They are never written to disk in plaintext.
+### Ask & Selection Rewrite
 
----
+Desktop hosts provide a standalone **Ask** window and selected-text rewrite workflow. Generated replies stay inside the Ask window until the original target input can be safely verified for writeback, or can be copied manually.
 
-## Basic usage
+### Dictionary & Optional Cursor Context
 
-### Start recording
+- **Personal Dictionary**: Add names, domain terms, and acronyms under **Dictionary**. Enabled entries are sent as ASR hotwords (where supported) and injected into the polish prompt.
+- **Learn from Corrections (experimental, opt-in)**: Under **Settings → Experiments & Extensions**, OpenLess can observe post-insertion edits in supported editors and suggest new terms for explicit confirmation (never silently added, never uploaded).
+- **Cursor Context (opt-in, off by default)**: Under **Settings → Privacy → Data storage**, OpenLess can read a few hundred characters around the caret (macOS / Windows UIA / Android IME `InputConnection`) to disambiguate homophones. Password fields, Secure Input, password managers, and terminals are always excluded.
 
-Press the global hotkey (desktop defaults: right Option on macOS, right Control on Windows; on Linux the hotkey comes from the fcitx5 plugin and must be configured there; Android, iOS, and HarmonyOS trigger it in-app or from the keyboard).  
-A status capsule appears at the screen edge showing "recording".
+### History, Remote Input & Encrypted Cloud Sync
 
-### Stop recording
+- **History**: Inspect every recording's raw transcript and polished result in **History**.
+- **Mobile Remote Input**: Turn on Remote Input on desktop, verify the local HTTPS certificate SHA-256 fingerprint on your phone, enter the pairing code, and dictate from your phone straight to your computer's cursor. See [docs/guides/remote-input.md](docs/guides/remote-input.md).
+- **Encrypted Cloud Sync**: Sign in with GitHub under **Settings → Cloud Services**, review the scope disclosure, and set a sync passphrase. Settings, registered service keys, and history text are end-to-end encrypted locally before upload; keep your sync passphrase safe.
 
-Press the same hotkey again. OpenLess will:
+### Changing Hotkeys
 
-1. Stop recording and send the audio for transcription.
-2. Polish the transcript according to the current output mode.
-3. Insert the polished text into the focused field (falling back to the clipboard if insertion fails).
-
-### Cancel recording
-
-Press `Esc` while recording: the current take is discarded and nothing is inserted.
+Open **Settings → Shortcuts**. macOS supports right-side modifier keys (Option / Control / Command / Shift); Windows supports left/right modifiers and mouse side buttons (Mouse4 / Mouse5); Linux binds hotkeys inside `fcitx5`.
 
 ---
 
-## Output modes
+## Troubleshooting
 
-Switch the mode from the capsule in the main window or under Settings:
+**Q: Hotkey does nothing?**  
+macOS: Confirm Accessibility permission is enabled, then **quit and relaunch** OpenLess.  
+Windows: Check **Settings → Permissions & data** to confirm the listener is running.
 
-| Mode | Description |
-| --- | --- |
-| Raw | Outputs the transcript verbatim, with no changes |
-| Light polish | Fixes filler words, punctuation, and obvious typos while keeping the original meaning |
-| Structured (AI prompt mode) | Turns speech into a structured, constrained, context-rich prompt ready for ChatGPT / Claude / Cursor |
-| Formal | Converts speech into formal written prose |
+**Q: Transcript is empty or placeholder text?**  
+Verify your selected ASR / Multimodal / DeepSeek credentials in **Settings → AI Services & Models** and run a test check (see <https://openless.top/en/docs/setup/>).
 
----
+**Q: Text was copied to the clipboard instead of inserted?**  
+When a focused field restricts accessibility or IME injection, OpenLess falls back to the clipboard automatically — press `Cmd+V` / `Ctrl+V` to paste.
 
-## Dictionary
+**Q: In Windows fullscreen games (e.g. Minecraft), the capsule does not appear or text is not typed?**  
+This is a Windows OS limitation ([issue #457](https://github.com/Open-Less/openless/issues/457)):
+- **Exclusive fullscreen**: Standard windows cannot render over exclusive fullscreen DirectX/OpenGL apps. Switch the game to **Borderless Windowed Fullscreen**.
+- **Privilege mismatch (UIPI)**: If the game runs as Administrator while OpenLess does not, Windows blocks keyboard events. Run both at the same privilege level.
+- **Chat box closed**: Open the in-game chat box first (e.g. press `T` in Minecraft) before dictating.
 
-The dictionary improves recognition of specific words (product names, people, jargon).
+**Q: How do I use local ASR so audio never leaves my machine?**  
+Download a local model (Windows: **Settings → AI & Models → Local ASR Models**; macOS: **Settings → Experiments & Extensions → Experimental Local Speech Models**), then enable the local provider in **ASR Providers** and **drag it to the very top** of the list. Requests always use the first enabled provider (switch back to Traditional mode if you were in Multimodal mode).
 
-1. Open the main window → **Dictionary**.
-2. Click "New" and fill in the correct spelling, category, and note.
-3. Once enabled, entries are injected as hot words into ASR and help semantic decisions during polishing.
-
----
-
-## History
-
-Main window → **History** lists every recording, including the raw transcript and the polished result.
+**Q: Do Linux, iOS, or HarmonyOS support auto-updates?**  
+No. Linux is updated via rebuilt source or manually installed packages; iOS is rebuilt and signed from source; HarmonyOS currently requires installing a new signed HAP.
 
 ---
 
-## Changing the hotkey
+## Community
 
-Main window → **Settings → Shortcuts**, then pick the trigger key.  
-macOS supports the right-side modifiers (Option / Control / Command / Shift); Windows supports left and right modifiers plus mouse side buttons (Mouse4 / Mouse5).
-
-Linux handles the global hotkey through the fcitx5 plugin and its configuration; Android, iOS, and HarmonyOS do not register system-wide hotkeys and use the in-app or keyboard voice button instead.
-
----
-
-## FAQ
-
-**Q: The hotkey does nothing?**  
-macOS: make sure Accessibility is granted and that you relaunched OpenLess afterwards.  
-Windows: check the listener status under Settings → Permissions & data.
-
-**Q: The result is empty or placeholder text?**  
-Check that the Volcengine ASR credentials are correct. Recognition only works once they are.
-
-**Q: The text was only copied to the clipboard instead of being inserted?**  
-When the target field does not support accessibility writes (some hardened apps), OpenLess falls back to copying to the clipboard; paste it manually.
-
-**Q: While playing Minecraft or another fullscreen game on Windows, the OpenLess capsule does not appear / characters are not typed?**  
-This is a **Windows-level limitation** that OpenLess cannot work around (see [issue #457](https://github.com/Open-Less/openless/issues/457)):
-
-- **Exclusive fullscreen**: standard app windows (including the OpenLess capsule) are **not drawn over exclusive-fullscreen DirectX/OpenGL apps**. Switch the game to **borderless windowed fullscreen**. In Minecraft: Video Settings → turn Fullscreen off (keeping the window maximized is fine).
-- **Mismatched admin rights (UIPI)**: if the game runs elevated and OpenLess does not, Windows blocks OpenLess from receiving the game's foreground keystrokes and the hotkey never fires. Align the two (run both elevated or both normally).
-- **Game chat not open**: characters are typed by simulating keyboard events. In Minecraft you must press `T` to open chat before OpenLess's input lands there.
-
-macOS has no exclusive fullscreen (every "fullscreen" is a bordered window on a Space), so the limitation does not apply.
-
-**Q: The polished result is not what I expected?**  
-Try another output mode, or add the relevant proper nouns to the dictionary.
-
-**Q: Is there auto-update on Linux?**  
-No. Linux gets deb/rpm packages (after on-device acceptance) and source builds; there is no AppImage or in-app updater, so upgrades mean installing a new package manually.
-
-**Q: How do I update HarmonyOS or iOS?**  
-HarmonyOS has no update flow yet — reinstall a new HAP. iOS means rebuilding from source and re-signing. Neither shows in-app update prompts.
-
-**Q: How do I use local recognition so audio is not uploaded?**  
-Local models never take over the channel you already use: you still have to make the local channel the first enabled one. While that local channel is serving requests, audio stays on the machine; if a cloud channel is first, it is uploaded as usual.
-
-On Windows, open Settings → AI & models → Local ASR models, download a model, then add and enable the matching local channel from the speech recognition channel list: Local Whisper (Foundry Local), Local sherpa-onnx (Experimental), or Local Whisper (batch). On macOS, open Settings → Experiments & extensions → Experimental local speech models and enable TextStream, SenseVoice Small, or Embedding Gemma; models are downloaded on demand and are not bundled with the installer, and the app then offers to open the channel list.
-
-In both cases finish in Settings → AI & models → Speech recognition channels: enable the channel and drag it to the top. Requests use the first enabled channel, so until the local one is first, audio still goes to your existing cloud channel. The macOS experimental models run in the traditional pipeline (ASR + LLM); if the pipeline mode is multimodal, switch back first.
-
----
-
-## Community and support
-
-Join the QQ user groups to report issues or exchange tips:
-
-**QQ Group 1: 1078960553 (full)**  
-**QQ Group 2: 1095794054**
+- **QQ Group 1**: `1078960553` (full)
+- **QQ Group 2**: `1095794054`

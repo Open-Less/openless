@@ -1,12 +1,21 @@
 /* Shared by the recording pill and its translation badge in every host. */
 .ol-default-capsule,
+.ol-processing-satellite,
 .ol-classic-translation {
   --ol-pill-scheme: light;
-  --ol-pill-fill: rgb(255 255 255 / 86%);
+  --ol-pill-fill: rgb(255 255 255 / 92%);
   --ol-pill-border: rgb(79 91 115 / 24%);
-  --ol-pill-highlight: rgb(255 255 255 / 82%);
+  --ol-pill-highlight: rgb(255 255 255 / 88%);
+  --ol-satellite-fill: rgb(230 235 243 / 92%);
+  --ol-satellite-border: rgb(79 91 115 / 22%);
+  --ol-satellite-ink: #475569;
   --ol-pill-ink: #1d4ed8;
+  --ol-pill-shimmer-peak: #2563eb;
+  --ol-pill-shimmer-glow: rgb(59 130 246 / 45%);
   --ol-pill-sweep: rgb(147 197 253 / 28%);
+  --ol-pill-wave-fill: rgb(59 130 246 / 14%);
+  --ol-pill-wave-edge: rgb(255 255 255 / 72%);
+  --ol-pill-wave-bubble: rgb(255 255 255 / 58%);
   --ol-pill-cancel: rgb(102 116 139 / 10%);
   --ol-pill-cancel-hover: rgb(102 116 139 / 18%);
   --ol-pill-cancel-ink: #525d6e;
@@ -16,13 +25,22 @@
   --ol-pill-shadow: rgb(15 23 42 / 18%);
 }
 [data-ol-theme='dark'] .ol-default-capsule,
+[data-ol-theme='dark'] .ol-processing-satellite,
 [data-ol-theme='dark'] .ol-classic-translation {
   --ol-pill-scheme: dark;
-  --ol-pill-fill: rgb(28 34 45 / 88%);
+  --ol-pill-fill: rgb(32 39 52 / 92%);
   --ol-pill-border: rgb(218 231 255 / 26%);
-  --ol-pill-highlight: rgb(235 244 255 / 13%);
+  --ol-pill-highlight: rgb(235 244 255 / 15%);
+  --ol-satellite-fill: rgb(20 25 34 / 90%);
+  --ol-satellite-border: rgb(218 231 255 / 18%);
+  --ol-satellite-ink: #94a3b8;
   --ol-pill-ink: #a7c7ff;
+  --ol-pill-shimmer-peak: #ffffff;
+  --ol-pill-shimmer-glow: rgb(147 197 253 / 60%);
   --ol-pill-sweep: rgb(90 145 240 / 22%);
+  --ol-pill-wave-fill: rgb(96 165 250 / 18%);
+  --ol-pill-wave-edge: rgb(219 234 254 / 52%);
+  --ol-pill-wave-bubble: rgb(219 234 254 / 42%);
   --ol-pill-cancel: rgb(225 235 255 / 10%);
   --ol-pill-cancel-hover: rgb(225 235 255 / 18%);
   --ol-pill-cancel-ink: #e2eaf7;
@@ -85,8 +103,7 @@
   height: 28px;
   box-sizing: border-box;
   align-items: center;
-  gap: 6px;
-  padding: 3px 4px 3px 8px;
+  padding: 3px 8px;
   border-radius: var(--ol-r-sm);
   font-size: 11px;
   color: var(--ol-pill-ink);
@@ -100,9 +117,49 @@
     inset 0 1px 0 var(--ol-pill-highlight);
   white-space: nowrap;
   transform-origin: center bottom;
+  will-change: transform, opacity;
+  transition: padding-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ol-classic-translation[data-picker-open='true'] {
+  padding-right: 4px;
+}
+.ol-classic-translation-label {
+  flex: 0 0 auto;
+}
+/* Pure CSS grid-template-columns 0fr -> 1fr avoids Framer Motion width:'auto' JS
+   layout measurement stalls on first Shift press and after long idle. */
+.ol-translation-language-collapse {
+  display: inline-grid;
+  grid-template-columns: 0fr;
+  align-items: center;
+  margin-left: 0;
+  opacity: 0;
+  flex: 0 0 auto;
+  transition:
+    grid-template-columns 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-left 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease;
+}
+.ol-translation-language-collapse[data-open='true'] {
+  grid-template-columns: 1fr;
+  margin-left: 6px;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-translation-language-collapse {
+    transition: none;
+  }
+}
+.ol-translation-language-collapse-inner {
+  min-width: 0;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
 }
 .ol-translation-language {
   pointer-events: auto;
+  flex: 0 0 auto;
+  width: max-content;
   max-width: 174px;
 }
 .ol-select-popup.ol-capsule-language-popup {
@@ -116,13 +173,17 @@
 }
 .ol-translation-language .ol-select-trigger {
   height: 22px;
-  min-width: 92px;
+  min-width: 0;
   max-width: 174px;
-  width: auto;
-  padding: 0 7px;
+  width: max-content;
+  gap: 4px;
+  padding: 0 6px 0 8px;
   border-radius: var(--ol-radius);
   background: var(--ol-control-solid);
   font-size: 11px;
+}
+.ol-translation-language .ol-select-value {
+  flex: 0 1 auto;
 }
 .ol-translation-language[data-busy='true'] {
   opacity: 0.6;
@@ -177,6 +238,10 @@
 .ol-siri-capsule-stack,
 .ol-typeless-capsule-stack {
   width: 460px;
+}
+
+.ol-classic-capsule-stack {
+  gap: 24px;
 }
 
 .ol-siri-capsule-stack .ol-capsule-transcript-rail {

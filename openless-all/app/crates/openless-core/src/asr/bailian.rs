@@ -13,17 +13,17 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{json, Value};
 use tokio::net::{lookup_host, TcpStream};
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex, Notify};
 use tokio_tungstenite::client_async_tls;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 
+use super::stream_send::{send_ws_message_with_timeout, PacedSendClock, SharedWriter, WsStream};
 use super::{AudioConsumer, RawTranscript};
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
@@ -36,6 +36,7 @@ pub const TARGET_AUDIO_CHUNK_BYTES: usize = 3_200;
 const TARGET_AUDIO_CHUNK_BYTES_8K: usize = 1_600;
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cap on the WebSocket handshake (TCP + TLS + HTTP upgrade) itself. Without it
 /// `connect_async` waits forever, and `open_session` is awaited with `block_on` on
 /// the serial hotkey bridge thread — a hang means hotkeys are completely dead
@@ -134,10 +135,6 @@ async fn connect_ws_prefer_ipv4(
     connect_ws_to_addrs(request, order_connect_addrs(addrs)).await
 }
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
-type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
-
 #[derive(Clone, Debug)]
 pub struct BailianCredentials {
     pub api_key: String,
@@ -175,7 +172,7 @@ pub fn endpoint_scheme_is_websocket(endpoint: &str) -> bool {
     lower.starts_with("wss://") || lower.starts_with("ws://")
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum BailianASRError {
     #[error("credentials missing")]
     CredentialsMissing,
@@ -192,7 +189,7 @@ pub enum BailianASRError {
 }
 
 enum SendItem {
-    Audio(Vec<u8>),
+    Audio { payload: Vec<u8>, input_bytes: u64 },
     Finish(oneshot::Sender<Result<(), BailianASRError>>),
 }
 
@@ -203,11 +200,16 @@ struct SyncState {
     audio_scratch: Vec<u8>,
     downsample_remainder: Vec<u8>,
     bytes_received: u64,
+    bytes_sent_input: u64,
     task_started: bool,
     task_finished: bool,
+    finish_sent: bool,
+    ending: bool,
+    send_error: Option<BailianASRError>,
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, BailianASRError>>>,
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
+    cancel_tx: Option<watch::Sender<bool>>,
     /// sentence_id -> text; joined in sentence_id order to form the final text. A
     /// later result for the same sentence_id overwrites the previous one, eliminating
     /// the duplication caused by cumulative text.
@@ -221,6 +223,7 @@ struct SyncState {
 
 pub struct BailianRealtimeASR {
     credentials: BailianCredentials,
+    frame_send_timeout: Duration,
     task_spawner: Arc<dyn TaskSpawner>,
     state: ParkingMutex<SyncState>,
     writer: SharedWriter,
@@ -240,6 +243,7 @@ impl BailianRealtimeASR {
     ) -> Self {
         Self {
             credentials,
+            frame_send_timeout: FRAME_SEND_TIMEOUT,
             task_spawner,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
@@ -247,6 +251,29 @@ impl BailianRealtimeASR {
             task_started: Arc::new(Notify::new()),
             partial_sink: ParkingMutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_frame_send_timeout(mut self, timeout: Duration) -> Self {
+        self.frame_send_timeout = timeout;
+        self
+    }
+
+    fn is_8k_model(&self) -> bool {
+        model_is_8k(&self.credentials.normalized_model())
+    }
+
+    pub fn audio_coverage(&self) -> (u64, u64) {
+        let st = self.state.lock();
+        (st.bytes_sent_input, st.bytes_received)
+    }
+
+    pub fn is_stream_complete(&self) -> bool {
+        let st = self.state.lock();
+        let max_tail_discard = if self.is_8k_model() { 2 } else { 0 };
+        st.send_error.is_none()
+            && st.finish_sent
+            && st.bytes_received.saturating_sub(st.bytes_sent_input) <= max_tail_discard
     }
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
@@ -283,6 +310,7 @@ impl BailianRealtimeASR {
 
         let (final_tx, final_rx) = oneshot::channel();
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendItem>();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
         {
             let mut st = self.state.lock();
             *st = SyncState::default();
@@ -290,32 +318,84 @@ impl BailianRealtimeASR {
             st.start = Some(Instant::now());
             st.final_tx = Some(final_tx);
             st.send_tx = Some(send_tx);
+            st.cancel_tx = Some(cancel_tx);
         }
         *self.final_rx.lock() = Some(final_rx);
 
         let writer_for_worker = Arc::clone(&self.writer);
+        let weak_self_for_worker = Arc::downgrade(self);
         let task_id_for_worker = task_id.clone();
+        let frame_send_timeout = self.frame_send_timeout;
         let task_spawner = Arc::clone(&self.task_spawner);
         task_spawner.spawn(Box::pin(async move {
+            let mut clock = PacedSendClock::new();
             while let Some(item) = send_rx.recv().await {
                 match item {
-                    SendItem::Audio(chunk) => {
-                        if let Err(e) = send_binary(&writer_for_worker, chunk).await {
-                            log::error!("[bailian-asr] audio frame send failed: {e}");
+                    SendItem::Audio {
+                        payload,
+                        input_bytes,
+                    } => {
+                        let Some(scheduled_start) = clock.wait_slot(&mut cancel_rx).await else {
+                            break;
+                        };
+                        if let Err(ws_err) = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Binary(payload.into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        {
+                            let err = BailianASRError::SendFailed(
+                                ws_err.into_message("websocket writer not available"),
+                            );
+                            log::error!("[bailian-asr] audio frame send failed: {err}");
+                            if let Some(this) = weak_self_for_worker.upgrade() {
+                                this.record_send_failure(err);
+                            }
+                            // Abort before finish-task can overtake incomplete audio.
+                            break;
                         }
+                        if let Some(this) = weak_self_for_worker.upgrade() {
+                            let mut st = this.state.lock();
+                            st.bytes_sent_input = st.bytes_sent_input.saturating_add(input_bytes);
+                        }
+                        clock.mark_sent(scheduled_start, input_bytes as usize, BYTES_PER_MS, 2);
                     }
                     SendItem::Finish(done) => {
-                        let result =
-                            send_text(&writer_for_worker, finish_task_message(&task_id_for_worker))
-                                .await
-                                .map_err(|e| BailianASRError::SendFailed(e.to_string()));
+                        let result = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Text(finish_task_message(&task_id_for_worker).into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        .map_err(|ws_err| {
+                            BailianASRError::SendFailed(
+                                ws_err.into_message("websocket writer not available"),
+                            )
+                        });
+                        match &result {
+                            Ok(()) => {
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.state.lock().finish_sent = true;
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("[bailian-asr] finish-task send failed: {err}");
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.record_send_failure(err.clone());
+                                }
+                            }
+                        }
                         let _ = done.send(result);
+                        break;
                     }
                 }
             }
         }));
 
-        send_text(
+        if let Err(error) = send_text(
             &self.writer,
             run_task_message(
                 &task_id,
@@ -323,7 +403,11 @@ impl BailianRealtimeASR {
                 self.credentials.vocabulary_id.as_deref(),
             ),
         )
-        .await?;
+        .await
+        {
+            self.cancel();
+            return Err(error);
+        }
 
         let weak_self = Arc::downgrade(self);
         let task_spawner = Arc::clone(&self.task_spawner);
@@ -364,43 +448,66 @@ impl BailianRealtimeASR {
         started.as_mut().enable();
         let ready = {
             let st = self.state.lock();
-            st.task_started || st.task_finished
+            st.task_started || st.task_finished || st.send_error.is_some()
         };
         if !ready {
             tokio::time::timeout(Duration::from_secs(5), started)
                 .await
                 .map_err(|_| BailianASRError::FinalResultTimeout)?;
         }
-        let (send_tx, tail_chunks) = {
+        let model = self.credentials.normalized_model();
+        let input_scale = if model_is_8k(&model) { 2u64 } else { 1u64 };
+        let (done_tx, done_rx) = oneshot::channel();
+        {
             let mut st = self.state.lock();
-            if model_is_8k(&self.credentials.normalized_model()) {
+            if let Some(ref error) = st.send_error {
+                return Err(error.clone());
+            }
+            let Some(send_tx) = st.send_tx.take() else {
+                return Err(BailianASRError::SendFailed(
+                    "websocket session is not open".to_string(),
+                ));
+            };
+            st.ending = true;
+            if model_is_8k(&model) {
                 clear_downsample_tail(&mut st.downsample_remainder);
             }
-            let send_tx = st.send_tx.clone();
             if !st.pending_audio.is_empty() {
                 let pending = std::mem::take(&mut st.pending_audio);
                 st.audio_scratch.extend_from_slice(&pending);
             }
-            let tail = if st.audio_scratch.is_empty() {
-                Vec::new()
-            } else {
-                vec![std::mem::take(&mut st.audio_scratch)]
-            };
-            (send_tx, tail)
-        };
-        let Some(send_tx) = send_tx else {
-            return Ok(());
-        };
-        for chunk in tail_chunks {
-            let _ = send_tx.send(SendItem::Audio(chunk));
+            let mut tail_chunks = drain_audio_chunks_for_model(&mut st.audio_scratch, &model);
+            if !st.audio_scratch.is_empty() {
+                tail_chunks.push(std::mem::take(&mut st.audio_scratch));
+            }
+            for payload in tail_chunks {
+                let input_bytes = (payload.len() as u64).saturating_mul(input_scale);
+                if send_tx
+                    .send(SendItem::Audio {
+                        payload,
+                        input_bytes,
+                    })
+                    .is_err()
+                {
+                    return Err(st.send_error.clone().unwrap_or_else(|| {
+                        BailianASRError::SendFailed("send worker closed".to_string())
+                    }));
+                }
+            }
+            if send_tx.send(SendItem::Finish(done_tx)).is_err() {
+                return Err(st.send_error.clone().unwrap_or_else(|| {
+                    BailianASRError::SendFailed("send worker closed".to_string())
+                }));
+            }
         }
-        let (done_tx, done_rx) = oneshot::channel();
-        send_tx
-            .send(SendItem::Finish(done_tx))
-            .map_err(|_| BailianASRError::SendFailed("send worker closed".to_string()))?;
-        done_rx
-            .await
-            .map_err(|_| BailianASRError::SendFailed("finish ack dropped".to_string()))?
+        match done_rx.await {
+            Ok(inner) => inner,
+            Err(_) => {
+                Err(self.state.lock().send_error.clone().unwrap_or_else(|| {
+                    BailianASRError::SendFailed("finish ack dropped".to_string())
+                }))
+            }
+        }
     }
 
     pub async fn await_final_result(&self) -> Result<RawTranscript, BailianASRError> {
@@ -422,7 +529,11 @@ impl BailianRealtimeASR {
         st.send_tx.take();
         st.final_tx.take();
         st.task_finished = true;
+        if let Some(tx) = st.cancel_tx.as_ref() {
+            let _ = tx.send(true);
+        }
         drop(st);
+        self.task_started.notify_waiters();
         let writer = Arc::clone(&self.writer);
         self.task_spawner.spawn(Box::pin(async move {
             let _ = close_writer(&writer).await;
@@ -470,6 +581,8 @@ impl BailianRealtimeASR {
     }
 
     fn mark_task_started(&self) {
+        let model = self.credentials.normalized_model();
+        let input_scale = if model_is_8k(&model) { 2u64 } else { 1u64 };
         let (send_tx, chunks) = {
             let mut st = self.state.lock();
             st.task_started = true;
@@ -478,15 +591,16 @@ impl BailianRealtimeASR {
                 st.audio_scratch.extend_from_slice(&pending);
             }
             let send_tx = st.send_tx.clone();
-            let chunks = drain_audio_chunks_for_model(
-                &mut st.audio_scratch,
-                &self.credentials.normalized_model(),
-            );
+            let chunks = drain_audio_chunks_for_model(&mut st.audio_scratch, &model);
             (send_tx, chunks)
         };
         if let Some(tx) = send_tx {
-            for chunk in chunks {
-                let _ = tx.send(SendItem::Audio(chunk));
+            for payload in chunks {
+                let input_bytes = (payload.len() as u64).saturating_mul(input_scale);
+                let _ = tx.send(SendItem::Audio {
+                    payload,
+                    input_bytes,
+                });
             }
         }
         self.task_started.notify_waiters();
@@ -568,6 +682,9 @@ impl BailianRealtimeASR {
             }
             st.task_finished = true;
             st.send_tx.take();
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
             let text = if st.final_segments.is_empty() {
                 st.last_result_text.clone()
             } else {
@@ -586,34 +703,82 @@ impl BailianRealtimeASR {
         if let Some(tx) = tx {
             let _ = tx.send(Ok(RawTranscript { text, duration_ms }));
         }
+        self.task_started.notify_waiters();
         self.close_on_runtime();
     }
 
     fn finish_with_partial_or_error(&self, error: BailianASRError) {
-        let has_partial = {
-            let st = self.state.lock();
-            !st.last_result_text.trim().is_empty()
-                || !st.final_segments.is_empty()
-                || !st.partial_segments.is_empty()
+        self.resolve_partial_or_error(error, false);
+    }
+
+    fn record_send_failure(&self, error: BailianASRError) {
+        self.resolve_partial_or_error(error, true);
+    }
+
+    fn resolve_partial_or_error(&self, error: BailianASRError, clear_scratch: bool) {
+        let (tx, outcome) = {
+            let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
+            st.send_tx.take();
+            if clear_scratch {
+                st.pending_audio.clear();
+                st.audio_scratch.clear();
+            }
+            if st.task_finished {
+                (None, None)
+            } else {
+                st.task_finished = true;
+                if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                    let _ = cancel_tx.send(true);
+                }
+                let has_partial = !st.last_result_text.trim().is_empty()
+                    || !st.final_segments.is_empty()
+                    || !st.partial_segments.is_empty();
+                let tx = st.final_tx.take();
+                let outcome = if has_partial {
+                    let text = if st.final_segments.is_empty() {
+                        st.last_result_text.clone()
+                    } else {
+                        let segments: Vec<String> = st.final_segments.values().cloned().collect();
+                        merge_segments(&segments)
+                    };
+                    let duration_ms = if st.bytes_received > 0 {
+                        st.bytes_received / BYTES_PER_MS
+                    } else {
+                        st.start
+                            .map(|start| start.elapsed().as_millis() as u64)
+                            .unwrap_or_default()
+                    };
+                    Ok(RawTranscript { text, duration_ms })
+                } else {
+                    Err(error)
+                };
+                (tx, Some(outcome))
+            }
         };
-        if has_partial {
-            // Consistent with Volcengine: when the connection breaks but a partial
-            // already exists, return it rather than the error, so recognized text is
-            // not lost.
-            self.finish_success();
-        } else {
-            self.finish_error(error);
+        if let (Some(tx), Some(outcome)) = (tx, outcome) {
+            let _ = tx.send(outcome);
         }
+        self.task_started.notify_waiters();
+        self.close_on_runtime();
     }
 
     fn finish_error(&self, error: BailianASRError) {
         let tx = {
             let mut st = self.state.lock();
+            if st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
             if st.task_finished {
                 return;
             }
             st.task_finished = true;
             st.send_tx.take();
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
             st.final_tx.take()
         };
         if let Some(tx) = tx {
@@ -637,9 +802,16 @@ impl AudioConsumer for BailianRealtimeASR {
             return;
         }
         let model = self.credentials.normalized_model();
+        let input_scale = if model_is_8k(&model) { 2u64 } else { 1u64 };
         let (send_tx, chunks) = {
             let mut st = self.state.lock();
+            if st.ending {
+                return;
+            }
             st.bytes_received = st.bytes_received.saturating_add(pcm.len() as u64);
+            if st.task_finished || st.send_error.is_some() {
+                return;
+            }
             let audio = if model_is_8k(&model) {
                 st.downsample_remainder.extend_from_slice(pcm);
                 let complete_len = st.downsample_remainder.len() / 4 * 4;
@@ -658,8 +830,17 @@ impl AudioConsumer for BailianRealtimeASR {
             (st.send_tx.clone(), chunks)
         };
         if let Some(tx) = send_tx {
-            for chunk in chunks {
-                let _ = tx.send(SendItem::Audio(chunk));
+            for payload in chunks {
+                let input_bytes = (payload.len() as u64).saturating_mul(input_scale);
+                if tx
+                    .send(SendItem::Audio {
+                        payload,
+                        input_bytes,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
             }
         }
     }
@@ -789,18 +970,6 @@ async fn send_text(writer: &SharedWriter, text: String) -> Result<(), BailianASR
         ));
     };
     ws.send(Message::Text(text.into()))
-        .await
-        .map_err(|e| BailianASRError::SendFailed(e.to_string()))
-}
-
-async fn send_binary(writer: &SharedWriter, data: Vec<u8>) -> Result<(), BailianASRError> {
-    let mut guard = writer.lock().await;
-    let Some(ws) = guard.as_mut() else {
-        return Err(BailianASRError::ConnectionFailed(
-            "websocket writer not available".to_string(),
-        ));
-    };
-    ws.send(Message::Binary(data.into()))
         .await
         .map_err(|e| BailianASRError::SendFailed(e.to_string()))
 }
@@ -1336,5 +1505,238 @@ mod tests {
         assert_eq!(chunks[0].len(), TARGET_AUDIO_CHUNK_BYTES);
         assert_eq!(chunks[1].len(), TARGET_AUDIO_CHUNK_BYTES);
         assert_eq!(buffer.len(), 17);
+    }
+
+    #[tokio::test]
+    async fn buffered_audio_paces_and_tracks_coverage_across_worker() {
+        let frames = Arc::new(ParkingMutex::new(Vec::<(Instant, Vec<u8>)>::new()));
+        let finish_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let frames_srv = Arc::clone(&frames);
+        let finish_seen_srv = Arc::clone(&finish_seen);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "ws://{}/api-ws/v1/inference/",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                match msg {
+                    Message::Text(text) => {
+                        let v: Value = serde_json::from_str(&text).unwrap();
+                        let task_id = v["header"]["task_id"].as_str().unwrap_or("").to_string();
+                        match v["header"]["action"].as_str().unwrap_or_default() {
+                            "run-task" => {
+                                ws.send(Message::text(
+                                    json!({
+                                        "header": {"event": "task-started", "task_id": task_id},
+                                        "payload": {}
+                                    })
+                                    .to_string(),
+                                ))
+                                .await
+                                .unwrap();
+                            }
+                            "finish-task" => {
+                                finish_seen_srv.store(true, std::sync::atomic::Ordering::Release);
+                                ws.send(Message::text(
+                                    json!({
+                                        "header": {"event": "result-generated", "task_id": task_id},
+                                        "payload": {
+                                            "output": {
+                                                "sentence": {
+                                                    "sentence_id": 0,
+                                                    "text": "百炼完成。",
+                                                    "sentence_end": true,
+                                                    "end_time": 1000
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .to_string(),
+                                ))
+                                .await
+                                .unwrap();
+                                ws.send(Message::text(
+                                    json!({
+                                        "header": {"event": "task-finished", "task_id": task_id},
+                                        "payload": {}
+                                    })
+                                    .to_string(),
+                                ))
+                                .await
+                                .unwrap();
+                                let _ = ws.close(None).await;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Message::Binary(data) => {
+                        frames_srv.lock().push((Instant::now(), data.to_vec()));
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        });
+
+        let asr = Arc::new(BailianRealtimeASR::new(BailianCredentials {
+            api_key: "sk-test".into(),
+            endpoint,
+            model: "fun-asr-flash-8k-realtime".into(),
+            vocabulary_id: None,
+        }));
+        asr.open_session().await.unwrap();
+
+        // Feed 16 kHz PCM that downsamples cleanly + 2 lone tail bytes (<= 2 B allowance).
+        let input_len = TARGET_AUDIO_CHUNK_BYTES * 5 + 2;
+        asr.consume_pcm_chunk(&vec![0x22u8; input_len]);
+        asr.send_last_frame().await.unwrap();
+        let res = asr.await_final_result().await.unwrap();
+        assert_eq!(res.text, "百炼完成。");
+        assert!(finish_seen.load(std::sync::atomic::Ordering::Acquire));
+        assert!(asr.is_stream_complete());
+        assert_eq!(
+            asr.audio_coverage(),
+            ((TARGET_AUDIO_CHUNK_BYTES * 5) as u64, input_len as u64)
+        );
+
+        {
+            let recorded = frames.lock();
+            assert_eq!(recorded.len(), 5);
+            let span = recorded
+                .last()
+                .unwrap()
+                .0
+                .saturating_duration_since(recorded[0].0);
+            assert!(
+                span >= Duration::from_millis(140),
+                "expected >= 2x pacing across 4 intervals (~200ms), got {span:?}"
+            );
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_last_frame_fails_when_closed_or_write_times_out() {
+        let unopened = Arc::new(BailianRealtimeASR::new(BailianCredentials {
+            api_key: "sk-test".into(),
+            endpoint: String::new(),
+            model: DEFAULT_MODEL.into(),
+            vocabulary_id: None,
+        }));
+        unopened.mark_task_started();
+        assert!(unopened.send_last_frame().await.is_err());
+        assert!(!unopened.is_stream_complete());
+
+        let finish_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finish_seen_srv = Arc::clone(&finish_seen);
+        let frame0_seen = Arc::new(Notify::new());
+        let frame0_seen_srv = Arc::clone(&frame0_seen);
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_srv = Arc::clone(&shutdown);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "ws://{}/api-ws/v1/inference/",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            loop {
+                tokio::select! {
+                    msg = ws.next() => match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            let v: Value = serde_json::from_str(&text).unwrap();
+                            let task_id = v["header"]["task_id"].as_str().unwrap_or("").to_string();
+                            match v["header"]["action"].as_str().unwrap_or_default() {
+                                "run-task" => {
+                                    ws.send(Message::text(
+                                        json!({
+                                            "header": {"event": "task-started", "task_id": task_id},
+                                            "payload": {}
+                                        })
+                                        .to_string(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                                }
+                                "finish-task" => {
+                                    finish_seen_srv.store(true, std::sync::atomic::Ordering::Release);
+                                }
+                                _ => {}
+                            }
+                        }
+                        Some(Ok(Message::Binary(_))) => {
+                            frame0_seen_srv.notify_waiters();
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    },
+                    _ = shutdown_srv.notified() => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        let asr = Arc::new(
+            BailianRealtimeASR::new(BailianCredentials {
+                api_key: "sk-test".into(),
+                endpoint,
+                model: DEFAULT_MODEL.into(),
+                vocabulary_id: None,
+            })
+            .with_frame_send_timeout(Duration::from_millis(60)),
+        );
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&vec![0x33u8; TARGET_AUDIO_CHUNK_BYTES]);
+        tokio::time::timeout(Duration::from_secs(2), frame0_seen.notified())
+            .await
+            .unwrap();
+
+        let writer_guard = asr.writer.lock().await;
+        asr.consume_pcm_chunk(&vec![0x44u8; TARGET_AUDIO_CHUNK_BYTES]);
+        assert!(asr.send_last_frame().await.is_err());
+        drop(writer_guard);
+
+        assert!(!finish_seen.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!asr.is_stream_complete());
+        assert_eq!(
+            asr.audio_coverage(),
+            (
+                TARGET_AUDIO_CHUNK_BYTES as u64,
+                (TARGET_AUDIO_CHUNK_BYTES * 2) as u64
+            )
+        );
+        shutdown.notify_waiters();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn record_send_failure_preserves_partial_across_concurrent_cancel() {
+        let asr = create_test_asr();
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut st = asr.state.lock();
+            st.task_started = true;
+            st.last_result_text = "百炼前缀".into();
+            st.final_tx = Some(tx);
+        }
+        *asr.final_rx.lock() = Some(rx);
+
+        asr.record_send_failure(BailianASRError::SendFailed("broken".into()));
+        asr.cancel();
+
+        let transcript = asr
+            .await_final_result()
+            .await
+            .expect("partial transcript must survive concurrent cancel");
+        assert_eq!(transcript.text, "百炼前缀");
+        assert!(!asr.is_stream_complete());
     }
 }

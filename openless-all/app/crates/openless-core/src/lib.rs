@@ -1,12 +1,19 @@
 //! Framework-independent OpenLess application core.
 //!
-//! This crate deliberately has no dependency on Tauri, WebView, or any UI toolkit.
+//! This crate deliberately has no dependency on Tauri, WebView, egui, or eframe.
 //! Host applications provide platform integrations through [`ports`] and consume
 //! semantic state changes through [`events`].
 
 pub mod activity;
+pub mod app_catalog;
+pub mod app_style_routing;
 pub mod android_types;
 pub mod api;
+pub mod main_dictation_trace;
+#[cfg(feature = "ask-attachments")]
+pub mod ask_attachment;
+pub mod ask_context;
+pub mod ask_search;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;
@@ -20,6 +27,7 @@ pub mod cloud_sync_e2ee;
 pub mod cloud_sync_e2ee_documents;
 mod cloud_sync_e2ee_protocol;
 pub mod cloud_sync_e2ee_store;
+mod long_recording;
 mod cloud_sync_transaction;
 mod cloud_sync_types;
 mod cloud_sync_validation;
@@ -57,6 +65,7 @@ pub mod omni;
 pub mod output_cleaning;
 mod persistence;
 pub mod polish;
+pub mod polish_strategy;
 pub mod ports;
 pub mod preferences;
 mod prompt_cache;
@@ -71,6 +80,8 @@ mod provider_service;
 pub mod provider_transport;
 pub mod providers;
 mod qa_service;
+pub mod assistant_api;
+pub mod assistant;
 mod remote_input_service;
 mod selection_service;
 pub mod selection_voice_intent;
@@ -99,8 +110,8 @@ mod shortcut_types;
 /// Version of the public host-facing DTO/event/lifecycle contract.
 ///
 /// This is independent from the application release version.  Increment the
-/// major component for a breaking host contract change and document the
-/// migration in the shared `contract/backend-2.0.json` surface.
+/// major component for a breaking host contract change and update
+/// `openless-all/app/contract/backend-2.0.json`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{
@@ -231,9 +242,9 @@ pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
     AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
     DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
-    LessComputerHotkeyAction, LessComputerVoiceFinish,
-    LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
-    QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
+    LessComputerHotkeyAction, LessComputerVoiceFinish, LessComputerVoiceOptions,
+    LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult, QaVoiceCaptureSession,
+    StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
     encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue,
@@ -307,6 +318,10 @@ pub use model_store::{
     ModelTransport, ModelTransportRequest, ModelTransportResponse, ReqwestModelTransport,
     MODEL_PARTIAL_INDEX, MODEL_READY_SENTINEL,
 };
+pub use polish_strategy::{
+    evaluate as evaluate_polish_strategy, PolishRequestOverrides, PolishStrategyConfig,
+    PolishStrategyDecision, PolishStrategyInput, ReasoningEffort,
+};
 pub use ports::PreparedTranscription;
 pub use ports::{
     ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedTextTarget,
@@ -316,10 +331,10 @@ pub use ports::{
     InsertWriteResult, NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter,
     PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
     RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
-    TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
-    UnsupportedTextInserter, UnsupportedVoiceActivationRuntime, VoiceActivationError,
-    VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink, VoiceCapture,
-    VoiceDictationHandoff, VoiceDictationHandoffRequest,
+    TextStreamChunk, TextStreamSink, TranscriptMetadata, TranscriptOutput, TranscriptionEngine,
+    TranscriptionSession, UnsupportedTextInserter, UnsupportedVoiceActivationRuntime,
+    VoiceActivationError, VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink,
+    VoiceCapture, VoiceDictationHandoff, VoiceDictationHandoffRequest,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
@@ -341,6 +356,7 @@ pub use providers::{
     OpenAiTranscriptionConfig,
 };
 pub use qa_service::QaService;
+pub use qa_service::standalone as ask;
 pub use remote_input_service::{
     constant_time_eq, finish_remote_input_connection, validate_pairing_pin, RemoteFrameCodec,
     RemoteInputService, RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES,

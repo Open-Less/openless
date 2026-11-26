@@ -38,6 +38,7 @@
   border-radius: 50%;
   background: var(--slider-surface);
   box-shadow: 0 1px 3px #0002;
+  transition: scale 180ms var(--ol-motion-quick), box-shadow 180ms var(--ol-motion-quick);
 }
 .ol-slider-thumb::after {
   content: '';
@@ -222,5 +223,15 @@
   .ol-slider-indicator,
   .ol-slider--solid .ol-slider-thumb {
     background: Highlight;
+  }
+}
+
+.ol-slider-thumb[data-dragging] {
+  scale: 1.2;
+  box-shadow: var(--ol-shadow-md);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ol-slider-thumb {
+    transition: none;
   }
 }

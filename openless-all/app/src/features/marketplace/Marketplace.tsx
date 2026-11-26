@@ -1,4 +1,6 @@
+import { TextField } from '../../ui/controls/TextField';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useId } from 'react';
 import { ExpandingSearch } from '../../components/ExpandingSearch';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
 import { Icon } from '../../components/Icon';
@@ -15,8 +17,10 @@ import { Card } from '../../ui/layout/Card';
 import { PageHeader } from '../../ui/layout/PageHeader';
 import { Pill } from '../../ui/controls/Pill';
 import { useMarketplaceWorkspace } from './useMarketplaceWorkspace';
+import './marketplace.css';
 
 export function Marketplace() {
+  const uploadTitleId = useId();
   const {
     t,
     mobile,
@@ -37,6 +41,7 @@ export function Marketplace() {
     downloadingPackId,
     installError,
     showUpload,
+    uploading,
     setShowUpload,
     uploadOriginPackId,
     setUploadOriginPackId,
@@ -586,7 +591,10 @@ export function Marketplace() {
       <PresenceModal
         open={Boolean(showUpload)}
         zIndex={mobile || stackLayout ? 70 : 60}
+        cardClassName="ol-marketplace-upload-dialog"
+        labelledBy={uploadTitleId}
         onClose={() => {
+          if (uploading) return;
           setShowUpload(false);
           setUploadOriginPackId(null);
           setUploadTargetName(null);
@@ -596,6 +604,7 @@ export function Marketplace() {
           showUpload && (
             <>
               <h2
+                id={uploadTitleId}
                 style={{
                   margin: '0 0 12px',
                   fontSize: 16,
@@ -613,15 +622,7 @@ export function Marketplace() {
                   ? t('marketplace.upload.updateHint')
                   : t('marketplace.uploadHint', { login: prefs?.marketplaceDevLogin ?? '' })}
               </div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                  maxHeight: 360,
-                  overflow: 'auto',
-                }}
-              >
+              <div className="ol-marketplace-upload-list ol-noscrollbar">
                 {localPacks.length === 0 ? (
                   <div
                     style={{
@@ -643,68 +644,24 @@ export function Marketplace() {
                       <button
                         key={p.id}
                         type="button"
+                        className="ol-marketplace-upload-option"
+                        aria-pressed={selected}
+                        disabled={uploading}
                         onClick={() =>
                           setSelectedUploadPackId((prev) => (prev === p.id ? null : p.id))
                         }
-                        style={{
-                          textAlign: 'left',
-                          padding: 10,
-                          border: selected
-                            ? '1px solid var(--ol-blue)'
-                            : '0.5px solid var(--ol-line-strong)',
-                          borderRadius: 'var(--ol-control-radius)',
-                          background: selected ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                        }}
                       >
-                        {/* Selection circle: empty when unselected; solid blue + white check when selected */}
-                        <span
-                          style={{
-                            flexShrink: 0,
-                            width: 18,
-                            height: 18,
-                            borderRadius: 'var(--ol-radius)',
-                            border: selected
-                              ? '1px solid var(--ol-blue)'
-                              : '1px solid var(--ol-line-strong)',
-                            background: selected ? 'var(--ol-blue)' : 'transparent',
-                            display: 'inline-grid',
-                            placeItems: 'center',
-                            color: '#fff',
-                            fontSize: 11,
-                            fontWeight: 'var(--ol-font-weight-bold)',
-                            transition: 'background 0.12s, border-color 0.12s',
-                          }}
-                        >
-                          {selected && '✓'}
+                        <span className="ol-marketplace-upload-check" aria-hidden="true">
+                          {selected && <Icon name="check" size={12} />}
                         </span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              justifyContent: 'space-between',
-                            }}
-                          >
-                            <div
-                              style={{ fontSize: 13, fontWeight: 'var(--ol-font-weight-semibold)' }}
-                            >
-                              {p.name}
-                            </div>
-                            {recommended && (
-                              <Pill size="sm" tone="blue">
-                                {t('marketplace.upload.recommendedBadge')}
-                              </Pill>
-                            )}
-                          </div>
-                          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-                            {p.description || t('marketplace.noDescription')}
-                          </div>
-                        </div>
+                        <strong className="ol-marketplace-upload-name" title={p.name}>
+                          {p.name}
+                        </strong>
+                        {recommended && (
+                          <Pill size="sm" tone="blue">
+                            {t('marketplace.upload.recommendedBadge')}
+                          </Pill>
+                        )}
                       </button>
                     );
                   })
@@ -715,6 +672,7 @@ export function Marketplace() {
                 <Btn
                   variant="ghost"
                   size="sm"
+                  disabled={uploading}
                   onClick={() => {
                     setShowUpload(false);
                     setUploadOriginPackId(null);
@@ -727,7 +685,7 @@ export function Marketplace() {
                 <Btn
                   variant="blue"
                   size="sm"
-                  disabled={!selectedUploadPackId}
+                  disabled={!selectedUploadPackId || uploading}
                   onClick={() => {
                     if (selectedUploadPackId) void onUpload(selectedUploadPackId);
                   }}
@@ -750,36 +708,15 @@ export function Marketplace() {
             <>
               {/* Top row: search (left) + username/login (center) + close × (right) */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                {/* Search box (leftmost) */}
-                <div
-                  style={{
-                    flex: 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '6px 10px',
-                    border: '0.5px solid var(--ol-line-strong)',
-                    borderRadius: 'var(--ol-r-md)',
-                    background: 'var(--ol-surface)',
-                  }}
-                >
-                  <Icon name="search" size={14} stroke="var(--ol-ink-3)" />
-                  <input
-                    type="search"
-                    placeholder={t('marketplace.myPacks.searchPlaceholder')}
-                    value={myPacksQuery}
-                    onChange={(e) => setMyPacksQuery(e.target.value)}
-                    autoFocus
-                    style={{
-                      flex: 1,
-                      outline: 'none',
-                      border: 0,
-                      background: 'transparent',
-                      fontSize: 13,
-                      color: 'var(--ol-ink-1)',
-                    }}
-                  />
-                </div>
+                <TextField
+                  type="search"
+                  placeholder={t('marketplace.myPacks.searchPlaceholder')}
+                  aria-label={t('marketplace.myPacks.searchPlaceholder')}
+                  value={myPacksQuery}
+                  onChange={(e) => setMyPacksQuery(e.target.value)}
+                  autoFocus
+                  style={{ flex: 1 }}
+                />
                 {/* Username + login chip. Click → GitHub OAuth Device Flow.
                 Clicking again while signed in restarts the flow (account switch). */}
                 <button
@@ -830,8 +767,10 @@ export function Marketplace() {
                   title={t('common.close')}
                   onClick={() => setShowMyPacks(false)}
                   style={{
+                    flex: '0 0 30px',
                     width: 30,
                     height: 30,
+                    padding: 0,
                     borderRadius: 'var(--ol-r-md)',
                     display: 'inline-grid',
                     placeItems: 'center',
@@ -839,12 +778,9 @@ export function Marketplace() {
                     background: 'var(--ol-surface)',
                     color: 'var(--ol-ink-2)',
                     cursor: 'pointer',
-                    fontSize: 18,
-                    lineHeight: 1,
-                    fontWeight: 'var(--ol-font-weight-medium)',
                   }}
                 >
-                  ×
+                  <Icon name="close" size={16} />
                 </button>
               </div>
 
@@ -1000,12 +936,7 @@ export function Marketplace() {
                           {statusLabel(pack.state, t)}
                         </Pill>
                       </div>
-                      {pack.description && (
-                        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}>
-                          {pack.description}
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 6, overflow: 'hidden', minHeight: 22 }}>
                         <Pill size="sm" tone="outline">
                           {pack.baseMode}
                         </Pill>

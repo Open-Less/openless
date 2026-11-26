@@ -18,6 +18,10 @@ const languageSection = readFileSync(
   resolve(root, 'src/features/settings/sections/LanguageSection.tsx'),
   'utf8',
 );
+const interfaceLanguagePicker = readFileSync(
+  resolve(root, 'src/ui/controls/InterfaceLanguagePicker.tsx'),
+  'utf8',
+);
 const recordingSection = readFileSync(
   resolve(root, 'src/features/input/RecordingInputSection.tsx'),
   'utf8',
@@ -57,6 +61,7 @@ assert.match(insertMotion, /bornBlurPx: 4\.5/);
 assert.match(insertMotion, /bornFadeMs: 220/);
 assert.match(themeSection, /<Segmented/);
 assert.match(themeSection, /settings\.theme\.dark/);
-assert.match(languageSection, /<SelectLite[\s\S]*?searchable/);
+assert.match(languageSection, /<InterfaceLanguagePicker\b/);
+assert.match(interfaceLanguagePicker, /<SelectLite\b[\s\S]*?^\s+searchable\s*$/m);
 assert.match(recordingSection, /className="ol-capsule-style-segmented"/);
 console.log('UI follow-up motion, settings flash and transcript radius contracts passed');

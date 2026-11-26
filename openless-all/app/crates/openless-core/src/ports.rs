@@ -46,6 +46,16 @@ pub struct CapturedTextTarget {
 }
 
 pub trait HostContextAdapter: Send + Sync {
+    /// Stable identity, when this adapter is attached to a frozen insertion target.
+    fn input_app(&self) -> Option<crate::app_style_routing::InputApp> {
+        None
+    }
+    /// Reliable semantic location from the same frozen insertion target, never inferred
+    /// from document text or window titles. Called only with cursor context enabled.
+    /// Hosts without a trusted control label/role leave this unavailable.
+    fn input_location(&self) -> Option<String> {
+        None
+    }
     /// Capture foreground application metadata for attribution and input policy.
     /// `include_cursor=false` forbids reading document/AX text, not querying the
     /// application identity. Hosts must honor this before any document access.
@@ -287,7 +297,11 @@ pub enum EngineStage {
 pub enum EngineProgress {
     /// The recorder is registered; provider preparation may still be pending.
     CaptureReady,
-    RecordingLevel { elapsed_ms: u64, level: f32 },
+    RecordingLevel {
+        elapsed_ms: u64,
+        level: f32,
+    },
+    CapturedDurationMs(u64),
     RecordingLimitReached,
     RecordingFault(BackendError),
     Notification(crate::types::NotificationPayload),
@@ -349,7 +363,10 @@ pub trait DictationEngine: Send + Sync + 'static {
 
     /// Retain an early stop request, preserving PCM and stop errors for finish().
     /// Returns false until the session is registered, or for legacy engines.
-    fn stop_recording(&self, _session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+    fn stop_recording(
+        &self,
+        _session_id: SessionId,
+    ) -> BoxFuture<'static, Result<bool, BackendError>> {
         Box::pin(async { Ok(false) })
     }
 
@@ -569,6 +586,13 @@ pub trait RecordingControlSink: Send + Sync {
 pub trait RecordingArchive: Send + Sync {
     fn is_available(&self) -> bool;
 
+    /// Validate the finalized canonical archive without loading all audio when
+    /// the host can inspect its header and file metadata directly.
+    fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+        let read = self.read_pcm();
+        Box::pin(async move { read.await.map(|pcm| pcm.len() as u64) })
+    }
+
     /// Move an undecided capture into the permanent quick-note archive.
     /// Hosts that do not need separate storage can keep the default no-op.
     fn promote_to_quick_note(&self) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -587,6 +611,24 @@ pub trait RecordingArchive: Send + Sync {
                 "recording archive cannot provide canonical PCM",
             ))
         })
+    }
+
+    fn read_pcm_range(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+        let read = self.read_pcm();
+        Box::pin(async move {
+            let pcm = read.await?;
+            let start = usize::try_from(offset).unwrap_or(usize::MAX).min(pcm.len());
+            let end = start.saturating_add(len).min(pcm.len());
+            Ok(pcm[start..end].to_vec())
+        })
+    }
+
+    fn write_error(&self) -> Option<String> {
+        None
     }
 
     fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>>;
@@ -700,10 +742,22 @@ pub struct TranscriptOutput {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TranscriptMetadata {
+    /// Detected language, when the ASR provider reports one.
+    pub language: Option<String>,
+    /// Provider confidence in the final transcript, when available.
+    pub confidence: Option<f32>,
+}
+
 /// One provider transcription session that receives PCM while recording.
 pub trait TranscriptionSession: AudioConsumer {
     fn asr_call_label(&self) -> Option<crate::auxiliary::AsrCallLabel> {
         None
+    }
+
+    fn transcript_metadata(&self) -> TranscriptMetadata {
+        TranscriptMetadata::default()
     }
 
     /// Drain provider notices discovered during finalization. This lets a
@@ -795,11 +849,21 @@ pub trait TextPolisher: Send + Sync {
 }
 
 pub trait TextInserter: Send + Sync {
+    /// Desktop keyboard/input-source preparation must run in the serialized
+    /// processing lane, so a recording never owns another segment's native state.
+    fn defer_preparation_until_stop(&self) -> bool {
+        false
+    }
     /// Freeze the native destination and its matching host-context reader before context or
     /// credentials can await. Only capture identity here; input-source changes belong to `begin`
     /// and its existing cancellation cleanup. Target-independent adapters use None.
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         None
+    }
+
+    /// Host-owned editors can bind feedback to this exact recording before Starting is emitted.
+    fn capture_target_for_session(&self, _session_id: SessionId) -> Option<CapturedTextTarget> {
+        self.capture_target()
     }
 
     fn begin(

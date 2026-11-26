@@ -1,4 +1,4 @@
-import { canRetranscribeHistoryEntry } from './history-retranscribe';
+import { canRetranscribeHistoryEntry, retranscriptionErrorKey } from './history-retranscribe';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(message);
@@ -54,3 +54,12 @@ assert(
 );
 
 console.log('history-retranscribe: all assertions passed');
+
+assert(
+  retranscriptionErrorKey('historyRetranscribeNoSpeech') === 'history.retranscribeErrors.NoSpeech',
+  'empty ASR must retain its reason',
+);
+assert(
+  retranscriptionErrorKey('raw body with a secret') === 'history.retranscribeErrors.Provider',
+  'provider bodies must not reach UI',
+);

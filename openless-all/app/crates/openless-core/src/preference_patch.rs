@@ -10,6 +10,11 @@ pub fn patch_preferences(
 ) -> Result<UserPreferences, BackendError> {
     let mut document = serde_json::to_value(current).map_err(invalid)?;
     for (pointer, value) in edits {
+        // This declared top-level option is omitted until explicitly chosen.
+        // Seed only the edited key; typed deserialization below still validates it.
+        if pointer == "/translationShiftTapCount" && document.pointer(pointer).is_none() {
+            document["translationShiftTapCount"] = Value::Null;
+        }
         let destination = document
             .pointer_mut(pointer)
             .ok_or_else(|| invalid(format!("unknown preference: {pointer}")))?;

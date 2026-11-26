@@ -40,7 +40,7 @@ import {
   useNavigation,
   type AppTab,
 } from './navigation';
-import { getPage, preloadPage, Overview, SelectionAsk } from './pages';
+import { getPage, preloadPage, Overview } from './pages';
 
 interface FloatingShellProps {
   os?: OS;
@@ -268,11 +268,10 @@ function FloatingShellBody({
               scrollRef={pageRef}
               contentKey={displayTab}
               page={displayTab}
-              // Other tabs scroll the page. Desktop overview is one dashboard: the
-              // page surface does not scroll, and only the recent-recognition list does.
-              // Mobile overview stays a growing column because the same blocks stack.
+              // Desktop overview and automatic styles use fixed dashboards.
+              // Mobile overview stays a growing column because its blocks stack.
               className={
-                displayTab === 'overview' && !mobile
+                (displayTab === 'overview' || displayTab === 'appStyles') && !mobile
                   ? 'ol-thinscroll ol-page-fixed'
                   : displayTab === 'overview'
                     ? 'ol-thinscroll'
@@ -281,7 +280,10 @@ function FloatingShellBody({
               style={{
                 flex: 1,
                 minHeight: 0,
-                overflow: displayTab === 'overview' && !mobile ? 'hidden' : 'auto',
+                overflow:
+                  (displayTab === 'overview' || displayTab === 'appStyles') && !mobile
+                    ? 'hidden'
+                    : 'auto',
                 boxSizing: 'border-box',
                 // macOS: 26px title vs 15px wordmark, so the title starts 6px above the
                 // traffic-light clearance and lines up with "OpenLess". Other desktops
@@ -313,17 +315,11 @@ function FloatingShellBody({
                   style={{
                     display: 'flex',
                     flexDirection: 'column',
-                    // Keep the usage-guide content height so the outer scroll area's
-                    // bottom-nav spacing applies.
-                    flex: displayTab === 'selectionAsk' ? '1 0 auto' : 1,
+                    flex: 1,
                     minHeight: 0,
                   }}
                 >
-                  {displayTab === 'selectionAsk' ? (
-                    <SelectionAsk onOpenShortcuts={() => openSettings('shortcuts')} />
-                  ) : (
-                    <Page />
-                  )}
+                  <Page />
                 </div>
               )}
             </TransitionViewport>

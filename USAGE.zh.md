@@ -2,206 +2,163 @@
 
 [English](USAGE.md) | [简体中文](USAGE.zh.md)
 
+> 在线用户文档持续维护于 **<https://openless.top/zh/docs/>**（English: **<https://openless.top/en/docs/>**）。本指南为仓库内配套的安装、权限、日常听写与排查手册。
+
 ## 安装
 
-### macOS
+各平台下载入口与安装步骤亦见官网：<https://openless.top/zh/docs/installation/>。
 
-1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_aarch64.dmg`。
-2. 打开 dmg，将 OpenLess.app 拖入「应用程序」文件夹。
+### macOS（14 Sonoma 及以上）
+
+1. 前往 [GitHub Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<version>_aarch64.dmg`（Apple Silicon）或 `OpenLess_<version>_x64.dmg`（Intel）。
+2. 打开 DMG，将 **OpenLess.app** 拖入「应用程序」文件夹。
 3. 双击启动。
 
-### Windows
+也可通过 Homebrew 安装正式版（开启更新提醒见 [docs/guides/homebrew.md](docs/guides/homebrew.md)）：
 
-1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_x64-setup.exe`。
-2. 运行安装程序，按提示完成安装。
+```bash
+brew tap Open-Less/openless https://github.com/Open-Less/openless
+brew install --cask openless
+brew update && brew upgrade openless
+```
+
+公开版本均按 [RELEASING.zh.md](RELEASING.zh.md) 完成签名与公证；单独提供的开发构建可能使用临时签名。
+
+### Windows（10 及以上）
+
+1. 前往 [GitHub Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<version>_x64-setup.exe` 或 `OpenLess_<version>_x64_en-US.msi`。
+2. 运行安装程序并按提示完成安装。
 3. 从开始菜单启动 OpenLess。
 
 ### Linux
 
-Linux 使用 Qt6 WebEngine 宿主（`linux-qt`）+ 无头后端 `linux-web`，不依赖 Tauri 或 WebKitGTK。
+Linux 使用原生 `egui` 宿主，不依赖 Tauri 或 WebKitGTK。
 
-1. 暂未随 Release 提供安装包：Linux 打包在 L01–L12 真机验收完成前保持暂停，可先从源码构建（见 [README](README.zh.md) 的构建章节）。
-2. 需要 glibc ≥ 2.39（Ubuntu 24.04 或同级发行版）。
-3. 全局快捷键由 fcitx5 插件提供，须在 fcitx5 中启用 OpenLess 插件并配置按键；没有应用内更新与 AppImage。
+1. Linux 发布包打包当前暂停（待完成真机验收），暂请按 [openless-all/README.zh.md#共享后端与-linux-宿主](openless-all/README.zh.md#共享后端与-linux-宿主) 从源码构建。
+2. 需 glibc ≥ 2.39（如 Ubuntu 24.04 及同等发行版）。
+3. 全局快捷键由 `fcitx5` 插件提供：在 `fcitx5` 中启用 OpenLess 插件并绑定按键。Linux 不提供 AppImage 或应用内自动更新。
 
-### Android
+### Android（8.0 及以上）
 
-1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载手机对应的 `OpenLess_<版本>_arm64-v8a.apk`（较老的 32 位机型用 `armeabi-v7a`）。
-2. 允许「安装未知来源应用」后安装。
-3. 首次录音时授予麦克风权限；如需用键盘插入，请在系统设置中启用 OpenLess 键盘并设为当前输入法。
-4. 应用内更新在 设置 → 关于与更新。
+1. 前往 [GitHub Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<version>_arm64-v8a.apk`（老款 32 位设备选择 `armeabi-v7a`）。
+2. 允许安装未知来源应用并完成安装。
+3. 首次录音时授予麦克风权限；如需在其他应用中输入文字，请在系统「语言与输入法」中启用 OpenLess 键盘并设为当前输入法。
+4. 应用内更新位于「设置 → 关于与更新」。
 
-### iOS
+### iOS（16 及以上）
 
-1. 暂无可直接下载的 IPA。用 Xcode 从 [`openless-all/ios/`](openless-all/ios/README.zh.md) 源码构建，并用个人团队签名。
-2. 构建、安装与启用键盘的完整步骤见 [iOS 指南](openless-all/ios/README.zh.md)。
+1. 目前不提供预签名 IPA，请使用 Xcode 从 `openless-all/ios/` 源码构建并用个人证书签名安装。
+2. 完整构建、签名与键盘启用步骤见 [openless-all/ios/README.zh.md](openless-all/ios/README.zh.md)。
 
 ### HarmonyOS（适配中）
 
-1. 从同一个 Release 下载未签名的 `OpenLess_harmony_arm64.hap`。
-2. 真机安装前必须自己签名，手机或平板会拒绝未签名的 HAP：调试证书的包名必须是 `openless.hm.com`，调试 Profile 必须包含目标设备，包名不匹配的 Profile 不能复用。用 DevEco Studio 的自动签名（登录华为账号）最省事；走命令行时把证书与 Profile 放进本地签名目录（默认 `~/.local/share/harmony/signing/local-test`，可用 `OPENLESS_HARMONY_SIGNING_DIR` 覆盖），构建会输出 `entry-default-signed.hap`。
-3. 用 DevEco Studio 或 `hdc` 安装签名后的 HAP；AppGallery 分发包需人工提交。
-4. 首次使用前先打开主应用完成渠道配置，输入法才会拿到可用的语音设置；目前没有更新流程。构建与签名见 [`harmony/README.zh.md`](openless-all/app/harmony/README.zh.md)。
+1. 从同一 Release 下载未签名的 `OpenLess_harmony_arm64.hap`。
+2. 安装到手机/平板前需使用匹配包名 `openless.hm.com` 且包含本机的调试证书与 Profile 签名（可使用 DevEco Studio 自动签名，或将签名材料放入 `~/.local/share/harmony/signing/local-test`，可通过 `OPENLESS_HARMONY_SIGNING_DIR` 覆盖）。
+3. 通过 DevEco Studio 或 `hdc` 安装；首次请先打开主应用完成语音服务配置再切换输入法。
 
 ---
 
 ## 首次配置
 
-### macOS 权限
+### 系统权限
 
-首次启动后，在「系统设置 → 隐私与安全」中授予以下权限：
+- **macOS**：在「系统设置 → 隐私与安全」中授予 **麦克风** 与 **辅助功能** 权限。授予辅助功能后必须**完全退出并重新启动** OpenLess，全局快捷键才会生效。
+- **Windows**：按提示授予 **麦克风** 权限，并在「设置 → 权限与数据」确认全局快捷键监听器状态为「已启动」。
+- **Android**：首次录音时授予 **麦克风** 权限，并在系统输入法设置中启用 **OpenLess 键盘**。无障碍权限为可选项，仅在启用「从纠正中学习」观察编辑器文本时需要。
+- **iOS**：按提示授予 **麦克风**（及语音识别，如启用）。在「系统设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → OpenLess」启用键盘，并开启 **允许完全访问** 以共享设置与语音控制。
+- **HarmonyOS**：按系统声明授予 **麦克风** 与 **网络** 权限，在系统输入法管理中启用「OpenLess 输入法」即可（无需无障碍权限）。
 
-1. **麦克风** — 允许 OpenLess 录音。
-2. **辅助功能** — 允许 OpenLess 读写当前焦点输入框。授权后须**完全退出并重新启动** OpenLess，快捷键才会生效。
+### 配置语音与模型服务
 
-### Windows 权限
+打开 OpenLess「设置 → AI 服务与模型」，根据需求任选一条管线。各服务商的详细申请与填写步骤请以官网文档为准：
 
-1. 按系统提示授予**麦克风**权限。
-2. 打开 OpenLess → 「设置 → 权限与数据」，确认全局快捷键监听器状态显示为「已启动」。
+- **官网配置文档**：<https://openless.top/zh/docs/setup/>（English: <https://openless.top/en/docs/setup/>）
+- **仓库快速入口**：[docs/guides/speech-services.md](docs/guides/speech-services.md)
 
-### Android 权限
+支持三条识别与润色管线：
+1. **传统模式（ASR + 可选 LLM）**：使用火山引擎、阿里云百炼、讯飞实时语音转写（RTASR）、腾讯云混元、OpenAI 兼容端点或本地模型完成语音转写，再按需交由 LLM 去口癖、改口修正或翻译。
+2. **多模态模式（单模型听写）**：由 Google Gemini、OpenAI Audio、阿里云 Qwen-Omni 等支持音频输入的模型一步完成转写与整理。
+3. **DeepSeek 大统一**：使用 DeepSeek 官方 API Key 统一承接语音听写、问答、原生联网搜索与回答朗读。
 
-1. **麦克风** — 首次录音时按提示授予。
-2. **输入法** — 在 系统设置 → 语言与输入法 中启用 OpenLess 键盘，并设为当前输入法后才能在其它应用里落字。
-3. **可选：无障碍** — 「从纠正中学习」需要在支持的编辑器里观察文本时才会用到；不开启时可用历史详情里的「记住一个词」手动确认。
-
-### iOS 权限
-
-1. **麦克风**与**语音识别**在首次使用时按提示授权。
-2. **键盘** — 系统设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → OpenLess。
-3. **完全访问** — 需要共享设置与语音控制时打开；基础打字不依赖完全访问。
-
-### HarmonyOS 权限
-
-1. **麦克风**与**网络**权限沿用系统声明。
-2. **输入法** — 在系统设置的输入法管理中启用「OpenLess 输入法」，然后在输入框切换过去；语音结果通过系统分配的光标输入会话写入，不接入无障碍。
-3. 未启用输入法时，可用复制后手动粘贴作为退路。
-
-### 填入凭据
-
-不会配火山 ASR 的话，先看这篇图文引导：  
-[OpenLess 火山 ASR 配置](docs/volcengine-setup.md)
-
-用讯飞实时语音转写的话，看 [OpenLess 讯飞 ASR 配置](docs/xfyun-asr.md)（AppID + API Key，设置 → AI 与模型 → 语音识别渠道 → 讯飞实时语音转写）。
-
-打开 OpenLess → **设置**，填入以下字段：
-
-| 字段 | 说明 |
-| --- | --- |
-| 火山引擎 App ID | 语音识别服务的应用 ID |
-| 火山引擎 Access Token | 语音识别访问凭据 |
-| 火山引擎 Resource ID | 语音识别资源 ID |
-| Ark API Key | 文本润色服务的 API Key |
-| Ark Model ID | 使用的模型 ID（如 `doubao-pro-32k`） |
-| Ark Endpoint | 接口地址，默认 `https://ark.cn-beijing.volces.com/api/v3/chat/completions` |
-
-保存后设置立即生效，无需重启。
-
-火山引擎 ASR + Ark 是最短路径。设置 → AI 与模型 → 语音识别渠道 / 文字处理渠道 里还可选择讯飞实时 ASR、腾讯云混元、阿里云百炼、阶跃星辰、智谱 GLM、小米 MiMo、OpenAI 兼容端点等近三十个 ASR 渠道与二十多个润色渠道（完整清单见 [README](README.zh.md) 的「功能现状」）。凭据保存在系统凭据保险库（service = `com.openless.app`）：macOS 钥匙串、Windows 凭据管理器、Linux keyring；不会以明文写入磁盘。
+所有 API 密钥均保存在操作系统凭据保险库（service = `com.openless.app`：macOS 钥匙串、Windows 凭据管理器、Linux Secret Service、iOS Keychain），不以明文写入磁盘配置。
 
 ---
 
-## 基本使用
+## 日常使用
 
-### 开始录音
+语音输入技巧与润色前后对照示例亦见官网：<https://openless.top/zh/docs/voice-input/>。
 
-按下全局快捷键（桌面端默认 macOS 右 Option、Windows 右 Control；Linux 的快捷键由 fcitx5 插件提供，需在 fcitx5 中配置；Android、iOS 与 HarmonyOS 在应用内或键盘上触发）。  
-屏幕边缘会出现状态胶囊，显示「录音中」。
+### 录音与连续听写
 
-### 结束录音
+- **开始与结束**：按下全局快捷键（默认 macOS 右 Option、Windows 右 Control；Linux 在 `fcitx5` 中绑定；移动端在应用内或键盘触发）。支持 **切换式** 与 **按住说话** 两种方式，亦支持有线耳机线控 `MediaPlayPause`。
+- **连续输入与后台异步队列**：前一段录音一结束即转入后台异步队列（冻结原目标应用与光标上下文），你可立刻说下一段，处理完成后按顺序写回光标处。
+- **随时取消**：在录音、润色或插入任意阶段按 `Esc`，立即丢弃当前片段。
+- **安全落字**：优先直接写入当前焦点输入框；遇到受限应用无法直写时自动复制到剪贴板，确保内容不丢失。
 
-再次按下同一快捷键。OpenLess 会：
+### 输出模式、风格包与 Marketplace
 
-1. 停止录音并发送音频进行转写。
-2. 对转写结果按当前输出模式进行润色。
-3. 将润色后的文字插入当前焦点输入框（失败时自动复制到剪贴板）。
-
-### 取消录音
-
-录音过程中按 `Esc`，当前录音内容会被丢弃，不做任何插入。
-
----
-
-## 输出模式
-
-在 OpenLess 主窗口的胶囊或「设置」中切换模式：
+可在主窗口、胶囊或设置中切换输出模式：
 
 | 模式 | 说明 |
 | --- | --- |
-| 原文 | 直接输出转写文字，不做任何修改 |
-| 轻度润色 | 修正语气词、标点、明显错字，保留原意 |
-| 清晰结构（AI prompt 模式） | 把口语整理成有结构、有约束、有上下文的 prompt，适合直接喂给 ChatGPT / Claude / Cursor |
-| 正式表达 | 将口语转换为正式书面语 |
+| **原文** | 直接输出转写文字，不经过 LLM 改写 |
+| **轻度润色** | 去除口癖与语气词、修正标点与口述改口，保留原意与语气 |
+| **清晰结构（AI Prompt）** | 将松散口语整理为带背景、约束与目标的结构化提示词，可直接发给 ChatGPT / Claude / Cursor |
+| **正式书面** | 改写为规范、得体的书面表达，适合邮件与汇报 |
 
----
+你还可以在主窗口创建自定义 **风格包**、配置按应用自动切换规则，或在内置 **Marketplace** 一键安装社区风格包。润色与改写参考样例见 [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl)。
 
-## 词典
+### 随便问与选区改写
 
-词典用于提高特定词汇的识别准确率（产品名、人名、专有名词等）。
+桌面端提供独立「随便问」窗口与选区改写能力。写回原输入框前会先核实目标上下文；无法确认安全写回时，结果会保留在窗口中供手动复制。
 
-1. 打开主窗口 → **词典**。
-2. 点击「新建」，填入正确拼写、分类和备注。
-3. 启用后，词条会作为热词注入 ASR 识别阶段，并在润色阶段辅助语义判断。
+### 个人词典与光标上下文
 
----
+- **个人词典**：在主窗口 → **词典** 中添加人名、产品名与术语。已启用词条会自动作为 ASR 热词（渠道支持时）并注入润色提示词。
+- **从纠正中学习（实验性，默认关闭）**：在「设置 → 实验与扩展」开启后，可在支持的编辑器里观察你对落字结果的修正并弹窗询问是否记住；所有建议均须手动确认，不静默学习、不上传。
+- **光标上下文（默认关闭）**：在「设置 → 隐私 → 数据存储」开启后，听写时会读取光标前后数百字符（macOS / Windows UIA / Android 键盘 `InputConnection`），辅助模型区分同音字。密码框、安全输入、密码管理器与终端始终自动排除。
 
-## 历史记录
+### 历史记录、手机远程输入与加密云同步
 
-主窗口 → **历史**，可查看所有录音记录，包括原始转写和润色结果。
+- **历史记录**：在主窗口 → **历史** 查看每次录音的转写原文与润色结果。
+- **手机远程输入**：在电脑端开启远程输入，按 [手机远程输入指南](docs/guides/remote-input.md) 核对本机 HTTPS 证书指纹并输入配对码，即可用手机录音并把文字写入电脑光标处。
+- **加密云同步**：在「设置 → 云服务」登录 GitHub、阅读范围说明后开启；偏好设置、已登记密钥与历史文本先在本机端到端加密再上传，请妥善保存同步密码。
 
----
+### 更换快捷键
 
-## 更换快捷键
-
-主窗口 → **设置 → 快捷键**，选择触发键。  
-macOS 支持右侧修饰键（Option / Control / Command / Shift）；Windows 支持左右修饰键与鼠标侧键（Mouse4 / Mouse5）。
-
-Linux 的全局快捷键由 fcitx5 插件管理，在 fcitx5 配置中绑定；Android、iOS 与 HarmonyOS 不注册系统级快捷键，使用应用内或键盘面板上的语音按钮。
+在主窗口 → **设置 → 快捷键** 中选择触发键：macOS 支持右侧修饰键（Option / Control / Command / Shift），Windows 支持左右修饰键与鼠标侧键（Mouse4 / Mouse5），Linux 在 `fcitx5` 中绑定。
 
 ---
 
 ## 常见问题
 
 **Q: 快捷键没反应？**  
-macOS：确认已授予辅助功能权限，且授权后重启过 OpenLess。  
-Windows：在「设置 → 权限与数据」中检查监听器状态。
+macOS：确认已在系统设置中授予辅助功能权限，并且**完全退出后重启**过 OpenLess。  
+Windows：在「设置 → 权限与数据」确认全局快捷键监听器已启动。
 
-**Q: 识别结果为空或是占位文字？**  
-检查火山引擎 ASR 凭据是否填写正确。填写正确后识别才能正常工作。
+**Q: 识别结果为空或提示未配置？**  
+在「设置 → AI 服务与模型」核对当前启用渠道的 API 凭据并点击测试，详见官网 <https://openless.top/zh/docs/setup/>。
 
-**Q: 文字没有插入，只是复制到了剪贴板？**  
-当目标输入框不支持辅助功能写入时（如某些安全限制的应用），OpenLess 会自动回退到剪贴板复制，手动粘贴即可。
+**Q: 文字没有直接插入，只是复制到了剪贴板？**  
+当目标应用限制辅助功能或输入法注入时，OpenLess 会自动回退到剪贴板，手动按 `Cmd+V` / `Ctrl+V` 粘贴即可。
 
-**Q: 在 Windows 玩 Minecraft 等全屏游戏时，OpenLess capsule 不弹出 / 字符无法输入？**  
-这是 **Windows 操作系统层面的限制**，OpenLess 应用本身无法绕过（详见 [issue #457](https://github.com/Open-Less/openless/issues/457)）：
+**Q: 在 Windows 玩 Minecraft 等全屏游戏时，胶囊不弹出或无法输入？**  
+这是 Windows 系统机制限制（详见 [issue #457](https://github.com/Open-Less/openless/issues/457)）：
+- **独占全屏**：普通窗口无法绘制在独占全屏 DirectX/OpenGL 应用上方，请将游戏切换为 **无边框窗口化全屏**。
+- **权限不一致（UIPI）**：若游戏以管理员运行而 OpenLess 未以管理员运行，系统会拦截按键事件；请保持两者权限一致。
+- **未打开聊天框**：请先按游戏内快捷键（如 Minecraft 按 `T`）打开输入框再说话。
 
-- **独占全屏（exclusive fullscreen）**：标准应用窗口（包括 OpenLess capsule）**不会绘制在独占全屏 DirectX/OpenGL 应用之上**。请把游戏切换到 **无边框窗口化全屏（Borderless Windowed Fullscreen）**。Minecraft：视频设置 → 全屏 关闭（保持窗口最大化即可）。
-- **管理员权限不一致（UIPI）**：若游戏以管理员身份运行而 OpenLess 不是，Windows 阻止 OpenLess 接收游戏前台的按键，hotkey 完全不触发。让两者权限对齐（要么都以管理员运行，要么都以普通用户运行）。
-- **游戏聊天框未打开**：识别字符通过模拟键盘事件落字。Minecraft 中必须先按 `T` 打开聊天框，OpenLess 的输入才会落到聊天里。
+**Q: 怎么使用本地识别，让音频不出本机？**  
+先下载本地模型（Windows：「设置 → AI 与模型 → 本地 ASR 模型」；macOS：「设置 → 实验与扩展 → 实验性本地语音模型」），再在「语音识别渠道」列表里启用该本地渠道并**拖到最上方**（请求始终使用排在第一位的已启用渠道；若当前处于多模态模式，请先切回传统模式）。
 
-macOS 不存在独占全屏（所有"全屏"都是带 Spaces 的无边框窗口），所以此限制不适用。
-
-**Q: 润色结果和预期不符？**  
-尝试切换输出模式，或在词典中添加相关专有名词。
-
-**Q: Linux 上有自动更新吗？**  
-没有。Linux 提供（真机验收完成后的）deb/rpm 与源码构建，不提供 AppImage 或应用内更新，升级需手动安装新包。
-
-**Q: 鸿蒙或 iOS 怎么更新？**  
-鸿蒙目前没有更新流程，需要重新安装新的 HAP；iOS 需要从源码重新构建并签名。两者都不会收到应用内更新提示。
-
-**Q: 怎么用本地识别，不上传音频？**  
-本地模型不会自动接管你已经在用的渠道：必须自己把本地渠道设为列表最上方的启用渠道；只有该本地渠道在处理请求时，音频才不出本机。
-
-Windows：在「设置 → AI 与模型 → 本地 ASR 模型」下载模型，再到语音识别渠道列表里添加并启用对应的本地渠道：本地 Whisper（Foundry Local）、本地 sherpa-onnx（实验性）或本地 Whisper（批量解码）。macOS：在「设置 → 实验与扩展 → 实验性本地语音模型」中开启 TextStream、SenseVoice Small 或 Embedding Gemma——模型按需下载，不随安装包分发；下载完成后应用会提示前往渠道列表。
-
-两种平台最后都要在「设置 → AI 与模型 → 语音识别渠道」里启用该渠道并拖到最上方：请求使用第一个已启用的渠道，本地渠道不在最前时音频仍会发往原来的云端渠道。macOS 的实验模型走传统管线（ASR + LLM）；若当前是多模态模式，请先切回传统模式。
+**Q: Linux、iOS 或鸿蒙有应用内自动更新吗？**  
+没有。Linux 需重新源码构建或手动安装新包；iOS 需从源码重新编译签名；鸿蒙需重新安装签名后的新 HAP。
 
 ---
 
 ## 社区与支持
 
-欢迎通过 QQ 加入用户群，反馈问题或交流使用体验：
+欢迎加入 QQ 交流群反馈问题或分享风格包：
 
-**QQ 一群：1078960553（已满员）**  
-**QQ 二群：1095794054**
+- **QQ 一群**：`1078960553`（已满员）
+- **QQ 二群**：`1095794054`

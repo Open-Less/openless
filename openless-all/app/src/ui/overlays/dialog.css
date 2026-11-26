@@ -42,8 +42,8 @@
   gap: 8px;
   flex-wrap: wrap;
   padding: 16px 24px;
-  border-top: 1px solid var(--ol-line);
-  background: var(--ol-surface-2);
+  border: 0;
+  background: transparent;
 }
 .ol-dialog-action {
   min-height: 36px;
@@ -121,44 +121,9 @@
   display: grid;
   gap: 14px;
 }
-.ol-sync-password-field {
+.ol-sync-form-field {
   display: grid;
   gap: 6px;
-}
-.ol-sync-password-input {
-  display: flex;
-  overflow: hidden;
-  border: 1px solid var(--ol-line-strong);
-  border-radius: var(--ol-r-md);
-  background: var(--ol-control-solid);
-}
-.ol-sync-password-input input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--ol-ink);
-  padding: 10px 12px;
-  font: inherit;
-}
-.ol-sync-password-visibility {
-  display: grid;
-  flex: 0 0 40px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  color: var(--ol-ink-2);
-  background: transparent;
-}
-.ol-sync-password-visibility:hover:not(:disabled) {
-  color: var(--ol-ink);
-  background: var(--ol-choice-hover-bg);
-}
-.ol-sync-password-input :is(input, .ol-sync-password-visibility):focus-visible {
-  outline-offset: -2px;
-}
-.ol-sync-password-visibility:disabled {
-  opacity: 0.55;
 }
 @media (max-width: 440px) {
   .ol-dialog-header {
@@ -217,7 +182,8 @@
 }
 .ol-structured-dialog--terms :is(.ol-dialog-footer, .ol-channel-dialog-footer) {
   padding: 16px 24px;
-  background: transparent;
+  border-top: 1px solid var(--ol-line);
+  background: var(--ol-surface-raised);
 }
 .ol-structured-dialog--terms :is(.ol-dialog-header, .ol-channel-dialog-header) :is(h2, h3) {
   font-size: 16px;
@@ -242,7 +208,7 @@
   min-height: 0;
 }
 
-/* Compact destructive decisions use a centered alert and equal action columns. */
+/* Destructive decisions share the card surface and keep actions at its lower right. */
 .ol-dialog-overlay > .ol-dialog-card.ol-structured-dialog--decision {
   overflow: hidden;
   padding: 24px;
@@ -276,9 +242,9 @@
   text-align: center;
 }
 .ol-structured-dialog--decision .ol-dialog-footer {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
   padding: 0;
   border: 0;
   background: transparent;

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { fixtureOrigin } from './support/server';
 
-test('remote input and About only report a copy once the native clipboard accepts it', async ({
+test('remote input reports a copy only after native success and About opens the community link', async ({
   page,
 }) => {
   await page.goto(`${fixtureOrigin}/e2e/fixtures/startup-gate.html?os=win&clipboard`);
@@ -21,12 +21,7 @@ test('remote input and About only report a copy once the native clipboard accept
     .getByRole('navigation', { name: '设置分类' })
     .getByRole('button', { name: '关于与更新', exact: true })
     .click();
-  const code = settings.locator('kbd').getByText('1078960553');
-  const qq = code.locator('..').getByRole('button');
-  await page.evaluate(() => (window as any).startupFixture.allowClipboard(false));
-  await qq.click();
-  await expect(settings.getByText('已复制', { exact: true })).toHaveCount(0);
-  await page.evaluate(() => (window as any).startupFixture.allowClipboard(true));
-  await qq.click();
-  await expect(settings.getByText('已复制', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '社区 QQ 群 ↗' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).startupFixture.openedUrls))
+    .toEqual(['https://openless.top/zh/#qq-support']);
 });

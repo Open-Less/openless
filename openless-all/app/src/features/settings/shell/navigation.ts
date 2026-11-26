@@ -14,7 +14,13 @@ export type SettingsSectionId =
 
 export const ADVANCED_PAGES = [
   { id: 'localModels', icon: 'mic', titleKey: 'experimentalAsr.title', beta: true },
-  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
+  { id: 'intentRouting', icon: 'sparkle', titleKey: 'askEntrySettings.routing', beta: true },
+  {
+    id: 'cursorContext',
+    icon: 'search',
+    titleKey: 'settings.advancedPages.cursorContextTitle',
+    beta: true,
+  },
   {
     id: 'voiceEnhancement',
     icon: 'mic',
@@ -28,11 +34,12 @@ export const ADVANCED_PAGES = [
     beta: true,
   },
   {
-    id: 'cursorContext',
-    icon: 'search',
-    titleKey: 'settings.advancedPages.cursorContextTitle',
+    id: 'polishStrategy',
+    icon: 'pencil',
+    titleKey: 'settings.advancedPages.polishStrategyTitle',
     beta: true,
   },
+  { id: 'webSearch', icon: 'search', titleKey: 'settings.advancedPages.webSearchTitle' },
   {
     id: 'startupDiagnostics',
     icon: 'bolt',
@@ -51,6 +58,24 @@ export const GENERAL_PAGES = [
     icon: 'mic',
     titleKey: 'settings.generalPages.recordingTitle',
     descriptionKey: 'settings.generalPages.recordingDesc',
+  },
+  {
+    id: 'translation',
+    icon: 'translate',
+    titleKey: 'shiftTranslation.title',
+    descriptionKey: 'shiftTranslation.description',
+  },
+  {
+    id: 'askEntry',
+    icon: 'sparkle',
+    titleKey: 'askEntrySettings.title',
+    descriptionKey: 'askEntrySettings.description',
+  },
+  {
+    id: 'askHistory',
+    icon: 'history',
+    titleKey: 'selectionAsk.history.title',
+    descriptionKey: 'selectionAsk.history.desc',
   },
   {
     id: 'capsule',
@@ -75,8 +100,16 @@ export const GENERAL_PAGES = [
 export type GeneralPage = (typeof GENERAL_PAGES)[number];
 export type GeneralPageId = GeneralPage['id'];
 
-export function visibleGeneralPages(platform: PlatformKind | undefined): GeneralPage[] {
+export function visibleGeneralPages(
+  platform: PlatformKind | undefined,
+  os?: OS,
+  native = false,
+): GeneralPage[] {
+  const unifiedAsk = native && platform === 'desktop' && (os === 'mac' || os === 'win');
   return GENERAL_PAGES.filter((page) => {
+    if (page.id === 'translation') return platform == null || platform === 'desktop';
+    if (page.id === 'askEntry') return unifiedAsk;
+    if (page.id === 'askHistory') return !unifiedAsk;
     if (page.id === 'phone') return platform === 'desktop';
     if (page.id === 'capsule') return platform == null || platform === 'desktop';
     return true;
@@ -85,8 +118,7 @@ export function visibleGeneralPages(platform: PlatformKind | undefined): General
 
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
-    // Windows 有 TSF 组合输入；Linux 是占位（整块标注「即将支持」）；
-    // macOS 已下线这条链路，不再提供入口。
+    if (page.id === 'intentRouting') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'liveInput') return platform === 'desktop' && os !== 'mac';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
     if (page.id === 'debug')

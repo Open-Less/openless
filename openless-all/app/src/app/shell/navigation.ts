@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getShortcutPlatform } from '../../runtime/environment';
 
 export type AppTab =
   | 'overview'
@@ -6,12 +7,20 @@ export type AppTab =
   | 'usage'
   | 'vocab'
   | 'style'
+  | 'appStyles'
   | 'marketplace'
   | 'translation'
-  | 'selectionAsk'
   | 'quickNote'
   | 'corrections'
   | 'localAsr';
+
+export function isTabAvailable(tab: AppTab): boolean {
+  if (tab === 'appStyles') {
+    const platform = getShortcutPlatform();
+    return platform.isMac || platform.isWindows;
+  }
+  return true;
+}
 
 export interface AppState {
   currentTab: AppTab;
@@ -21,14 +30,24 @@ export interface AppState {
 }
 
 export function useAppState(initialTab: AppTab = 'overview', initialSettings = false): AppState {
-  const [currentTab, setCurrentTab] = useState<AppTab>(initialTab);
+  const [currentTab, setCurrentTab] = useState<AppTab>(() =>
+    isTabAvailable(initialTab) ? initialTab : 'overview',
+  );
   const [settingsOpen, setSettingsOpen] = useState<boolean>(initialSettings);
-  return { currentTab, setCurrentTab, settingsOpen, setSettingsOpen };
+  return {
+    currentTab,
+    setCurrentTab: (tab) => {
+      if (isTabAvailable(tab)) setCurrentTab(tab);
+    },
+    settingsOpen,
+    setSettingsOpen,
+  };
 }
 
 /** i18n key for a group's sub-item title: style → nav.polishMode, everything else nav.<id>. */
 export function subItemLabelKey(id: AppTab): string {
   if (id === 'style') return 'nav.polishMode';
+  if (id === 'appStyles') return 'appStyles.title';
   return `nav.${id}`;
 }
 
@@ -40,7 +59,6 @@ interface NavItem {
 export const MORE_TABS: NavItem[] = [
   { id: 'vocab', icon: 'vocab' },
   { id: 'translation', icon: 'translate' },
-  { id: 'selectionAsk', icon: 'selectionAsk' },
   { id: 'quickNote', icon: 'history' },
   { id: 'corrections', icon: 'filter' },
 ];
@@ -67,7 +85,7 @@ export const NAV_TREE: NavNode[] = [
     kind: 'group',
     key: 'style',
     icon: 'style',
-    children: [{ id: 'style' }, { id: 'marketplace' }],
+    children: [{ id: 'style' }, { id: 'marketplace' }, { id: 'appStyles' }],
   },
   {
     kind: 'group',
@@ -75,7 +93,6 @@ export const NAV_TREE: NavNode[] = [
     icon: 'selectionAsk',
     children: [
       { id: 'corrections' },
-      { id: 'selectionAsk' },
       { id: 'translation' },
       { id: 'quickNote' },
     ],

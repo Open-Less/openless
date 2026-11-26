@@ -12,8 +12,8 @@ use std::sync::{
 };
 use uuid::Uuid;
 
-const MAX_RECORDS: usize = 10_000;
-const MAX_BYTES: u64 = 8 * 1024 * 1024;
+mod retention;
+use retention::{merge_retained_records, retention_key, EMPTY_DOCUMENT, MAX_BYTES, MAX_RECORDS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,7 +238,7 @@ impl UsageRecord {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UsageDocument {
     version: u32,
@@ -263,29 +263,50 @@ pub struct UsageRecorder {
     ledger: Arc<UsageLedger>,
     sender: mpsc::SyncSender<WriterCommand>,
     dropped_or_failed: Arc<AtomicU64>,
+    on_change: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl UsageRecorder {
     pub fn start(ledger: Arc<UsageLedger>) -> Result<Self, BackendError> {
+        Self::start_with_change_listener(ledger, || {})
+    }
+
+    /// Notify hosts after persisted data or the failure count changes.
+    /// The listener must not synchronously call back into this recorder.
+    pub fn start_with_change_listener(
+        ledger: Arc<UsageLedger>,
+        on_change: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self, BackendError> {
         let (sender, receiver) = mpsc::sync_channel(256);
         let worker_ledger = Arc::clone(&ledger);
         let dropped_or_failed = Arc::new(AtomicU64::new(0));
         let failures = Arc::clone(&dropped_or_failed);
+        let on_change: Arc<dyn Fn() + Send + Sync> = Arc::new(on_change);
+        let worker_on_change = Arc::clone(&on_change);
         std::thread::Builder::new()
             .name("openless-usage-ledger".into())
             .spawn(move || {
                 while let Ok(command) = receiver.recv() {
                     match command {
                         WriterCommand::Append(generation, record) => {
-                            if worker_ledger.append(generation, *record).is_err() {
-                                failures.fetch_add(1, Ordering::Relaxed);
+                            match worker_ledger.append(generation, *record) {
+                                Ok(true) => worker_on_change(),
+                                Ok(false) => {}
+                                Err(_) => {
+                                    failures.fetch_add(1, Ordering::Relaxed);
+                                    worker_on_change();
+                                }
                             }
                         }
                         WriterCommand::Flush(reply) => {
                             let _ = reply.send(());
                         }
                         WriterCommand::Clear(reply) => {
-                            let _ = reply.send(worker_ledger.clear());
+                            let result = worker_ledger.clear();
+                            if result.is_ok() {
+                                worker_on_change();
+                            }
+                            let _ = reply.send(result);
                         }
                     }
                 }
@@ -295,6 +316,7 @@ impl UsageRecorder {
             ledger,
             sender,
             dropped_or_failed,
+            on_change,
         })
     }
 
@@ -311,6 +333,7 @@ impl UsageRecorder {
             true
         } else {
             self.dropped_or_failed.fetch_add(1, Ordering::Relaxed);
+            (self.on_change)();
             false
         }
     }
@@ -350,7 +373,7 @@ impl UsageRecorder {
 impl UsageLedger {
     /// Replacing an unreadable ledger requires an explicit user reset.
     pub fn reset(path: PathBuf) -> Result<Self, BackendError> {
-        atomic_write(&path, br#"{"version":1,"records":[]}"#)?;
+        atomic_write(&path, EMPTY_DOCUMENT)?;
         Self::open(path)
     }
 
@@ -359,10 +382,10 @@ impl UsageLedger {
         match std::fs::File::open(&path) {
             Ok(file) => {
                 let mut bytes = Vec::new();
-                file.take(MAX_BYTES + 1)
+                file.take(MAX_BYTES as u64 + 1)
                     .read_to_end(&mut bytes)
                     .map_err(|_| persistence_error("read service usage"))?;
-                if bytes.len() as u64 > MAX_BYTES {
+                if bytes.len() > MAX_BYTES {
                     return Err(persistence_error("service usage too large"));
                 }
                 let document: UsageDocument = serde_json::from_slice(&bytes)
@@ -379,6 +402,7 @@ impl UsageLedger {
                     return Err(persistence_error("invalid service usage record"));
                 }
                 records = document.records;
+                records.sort_unstable_by_key(retention_key);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return Err(persistence_error("read service usage")),
@@ -399,9 +423,14 @@ impl UsageLedger {
         expected_generation: u64,
         record: UsageRecord,
     ) -> Result<bool, BackendError> {
-        if !record.valid() {
-            return Err(persistence_error("invalid service usage record"));
-        }
+        self.merge_records(expected_generation, [record])
+    }
+
+    fn merge_records(
+        &self,
+        expected_generation: u64,
+        records: impl IntoIterator<Item = UsageRecord>,
+    ) -> Result<bool, BackendError> {
         let mut state = self
             .records
             .lock()
@@ -409,23 +438,17 @@ impl UsageLedger {
         if self.generation.load(Ordering::Acquire) != expected_generation {
             return Ok(false);
         }
-        let mut next = state
+        let current = state
             .as_ref()
-            .ok_or_else(|| persistence_error("service usage needs reload"))?
-            .clone();
-        if next.iter().any(|existing| existing.id == record.id) {
+            .ok_or_else(|| persistence_error("service usage needs reload"))?;
+        let Some(update) = merge_retained_records(current, records)? else {
             return Ok(false);
-        }
-        next.push(record);
-        next.sort_unstable_by_key(|record| record.occurred_at_ms);
-        if next.len() > MAX_RECORDS {
-            next.drain(..next.len() - MAX_RECORDS);
-        }
-        if let Err(error) = self.persist(&next) {
+        };
+        if let Err(error) = atomic_write(&self.path, &update.encoded) {
             *state = None;
             return Err(error);
         }
-        *state = Some(next);
+        *state = Some(update.records);
         Ok(true)
     }
 
@@ -446,21 +469,12 @@ impl UsageLedger {
         if state.is_none() {
             return Err(persistence_error("service usage needs reload"));
         }
-        if let Err(error) = self.persist(&[]) {
+        if let Err(error) = atomic_write(&self.path, EMPTY_DOCUMENT) {
             *state = None;
             return Err(error);
         }
         *state = Some(Vec::new());
         Ok(())
-    }
-
-    fn persist(&self, records: &[UsageRecord]) -> Result<(), BackendError> {
-        let bytes = serde_json::to_vec(&UsageDocument {
-            version: 1,
-            records: records.to_vec(),
-        })
-        .map_err(|_| persistence_error("encode service usage"))?;
-        atomic_write(&self.path, &bytes)
     }
 }
 
@@ -507,6 +521,125 @@ mod tests {
             UsageLedger::open(path).unwrap().list().unwrap(),
             vec![event]
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn usage_record_union_is_idempotent_across_reopen_and_reversed_merges() {
+        let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
+        let a_path = dir.join("a.json");
+        let b_path = dir.join("b.json");
+        let a = UsageLedger::open(a_path.clone()).unwrap();
+        let b = UsageLedger::open(b_path.clone()).unwrap();
+        let usage = |input_tokens| UsageRecord {
+            input_tokens: Some(input_tokens),
+            ..record()
+        };
+        let merge = |target: &UsageLedger, source: &UsageLedger| {
+            target
+                .merge_records(target.generation(), source.list().unwrap())
+                .unwrap()
+        };
+        let total = |ledger: &UsageLedger| {
+            ledger
+                .list()
+                .unwrap()
+                .into_iter()
+                .map(|event| event.input_tokens.unwrap())
+                .sum::<u64>()
+        };
+        assert!(a.append(a.generation(), usage(10)).unwrap());
+        assert!(b.append(b.generation(), usage(7)).unwrap());
+        assert!(merge(&a, &b));
+        assert!(merge(&b, &a));
+        assert_eq!((total(&a), total(&b)), (17, 17));
+        let persisted = std::fs::read(&a_path).unwrap();
+        drop(a);
+        let a = UsageLedger::open(a_path.clone()).unwrap();
+        assert!(!merge(&a, &b));
+        assert!(!merge(&b, &a));
+        assert_eq!(std::fs::read(&a_path).unwrap(), persisted);
+        assert_eq!((total(&a), total(&b)), (17, 17));
+
+        assert!(a.append(a.generation(), usage(4)).unwrap());
+        assert!(b.append(b.generation(), usage(2)).unwrap());
+        assert!(merge(&b, &a));
+        assert!(!merge(&b, &a));
+        assert!(merge(&a, &b));
+        assert!(!merge(&a, &b));
+        assert_eq!((total(&a), total(&b)), (23, 23));
+        assert_eq!(
+            std::fs::read(a_path).unwrap(),
+            std::fs::read(b_path).unwrap()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn conflicting_usage_record_rejects_the_whole_batch() {
+        let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
+        let path = dir.join("usage.json");
+        let ledger = UsageLedger::open(path.clone()).unwrap();
+        let original = record();
+        assert!(ledger
+            .append(ledger.generation(), original.clone())
+            .unwrap());
+        let before = std::fs::read(&path).unwrap();
+        let conflict = UsageRecord {
+            input_tokens: Some(1),
+            ..original.clone()
+        };
+        assert!(ledger
+            .merge_records(ledger.generation(), [record(), conflict])
+            .is_err());
+        assert_eq!(ledger.list().unwrap(), vec![original]);
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn byte_retention_is_reopenable_deterministic_and_ignores_evicted_replays() {
+        let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
+        let a_path = dir.join("a.json");
+        let b_path = dir.join("b.json");
+        let a = UsageLedger::open(a_path.clone()).unwrap();
+        let b = UsageLedger::open(b_path.clone()).unwrap();
+        let label = Some("x".repeat(160));
+        let template = UsageRecord {
+            provider: label.clone(),
+            service: label.clone(),
+            protocol: label.clone(),
+            channel: label.clone(),
+            model: label,
+            ..record()
+        };
+        let records: Vec<_> = (1..=MAX_RECORDS)
+            .map(|i| UsageRecord {
+                id: Uuid::from_u128(i as u128),
+                ..template.clone()
+            })
+            .collect();
+        assert!(a.merge_records(a.generation(), records.clone()).unwrap());
+        assert!(b
+            .merge_records(b.generation(), records.into_iter().rev())
+            .unwrap());
+        let bytes = std::fs::read(&a_path).unwrap();
+        assert!(bytes.len() <= MAX_BYTES);
+        assert_eq!(std::fs::read(b_path).unwrap(), bytes);
+        drop(a);
+        let a = UsageLedger::open(a_path).unwrap();
+        let saved = a.list().unwrap();
+        assert!(saved.len() < MAX_RECORDS);
+        assert_eq!(
+            saved.last().unwrap().id,
+            Uuid::from_u128(MAX_RECORDS as u128)
+        );
+        let evicted = UsageRecord {
+            id: Uuid::from_u128(1),
+            ..template
+        };
+        assert!(!a.append(a.generation(), evicted).unwrap());
+        assert_eq!(a.list().unwrap(), saved);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -563,17 +696,30 @@ mod tests {
     fn recorder_flushes_and_rejects_inflight_records_after_clear() {
         let dir = std::env::temp_dir().join(format!("openless-usage-{}", Uuid::new_v4()));
         let ledger = Arc::new(UsageLedger::open(dir.join("usage.json")).unwrap());
-        let recorder = UsageRecorder::start(ledger).unwrap();
+        let observed_ledger = Arc::clone(&ledger);
+        let (changed, changes) = mpsc::channel();
+        let recorder = UsageRecorder::start_with_change_listener(ledger, move || {
+            changed.send(observed_ledger.list().unwrap().len()).unwrap();
+        })
+        .unwrap();
         let generation = recorder.generation();
-        assert!(recorder.submit(generation, record()));
+        let original = record();
+        assert!(recorder.submit(generation, original.clone()));
         assert_eq!(recorder.snapshot().unwrap().0.len(), 1);
+        assert_eq!(changes.try_recv().unwrap(), 1);
+        assert!(recorder.submit(generation, original));
+        assert_eq!(recorder.snapshot().unwrap().0.len(), 1);
+        assert!(changes.try_recv().is_err());
         recorder.clear().unwrap();
+        assert_eq!(changes.try_recv().unwrap(), 0);
         assert!(recorder.submit(generation, record()));
         assert!(recorder.snapshot().unwrap().0.is_empty());
+        assert!(changes.try_recv().is_err());
         let mut invalid = record();
         invalid.model = Some("sk-secret".into());
         assert!(recorder.submit(recorder.generation(), invalid));
         assert_eq!(recorder.snapshot().unwrap().1, 1);
+        assert_eq!(changes.try_recv().unwrap(), 0);
         drop(recorder);
         std::fs::remove_dir_all(dir).unwrap();
     }

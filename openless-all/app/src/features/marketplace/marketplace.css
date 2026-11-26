@@ -1,0 +1,65 @@
+.ol-dialog-card.ol-marketplace-upload-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ol-marketplace-upload-dialog > :not(.ol-marketplace-upload-list) {
+  flex-shrink: 0;
+}
+
+.ol-marketplace-upload-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ol-marketplace-upload-option {
+  display: flex;
+  flex: 0 0 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  text-align: start;
+  border: 1px solid var(--ol-line-strong);
+  border-radius: var(--ol-control-radius);
+  background: var(--ol-surface);
+  cursor: pointer;
+}
+
+.ol-marketplace-upload-option[aria-pressed='true'] {
+  border-color: var(--ol-blue);
+  background: var(--ol-blue-soft);
+}
+
+.ol-marketplace-upload-list .ol-marketplace-upload-option:focus-visible {
+  outline-offset: -3px;
+}
+
+.ol-marketplace-upload-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+  height: 18px;
+  border-radius: var(--ol-radius);
+  border: 1px solid var(--ol-line-strong);
+  color: #fff;
+}
+
+.ol-marketplace-upload-option[aria-pressed='true'] .ol-marketplace-upload-check {
+  border-color: var(--ol-blue);
+  background: var(--ol-blue);
+}
+
+.ol-marketplace-upload-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}

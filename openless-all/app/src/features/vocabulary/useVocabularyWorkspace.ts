@@ -11,7 +11,6 @@ import {
 } from '../../api/vocabulary';
 import { listenVocabularyChanges } from '../../api/vocabulary-events';
 import { useExitMount } from '../../lib/useExitMount';
-import { useMobileLayout } from '../../lib/useMobileLayout';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets } from '../../lib/vocabPresets';
 import { useInteraction } from '../../ui/overlays/InteractionProvider';
 
@@ -22,7 +21,6 @@ type SourceFilter = 'all' | 'auto' | 'manual';
 
 export function useVocabularyWorkspace() {
   const { t } = useTranslation();
-  const mobile = useMobileLayout();
   const [entries, setEntries] = useState<DictionaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -46,14 +44,13 @@ export function useVocabularyWorkspace() {
   const editMount = useExitMount(editingEntry !== null);
   const newWordMount = useExitMount(newWordOpen);
 
-  // Word-grid FLIP: when add/remove/filter shifts rows, slide cards from their old
-  // position to the new one; new cards enter via the .ol-word-card CSS animation and
-  // confirmed deletes use a card exit animation.
+  // When a mutation shifts rows, animate the remaining cards from their old positions.
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const prevCardTops = useRef(new Map<string, number>());
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
+  const selectionAnchor = useRef<string | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
 
   const refresh = async () => {
@@ -102,7 +99,10 @@ export function useVocabularyWorkspace() {
 
   const flashSaved = () => notify({ state: 'saved', message: t('common.saved') });
 
-  const removeEntries = async (ids: string[], target: 'selected' | 'learned' | DictionaryEntry = 'selected') => {
+  const removeEntries = async (
+    ids: string[],
+    target: 'selected' | 'learned' | DictionaryEntry = 'selected',
+  ) => {
     if (deleteRequest.current || ids.length === 0) return;
     deleteRequest.current = true;
     const remove = createDeletionBatch(ids, removeVocab);
@@ -117,9 +117,10 @@ export function useVocabularyWorkspace() {
         description: t('vocab.deleteScope'),
         confirmLabel: t('common.delete'),
         tone: 'danger',
-        errorMessage: (error) => error instanceof IncompleteDeletion
-          ? t('vocab.deleteIncomplete', { count: error.remaining })
-          : t('common.operationFailed'),
+        errorMessage: (error) =>
+          error instanceof IncompleteDeletion
+            ? t('vocab.deleteIncomplete', { count: error.remaining })
+            : t('common.operationFailed'),
         onConfirm: async () => {
           deleting.current = true;
           setBatchBusy(true);
@@ -143,15 +144,6 @@ export function useVocabularyWorkspace() {
     } finally {
       deleteRequest.current = false;
     }
-  };
-
-  const toggleSelection = (id: string) => {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   const onToggle = async (entry: DictionaryEntry) => {
@@ -294,7 +286,11 @@ export function useVocabularyWorkspace() {
     }
   };
 
-  const onRemoveAllLearnedEntries = () => removeEntries(learnedEntries.map((entry) => entry.id), 'learned');
+  const onRemoveAllLearnedEntries = () =>
+    removeEntries(
+      learnedEntries.map((entry) => entry.id),
+      'learned',
+    );
 
   const needle = query.trim().toLowerCase();
   const visibleEntries = entries.filter(
@@ -302,6 +298,36 @@ export function useVocabularyWorkspace() {
       (filter === 'all' || sourceOf(e) === filter) &&
       (!needle || e.phrase.toLowerCase().includes(needle)),
   );
+
+  const toggleSelection = (id: string, extend: boolean) => {
+    const anchor = selectionAnchor.current;
+    const start = extend ? visibleEntries.findIndex((entry) => entry.id === anchor) : -1;
+    const end = start < 0 ? -1 : visibleEntries.findIndex((entry) => entry.id === id);
+    if (start >= 0 && end >= 0) {
+      const range = visibleEntries.slice(Math.min(start, end), Math.max(start, end) + 1);
+      setSelectedIds((current) => new Set([...current, ...range.map((entry) => entry.id)]));
+      return;
+    }
+    selectionAnchor.current = id;
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    if (batchBusy || visibleEntries.length === 0) return;
+    setSelectedIds((current) => new Set([...current, ...visibleEntries.map((entry) => entry.id)]));
+  };
+
+  const toggleSelectionMode = () => {
+    if (batchBusy) return;
+    selectionAnchor.current = null;
+    if (selecting) setSelectedIds(new Set());
+    setSelecting(!selecting);
+  };
 
   // FLIP: measure layout position only (offsetTop); rect is polluted by in-flight
   // animation transforms.
@@ -324,7 +350,6 @@ export function useVocabularyWorkspace() {
 
   return {
     t,
-    mobile,
     loading,
     error,
     presets,
@@ -348,12 +373,12 @@ export function useVocabularyWorkspace() {
     cardRefs,
     removingIds,
     selectedIds,
-    setSelectedIds,
     selecting,
-    setSelecting,
     batchBusy,
     removeEntries,
     toggleSelection,
+    toggleSelectionMode,
+    selectAllVisible,
     onToggle,
     openEdit,
     saveEdit,

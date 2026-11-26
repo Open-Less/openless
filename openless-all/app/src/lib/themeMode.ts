@@ -19,6 +19,7 @@ let systemHandler: ((event: MediaQueryListEvent) => void) | null = null;
 let activePreference: ThemePreference = 'system';
 let preferenceRevision = 0;
 let initialized = false;
+let initialTheme: Promise<void> = Promise.resolve();
 
 function readStoredPreference(): ThemePreference {
   try {
@@ -73,17 +74,13 @@ function detachSystemListener(): void {
 
 export function applyThemeMode(resolved: ResolvedTheme): void {
   const root = document.documentElement;
-  if (resolved === 'dark') {
-    root.dataset.olTheme = 'dark';
-  } else {
-    delete root.dataset.olTheme;
-  }
+  root.dataset.olTheme = resolved;
   root.style.colorScheme = resolved;
   void syncWindowsCaptionTheme(resolved === 'dark');
 }
 
-function syncNativeAppearance(preference: ThemePreference): void {
-  void syncMacOSWindowTheme(preference).then((applied) => {
+function syncNativeAppearance(preference: ThemePreference): Promise<void> {
+  return syncMacOSWindowTheme(preference).then((applied) => {
     // matchMedia may still reflect the old explicit native appearance until
     // NSApplication's override has been cleared. Re-read it after that change.
     if (applied && preference === 'system' && activePreference === preference) {
@@ -92,7 +89,7 @@ function syncNativeAppearance(preference: ThemePreference): void {
   });
 }
 
-export function applyThemeFromPreference(pref: ThemePreference): void {
+export function applyThemeFromPreference(pref: ThemePreference): Promise<void> {
   preferenceRevision++;
   activePreference = pref;
   writeStoredPreference(pref);
@@ -102,11 +99,15 @@ export function applyThemeFromPreference(pref: ThemePreference): void {
     detachSystemListener();
   }
   applyThemeMode(resolveTheme(pref));
-  syncNativeAppearance(pref);
+  return syncNativeAppearance(pref);
 }
 
 export function setThemePreference(pref: ThemePreference): void {
-  applyThemeFromPreference(pref);
+  void applyThemeFromPreference(pref);
+}
+
+export function initialThemeReady(): Promise<void> {
+  return initialTheme;
 }
 
 export function initThemeMode(): void {
@@ -122,13 +123,13 @@ export function initThemeMode(): void {
   const requestedRevision = preferenceRevision;
   // This subscription belongs to the WebView lifetime, including hidden capsules
   // and transcript mirrors that never mount HotkeySettingsProvider.
-  void (async () => {
+  initialTheme = (async () => {
     try {
       const { listen } = await import('@tauri-apps/api/event');
       await listen<Partial<UserPreferences>>('prefs:changed', ({ payload }) => {
         const preference = payload?.themeMode;
         if (preference === 'light' || preference === 'dark' || preference === 'system') {
-          applyThemeFromPreference(preference);
+          void applyThemeFromPreference(preference);
         }
       });
     } catch (error) {
@@ -144,9 +145,9 @@ export function initThemeMode(): void {
       // The boot cache paints the page only. Rust has already initialized
       // native appearance, so a stale cache must never overwrite it.
       if (rustPref === activePreference) {
-        syncNativeAppearance(rustPref);
+        return syncNativeAppearance(rustPref);
       } else {
-        applyThemeFromPreference(rustPref);
+        return applyThemeFromPreference(rustPref);
       }
     })
     .catch((error) => {

@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { formatUsageNumber } from '../../lib/serviceUsageMetrics';
+import type { PillTone } from '../../ui/controls/Pill';
 
 export function useUsageLabels() {
   const { t, i18n } = useTranslation();
@@ -31,6 +32,7 @@ export function useUsageLabels() {
     text('未知协议', 'Unknown protocol');
   const purposeName = (purpose: string) => {
     const labels: Record<string, [string, string]> = {
+      dictation: ['语音听写', 'Dictation'],
       dictationPostprocess: ['听写后处理', 'Dictation processing'],
       translation: ['翻译', 'Translation'],
       selection: ['选区处理', 'Selection'],
@@ -42,17 +44,32 @@ export function useUsageLabels() {
     const label = labels[purpose];
     return label ? text(...label) : text('其他', 'Other');
   };
-  const safeTokens = (value: number | null) => (
-    <span
-      title={
-        value !== null && Number.isSafeInteger(value) && value >= 0
-          ? value.toLocaleString()
-          : undefined
-      }
-    >
-      {formatUsageNumber(value)}
-    </span>
-  );
+  const purposeTone = (purpose: string): PillTone => {
+    if (purpose === 'dictationPostprocess' || purpose === 'question' || purpose === 'selection') {
+      return 'blue';
+    }
+    if (purpose === 'translation' || purpose === 'voiceEdit') {
+      return 'ok';
+    }
+    return 'outline';
+  };
+  const safeTokens = (value: number | null) => {
+    const formatted = formatUsageNumber(value);
+    const empty = formatted === '—';
+    return (
+      <span
+        className="ol-usage-token-value"
+        data-empty={empty || undefined}
+        title={
+          value !== null && Number.isSafeInteger(value) && value >= 0
+            ? value.toLocaleString()
+            : undefined
+        }
+      >
+        {formatted}
+      </span>
+    );
+  };
 
-  return { text, serviceName, protocolName, purposeName, safeTokens };
+  return { text, serviceName, protocolName, purposeName, purposeTone, safeTokens };
 }

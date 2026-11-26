@@ -8,19 +8,37 @@ import '../../src/styles/refinements.css';
 
 const calls: string[] = [];
 const credentials = new Map<string, string>();
-let disposition: 'accept' | 'reject' | 'hold' = 'accept';
-let settle: (() => void) | undefined;
+type Operation = 'credential' | 'rename' | 'delete';
+const disposition = new Map<Operation, 'reject' | 'hold'>();
+const held = new Map<Operation, () => void>();
+let name = 'Fixture channel';
+async function write(operation: Operation, commit: () => void) {
+  calls.push(`${operation}-start`);
+  if (disposition.get(operation) === 'hold') {
+    await new Promise<void>((resolve) => held.set(operation, resolve));
+    held.delete(operation);
+  }
+  if (disposition.get(operation) === 'reject') {
+    calls.push(`${operation}-rejected`);
+    throw new Error(`Fixture refused the ${operation} request`);
+  }
+  commit();
+  calls.push(`${operation}-committed`);
+}
+
 const fixture = {
   calls,
-  reject: () => {
-    disposition = 'reject';
+  saved: () => ({ name, credential: credentials.get('fixture-channel:ark.api_key') }),
+  reject: (operation: Operation = 'credential') => {
+    disposition.set(operation, 'reject');
+    held.get(operation)?.();
   },
-  hold: () => {
-    disposition = 'hold';
+  hold: (operation: Operation = 'credential') => {
+    disposition.set(operation, 'hold');
   },
-  release: () => {
-    disposition = 'accept';
-    settle?.();
+  release: (operation: Operation = 'credential') => {
+    disposition.delete(operation);
+    held.get(operation)?.();
   },
 };
 let mockSettings: Awaited<ReturnType<typeof import('../../src/api/preferences').getSettings>>;
@@ -36,21 +54,24 @@ Object.assign(window, {
       if (command === 'get_settings_snapshot') return { revision: 0, preferences: mockSettings };
       if (command === 'get_platform_capabilities') return getPreviewProfile('mac').capabilities;
       if (command === 'get_hotkey_capability') return getPreviewProfile('mac').hotkeyCapability;
-      if (command === 'read_credential') return credentials.get(args.account) ?? null;
+      const slot = `${args.provider}:${args.account}`;
+      if (command === 'read_credential') return credentials.get(slot) ?? null;
       if (command === 'set_credential') {
         if (args.account.endsWith('api_key')) {
-          calls.push('credential-start');
-          if (disposition === 'hold')
-            await new Promise<void>((resolve) => {
-              settle = resolve;
-            });
-          if (disposition === 'reject') {
-            calls.push('credential-rejected');
-            throw new Error('Fixture keychain refused the write');
-          }
-          calls.push('credential-committed');
+          await write('credential', () => credentials.set(slot, args.value));
+        } else {
+          credentials.set(slot, args.value);
         }
-        credentials.set(args.account, args.value);
+      }
+      if (command === 'rename_channel' || command === 'delete_channel') {
+        if (args.kind !== 'llm' || args.id !== 'fixture-channel') throw new Error('Wrong channel');
+        if (command === 'rename_channel') {
+          await write('rename', () => {
+            name = args.name;
+          });
+        } else {
+          await write('delete', () => credentials.clear());
+        }
       }
       if (command === 'set_channel_provider_type') calls.push(`provider:${args.providerType}`);
       return null;

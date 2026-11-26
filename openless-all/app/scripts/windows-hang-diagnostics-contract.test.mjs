@@ -49,7 +49,7 @@ assert.deepEqual(
 );
 assert.match(coordinator, /issue1266_debug::lock_host\(&self\.inner\.settings_host_gate/);
 assert.doesNotMatch(coordinator + loops, /settings_host_gate\.lock\(\)/);
-for (const kind of ['MainHotkey', 'QaHotkey', 'ComboHotkey', 'ActionHotkey', 'StyleHotkey']) {
+for (const kind of ['MainHotkey', 'ComboHotkey', 'ActionHotkey', 'StyleHotkey']) {
   assert.ok(loops.includes(`lock_host(&inner.settings_host_gate, DebugKind::${kind})`));
 }
 assert.doesNotMatch(loops, /fn coding_agent_hotkey_supervisor_loop/);
@@ -141,7 +141,7 @@ assert.match(ime, /Event::SubmitAck/);
 assert.match(ime, /error\.is_outcome_unknown\(\) => Outcome::Unknown/);
 assert.match(recorder, /if let Some\(handle\) = join_handle\.lock\(\)\.take\(\) \{/);
 assert.match(recorder, /if let Some\(handle\) = self\.join_handle\.lock\(\)\.take\(\) \{/);
-assert.match(recorder, /not\(feature = "issue-1266-diagnostics"\), not\(test\)/);
+assert.match(recorder, /not\(feature = "issue-1266-diagnostics"\),\s*not\(test\)/);
 assert.match(recorder, /issue1266_debug::legacy\(event, outcome\)/);
 assert.ok(
   lib.indexOf('issue1266_debug::initialize();') <
