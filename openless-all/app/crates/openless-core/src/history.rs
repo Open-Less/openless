@@ -319,6 +319,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_selection_history_keeps_the_full_original_separate_from_the_result() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-legacy-selection-{}.json", uuid::Uuid::new_v4()
+        ));
+        let original = format!(" \t{} LEGACY_MIDDLE {}\n ", "字".repeat(9000), "尾".repeat(9000));
+        let mut row = session("legacy-selection", chrono::Utc::now().to_rfc3339());
+        row.source = HistorySource::SelectionPolish;
+        row.raw_transcript = original.clone();
+        row.final_text = "existing result".into();
+        let mut legacy = serde_json::to_value(&row).unwrap();
+        for field in ["asrTranscript", "polishSource", "pipelineMode", "hasAudioRecording"] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        let bytes = serde_json::to_vec(&vec![legacy]).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let store = HistoryStore::at_path(path.clone());
+        let mut read = store.list().unwrap().remove(0);
+        assert_eq!(read.raw_transcript, original);
+        assert_eq!(read.final_text, "existing result");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        read.final_text = "new result".into();
+        store.update_entry(read).unwrap();
+        let read = store.list().unwrap();
+        assert_eq!(read[0].raw_transcript, original);
+        assert_eq!(read[0].final_text, "new result");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn legacy_quick_note_history_survives_read_and_append() {
         let path = std::env::temp_dir().join(format!(
             "openless-legacy-history-{}.json",

@@ -161,6 +161,11 @@ extern "C" {
         attribute: CFStringRef,
         value: CFTypeRef,
     ) -> AxError;
+    fn AXUIElementIsAttributeSettable(
+        element: AxUiElementRef,
+        attribute: CFStringRef,
+        settable: *mut u8,
+    ) -> AxError;
     pub(crate) fn AXUIElementCopyParameterizedAttributeValue(
         element: AxUiElementRef,
         parameterized_attribute: CFStringRef,
@@ -184,19 +189,8 @@ extern "C" {
         cstr: *const c_char,
         encoding: u32,
     ) -> CFStringRef;
-    fn CFStringGetCStringPtr(s: CFStringRef, encoding: u32) -> *const c_char;
-    // Returns `u8`, not `bool`: CoreFoundation's `Boolean` is `unsigned char`,
-    // not C's `_Bool`. Rust's `bool` requires the bit pattern to be exactly 0
-    // or 1 (anything else is UB), so it must not receive an `unsigned char`.
-    // `AXValueGetValue` in this file already uses `u8`.
-    fn CFStringGetCString(
-        s: CFStringRef,
-        buffer: *mut c_char,
-        buffer_size: isize,
-        encoding: u32,
-    ) -> u8;
     fn CFStringGetLength(s: CFStringRef) -> isize;
-    fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
+    fn CFStringGetCharacters(s: CFStringRef, range: CFRange, buffer: *mut u16);
     fn CFNumberGetValue(number: CFTypeRef, number_type: i32, value_ptr: *mut c_void) -> u8;
 }
 
@@ -568,6 +562,75 @@ pub(super) fn apply_voice_edit_target(
                 }
             },
         )
+    }
+}
+
+/// AXSelectedText replaces the range on a retained control, without paste or
+/// whole-field SetValue. Range readback is required before submitting a write;
+/// unsupported web/editor controls take the clipboard fallback instead.
+pub(super) fn replace_selection_direct(
+    original: &str,
+    replacement: &str,
+    still_current: impl Fn() -> bool,
+) -> Result<(), String> {
+    unsafe {
+        if !still_current() || original.is_empty() {
+            return Err("selectionPolishTargetChanged".into());
+        }
+        let GatedElement::Ready(element) = focused_element_passing_the_gate(voice_edit_gate()) else {
+            return Err("selectionPolishTargetUnavailable".into());
+        };
+        let retained = SendableElement::retained(element);
+        CFRelease(element as CFTypeRef);
+        let element = retained.as_ref();
+        let range = copy_selected_range(element)
+            .filter(|range| range.location >= 0 && range.length > 0)
+            .ok_or("selectionPolishTargetUnavailable")?;
+        if copy_string_for_range(element, range.location as usize, range.length as usize)
+            .as_deref() != Some(original)
+        {
+            return Err("selectionPolishSelectionChanged".into());
+        }
+        // CFString supports embedded NULs; CString would silently limit the
+        // set of valid selection replacements.
+        let value = core_foundation::string::CFString::new(replacement);
+        let attribute = cfstring_from_static(b"AXSelectedText\0")
+            .ok_or("selectionPolishTargetUnavailable")?;
+        let mut settable = 0u8;
+        let supported = AXUIElementIsAttributeSettable(element, attribute, &mut settable)
+            == AX_ERROR_SUCCESS && settable != 0;
+        if !supported || !still_current() || copy_selected_range(element) != Some(range)
+            || copy_string_for_range(element, range.location as usize, range.length as usize)
+                .as_deref() != Some(original)
+            || !still_current()
+        {
+            CFRelease(attribute);
+            return Err("selectionPolishTargetUnavailable".into());
+        }
+        // The call is bound to `element`, so even a last-moment focus change
+        // cannot write into a different control in the same application.
+        let submitted = AXUIElementSetAttributeValue(
+            element,
+            attribute,
+            value.as_concrete_TypeRef().cast(),
+        );
+        CFRelease(attribute);
+        if submitted != AX_ERROR_SUCCESS {
+            return Err("selectionPolishWriteUnconfirmed".into());
+        }
+        let result_length = replacement.encode_utf16().count();
+        let expected_caret = range.location.checked_add(
+            isize::try_from(result_length).map_err(|_| "selectionPolishWriteUnconfirmed")?,
+        ).ok_or("selectionPolishWriteUnconfirmed")?;
+        if copy_string_for_range(element, range.location as usize, result_length)
+            .as_deref() != Some(replacement)
+            || copy_selected_range(element) != Some(CFRange {
+                location: expected_caret, length: 0,
+            })
+        {
+            return Err("selectionPolishWriteUnconfirmed".into());
+        }
+        Ok(())
     }
 }
 
@@ -1016,29 +1079,13 @@ unsafe fn cfstring_from_static(bytes_with_nul: &[u8]) -> Option<CFStringRef> {
 }
 
 unsafe fn cfstring_to_rust(s: CFStringRef) -> Option<String> {
-    let direct = CFStringGetCStringPtr(s, K_CF_STRING_ENCODING_UTF8);
-    if !direct.is_null() {
-        return CStr::from_ptr(direct).to_str().ok().map(str::to_string);
-    }
     let length = CFStringGetLength(s);
-    if length <= 0 {
-        return Some(String::new());
-    }
-    let max_bytes = CFStringGetMaximumSizeForEncoding(length, K_CF_STRING_ENCODING_UTF8) + 1;
-    let mut buf: Vec<u8> = vec![0; max_bytes as usize];
-    let ok = CFStringGetCString(
-        s,
-        buf.as_mut_ptr() as *mut c_char,
-        max_bytes,
-        K_CF_STRING_ENCODING_UTF8,
-    );
-    if ok == 0 {
+    if length < 0 {
         return None;
     }
-    CStr::from_ptr(buf.as_ptr() as *const c_char)
-        .to_str()
-        .ok()
-        .map(str::to_string)
+    let mut units = vec![0u16; length as usize];
+    CFStringGetCharacters(s, CFRange { location: 0, length }, units.as_mut_ptr());
+    String::from_utf16(&units).ok()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

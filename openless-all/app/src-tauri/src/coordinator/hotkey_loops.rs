@@ -447,23 +447,27 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
             }
             Err(error) => {
                 log::warn!("[selection-polish] hotkey workflow failed: {error}");
+                let locale = inner.backend.services().remote_input.status()
+                    .map(|status| status.locale)
+                    .unwrap_or_else(|_| inner.backend.config().locale.clone());
                 let message = match error.message.as_str() {
                     "selectionPolishNoSelection" | "selected text must not be empty" => {
                         "未选中内容"
                     }
                     "selectionPolishSelectionTooLong" => {
-                        "选区超过 4000 字，未替换，以免删掉中间没有读到的原文"
+                        "无法完整读取选区，未替换"
                     }
                     "selectionPolishTargetUnavailable" => "目标输入框不可用，请重新选择",
                     "selectionPolishTargetChanged" | "selectionPolishSelectionChanged" => {
                         "选区已变化，未替换"
                     }
-                    _ if error.message.contains("llmResponseIncomplete")
+                    _ if error.message == "selectionInputTooLarge"
+                        || error.message.contains("llmResponseIncomplete")
                         || error.message.contains("context_length")
                         || error.message.contains("maximum context")
                         || error.message.contains("413") =>
                     {
-                        "服务无法完整处理全文，未替换；原文已保存在 App 的历史记录"
+                        crate::selection::capacity_failure_message(&locale)
                     }
                     "selectionOriginalCopyFailed" | "selectionOriginalUnavailable" => {
                         "无法保护原文，已停止，未替换"

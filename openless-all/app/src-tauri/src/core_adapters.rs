@@ -1174,29 +1174,7 @@ trait SelectionPlatformBridge: Send + Sync {
 }
 
 #[cfg(not(mobile))]
-struct NativeSelectionPlatformBridge {
-    app: AppHandleSlot,
-}
-
-#[cfg(not(mobile))]
-impl NativeSelectionPlatformBridge {
-    fn preferences(&self) -> Result<openless_core::UserPreferences, BackendError> {
-        let app = self.app.lock().clone().ok_or_else(|| {
-            BackendError::new(
-                BackendErrorCode::InvalidState,
-                "Tauri AppHandle is not bound yet",
-            )
-        })?;
-        app.try_state::<Arc<openless_core::OpenLessBackend>>()
-            .map(|backend| backend.get_preferences())
-            .ok_or_else(|| {
-                BackendError::new(
-                    BackendErrorCode::InvalidState,
-                    "core backend state is unavailable",
-                )
-            })
-    }
-}
+struct NativeSelectionPlatformBridge;
 
 #[cfg(not(mobile))]
 impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
@@ -1254,12 +1232,10 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
         if validation.error_code().is_some() {
             return crate::selection::selection_result_fallback(target, replacement_text);
         }
-        let preferences = self.preferences()?;
         crate::selection::insert_selection_result(
             target,
             source_text,
             replacement_text,
-            preferences.paste_shortcut,
         )
     }
 }
@@ -1272,8 +1248,8 @@ struct TauriSelectionRuntime {
 
 #[cfg(not(mobile))]
 impl TauriSelectionRuntime {
-    fn new(app: AppHandleSlot) -> Self {
-        Self::with_bridge(Arc::new(NativeSelectionPlatformBridge { app }))
+    fn new(_app: AppHandleSlot) -> Self {
+        Self::with_bridge(Arc::new(NativeSelectionPlatformBridge))
     }
 
     fn with_bridge(bridge: Arc<dyn SelectionPlatformBridge>) -> Self {
@@ -5820,6 +5796,27 @@ impl TauriHostContextAdapter {
 }
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
+    #[cfg(not(mobile))]
+    fn target_identity(&self) -> Option<openless_core::host_document::target::HostTargetIdentity> {
+        crate::selection::target_identity(self.target.as_ref()?)
+    }
+
+    #[cfg(not(mobile))]
+    fn validate_target(
+        &self,
+    ) -> BoxFuture<'static, openless_core::host_document::target::HostTargetValidation> {
+        let target = self.target.clone();
+        Box::pin(async move {
+            use openless_core::host_document::target::HostTargetValidation;
+            let Some(target) = target else {
+                return HostTargetValidation::Unavailable;
+            };
+            tauri::async_runtime::spawn_blocking(move || crate::selection::validate_target(&target))
+                .await
+                .unwrap_or(HostTargetValidation::Unavailable)
+        })
+    }
+
     #[cfg(not(mobile))]
     fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
         crate::selection::input_app_for_target(self.target.as_ref()?)

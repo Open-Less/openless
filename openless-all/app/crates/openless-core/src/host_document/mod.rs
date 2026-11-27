@@ -5,6 +5,7 @@
 
 mod diff;
 mod observation;
+pub mod target;
 mod window;
 
 pub use diff::{
