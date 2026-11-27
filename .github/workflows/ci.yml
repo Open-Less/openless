@@ -22,7 +22,7 @@ on:
       live_acceptance:
         description: Paid official-provider acceptance only (skips ordinary platform checks)
         type: choice
-        options: ['off', style, style-diagnostic, search]
+        options: ['off', style, style-diagnostic, search, intent-style-comparison]
         default: 'off'
       platform:
         description: Platforms to check (macos runs only macOS gates)
@@ -1284,9 +1284,15 @@ jobs:
 
   live-acceptance:
     name: Optional official-provider live acceptance
-    if: github.event_name == 'workflow_dispatch' && inputs.live_acceptance != 'off'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.live_acceptance != 'off' &&
+      github.repository == 'Open-Less/openless' &&
+      contains(fromJSON('["refs/heads/main","refs/heads/beta"]'), github.ref)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target
     permissions:
       contents: read
     defaults:
@@ -1294,10 +1300,20 @@ jobs:
         working-directory: openless-all/app
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Build acceptance without credentials
-        run: cargo test --locked -p openless-core --lib --no-run
+        id: live-build
+        run: |
+          set -euo pipefail
+          umask 077
+          build_manifest=$(mktemp "$RUNNER_TEMP/openless-live-build.XXXXXX")
+          trap 'rm -f "$build_manifest"' EXIT
+          cargo test --locked -p openless-core --lib -j 1 --no-run --message-format=json > "$build_manifest"
+          python3 scripts/intent-style-comparison-ci.py select-binary "$build_manifest" >> "$GITHUB_OUTPUT"
       - name: Run explicitly selected bounded acceptance
+        if: inputs.live_acceptance != 'intent-style-comparison'
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           LIVE_ACCEPTANCE: ${{ inputs.live_acceptance }}
@@ -1311,10 +1327,35 @@ jobs:
           esac
           cargo test --locked -p openless-core --lib "$target" -- --list --ignored | grep -q "$target: test"
           cargo test --locked -p openless-core --lib "$target" -- --ignored --nocapture --test-threads=1 | tee live-acceptance.log
+      - name: Compare intent 1.3.0 and 1.4.0 with existing official credentials
+        if: inputs.live_acceptance == 'intent-style-comparison'
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          INTENT_TEST_BINARY: ${{ steps.live-build.outputs.binary }}
+        run: |
+          set -euo pipefail
+          umask 077
+          private_dir=$(mktemp -d "$RUNNER_TEMP/openless-intent.XXXXXX")
+          chmod 700 "$private_dir"
+          trap 'rm -rf "$private_dir"' EXIT
+          python3 scripts/intent-style-comparison-ci.py run \
+            "$INTENT_TEST_BINARY" "$private_dir" "$RUNNER_TEMP/openless-intent-evidence"
       - name: Preserve public output evidence
-        if: always()
+        if: always() && inputs.live_acceptance != 'intent-style-comparison'
         uses: actions/upload-artifact@v4
         with:
           name: official-provider-live-acceptance
           path: openless-all/app/live-acceptance.log
           if-no-files-found: ignore
+      - name: Preserve only safe intent execution status
+        if: always() && inputs.live_acceptance == 'intent-style-comparison'
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-style-comparison-status
+          path: ${{ runner.temp }}/openless-intent-evidence/status.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Clean dedicated live acceptance artifacts
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/openless-live-target" "$RUNNER_TEMP/openless-intent-evidence"
