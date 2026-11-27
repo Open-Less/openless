@@ -307,11 +307,17 @@ pub(super) fn replace_selection_direct(
             {
                 return Err("selectionPolishTargetChanged".into());
             }
-            send(0x00c2, WPARAM(1), LPARAM(value.as_ptr() as isize))?; // EM_REPLACESEL
-            if read()? != expected {
-                return Err("selectionPolishWriteUnconfirmed".into());
-            }
-            return Ok(());
+            return selection_value::submit_and_confirm(
+                &identity_current,
+                || send(0x00c2, WPARAM(1), LPARAM(value.as_ptr() as isize)).map(|_| ()), // EM_REPLACESEL
+                || {
+                    Ok(!element.CurrentIsPassword().map_err(unavailable)?.as_bool()
+                        && allowed_process(&element).map_err(unavailable)?
+                        && read()? == expected
+                        && uia.CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
+                            .map_err(unavailable)?.as_bool())
+                },
+            );
         }
         let value = element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
             .map_err(unavailable)?;

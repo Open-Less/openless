@@ -1,4 +1,4 @@
-//! Production ValuePattern transaction -> delivery classification -> Core history.
+//! Production native transaction -> delivery classification -> Core history.
 //! Provider faults occur after mutating the bound control, not as canned backend errors.
 #![allow(dead_code)]
 mod types {
@@ -25,12 +25,15 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fault {
     Preflight,
+    PreflightRange,
     SetterAfterWrite,
     ReadbackError,
     ReadbackMismatch,
     TargetLost,
     TargetReadError,
     CancelledAfterWrite,
+    Win32LengthChanged,
+    Win32Unreadable,
     None,
 }
 
@@ -51,6 +54,7 @@ struct State {
     revision: u64,
     protected_revision: Option<u64>,
     copies: Vec<String>,
+    native_error: Option<BackendError>,
 }
 
 impl State {
@@ -86,9 +90,18 @@ impl clipboard_delivery::ClipboardDelivery for Clipboard {
 #[derive(Clone)]
 struct Runtime {
     original: String,
+    win32: bool,
     fault: Fault,
     state: Arc<Mutex<State>>,
     history: std::path::PathBuf,
+}
+
+fn control_text(win32: bool, selected: &str) -> String {
+    if win32 {
+        format!("pre {selected} post")
+    } else {
+        selected.into()
+    }
 }
 
 impl SelectionRuntimeAdapter for Runtime {
@@ -133,16 +146,27 @@ impl SelectionRuntimeAdapter for Runtime {
         let this = self.clone();
         Box::pin(async move {
             this.state.lock().unwrap().applies += 1;
+            let expected = control_text(this.win32, &replacement);
             direct_delivery::deliver(
                 || {
-                    direct_delivery::native_result(selection_value::replace(
+                    let result = direct_delivery::native_result(selection_value::replace(
                         || {
-                            assert_eq!(this.state.lock().unwrap().control, original);
+                            let state = this.state.lock().unwrap();
+                            assert_eq!(state.control, control_text(this.win32, &original));
                             if this.fault == Fault::Preflight {
-                                Err("selectionPolishTargetUnavailable".into())
-                            } else {
-                                Ok(())
+                                return Err("selectionPolishTargetUnavailable".into());
                             }
+                            if this.win32 {
+                                let units: Vec<u16> = state.control.encode_utf16().collect();
+                                let selected: Vec<u16> = original.encode_utf16().collect();
+                                let (start, length) = state.position.unwrap();
+                                if units.get(start as usize..(start + length) as usize)
+                                    != Some(selected.as_slice())
+                                {
+                                    return Err("selectionPolishSelectionChanged".into());
+                                }
+                            }
+                            Ok(())
                         },
                         || {
                             let mut state = this.state.lock().unwrap();
@@ -161,7 +185,17 @@ impl SelectionRuntimeAdapter for Runtime {
                         || {
                             let mut state = this.state.lock().unwrap();
                             state.setters += 1;
-                            state.control = replacement.clone();
+                            if this.win32 {
+                                let mut units: Vec<u16> = state.control.encode_utf16().collect();
+                                let (start, length) = state.position.unwrap();
+                                drop(units.splice(
+                                    start as usize..(start + length) as usize,
+                                    replacement.encode_utf16(),
+                                ));
+                                state.control = String::from_utf16(&units).unwrap();
+                            } else {
+                                state.control = replacement.clone();
+                            }
                             state.position = Some(state.result_position);
                             if this.fault == Fault::TargetLost {
                                 state.identity.2 += 1;
@@ -182,13 +216,27 @@ impl SelectionRuntimeAdapter for Runtime {
                                 Fault::ReadbackError => Err("CurrentValue failed"),
                                 Fault::ReadbackMismatch => {
                                     state.control = "provider changed value".into();
-                                    Ok(state.control == replacement)
+                                    Ok(state.control == expected)
                                 }
+                                Fault::Win32LengthChanged => {
+                                    // Model a field shrinking between WM_GETTEXTLENGTH
+                                    // and WM_GETTEXT, just as production read() checks.
+                                    let length = state.control.encode_utf16().count();
+                                    state.control.pop();
+                                    let copied = state.control.encode_utf16().count();
+                                    assert_ne!(copied, length);
+                                    Err("selectionPolishSelectionChanged")
+                                }
+                                Fault::Win32Unreadable => Err("selectionPolishTargetUnavailable"),
                                 Fault::TargetReadError => Err("CompareElements failed"),
-                                _ => Ok(state.control == replacement),
+                                _ => Ok(state.control == expected),
                             }
                         },
-                    ))
+                    ));
+                    if let Err(error) = &result {
+                        this.state.lock().unwrap().native_error = Some(error.clone());
+                    }
+                    result
                 },
                 |error| {
                     let revision = this.state.lock().unwrap().protected_revision;
@@ -224,6 +272,13 @@ impl SelectionRuntimeAdapter for Runtime {
 }
 
 async fn fixture(fault: Fault) -> (OpenLessBackend, Runtime, tempfile::TempDir, SessionId) {
+    fixture_for(fault, false).await
+}
+
+async fn fixture_for(
+    fault: Fault,
+    win32: bool,
+) -> (OpenLessBackend, Runtime, tempfile::TempDir, SessionId) {
     let directory = tempfile::Builder::new()
         .prefix("selection-value-outcome-")
         .tempdir()
@@ -237,15 +292,16 @@ async fn fixture(fault: Fault) -> (OpenLessBackend, Runtime, tempfile::TempDir, 
             "尾".repeat(9000)
         )
     };
-    let position = Some((0, original.encode_utf16().count() as u64));
+    let offset = if win32 { 4 } else { 0 };
+    let position = Some((offset, original.encode_utf16().count() as u64));
     let runtime = Runtime {
         state: Arc::new(Mutex::new(State {
-            control: original.clone(),
+            control: control_text(win32, &original),
             captured_identity: (11, 22, 33),
             identity: (11, 22, 33),
             captured_position: position,
             position,
-            result_position: (3, 0),
+            result_position: (offset + 3, 0),
             cancelled: false,
             range_checks: 0,
             identity_checks: 0,
@@ -256,8 +312,10 @@ async fn fixture(fault: Fault) -> (OpenLessBackend, Runtime, tempfile::TempDir, 
             revision: 0,
             protected_revision: None,
             copies: Vec::new(),
+            native_error: None,
         })),
         original,
+        win32,
         fault,
         history: directory.path().join("history.json"),
     };
@@ -512,4 +570,163 @@ async fn moving_the_original_range_before_submission_blocks_the_setter() {
     }
     backend.shutdown().await.unwrap();
     directory.close().unwrap();
+}
+
+#[tokio::test]
+async fn win32_success_and_preflight_failures_preserve_original_and_error_classification() {
+    for fault in [Fault::None, Fault::Preflight, Fault::PreflightRange] {
+        let (backend, runtime, directory, id) = fixture_for(fault, true).await;
+        if fault == Fault::PreflightRange {
+            let mut state = runtime.state.lock().unwrap();
+            let (start, length) = state.captured_position.unwrap();
+            state.position = Some((start + 1, length - 1));
+        }
+        backend
+            .services()
+            .selection
+            .confirm(id, None)
+            .await
+            .unwrap();
+        let snapshot = backend.services().selection.snapshot().await.unwrap();
+        assert_eq!(snapshot.phase, SelectionPhase::Completed);
+        {
+            let state = runtime.state.lock().unwrap();
+            if fault == Fault::None {
+                assert_eq!(snapshot.insert_outcome, Some(InsertOutcome::Inserted));
+                assert_eq!(
+                    state.control, "pre XYZ post",
+                    "preserve the unselected fences"
+                );
+                assert_eq!(state.captured_position, Some((4, 6)));
+                assert_eq!(state.position, Some((7, 0)));
+                assert_eq!(state.setters, 1);
+                assert_eq!(state.readbacks, 1);
+                assert_eq!(state.identity_checks, 2);
+                assert_eq!(state.copies, [runtime.original.clone()]);
+                assert!(state.native_error.is_none());
+            } else {
+                assert_eq!(snapshot.insert_outcome, Some(InsertOutcome::CopiedFallback));
+                assert_eq!(state.control, control_text(true, &runtime.original));
+                assert_eq!(state.setters, 0);
+                assert_eq!(state.readbacks, 0);
+                let error = state.native_error.as_ref().unwrap();
+                assert_eq!(error.code, BackendErrorCode::Platform);
+                assert_eq!(
+                    error.message,
+                    if fault == Fault::Preflight {
+                        "selectionPolishTargetUnavailable"
+                    } else {
+                        "selectionPolishSelectionChanged"
+                    }
+                );
+            }
+            assert_eq!(state.copies[0], runtime.original);
+        }
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].raw_transcript, runtime.original);
+        assert_eq!(history[0].final_text, "XYZ");
+        backend.shutdown().await.unwrap();
+        directory.close().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn win32_post_submission_faults_are_terminal_and_respect_clipboard_revision() {
+    for fault in [
+        Fault::SetterAfterWrite,
+        Fault::Win32LengthChanged,
+        Fault::Win32Unreadable,
+        Fault::ReadbackMismatch,
+        Fault::TargetLost,
+        Fault::CancelledAfterWrite,
+    ] {
+        for later_copy in [false, true] {
+            let (backend, runtime, directory, id) = fixture_for(fault, true).await;
+            if later_copy {
+                clipboard_delivery::copy_with(
+                    &mut Clipboard(runtime.state.clone()),
+                    &runtime.original,
+                    || true,
+                )
+                .unwrap();
+            }
+            let error = backend
+                .services()
+                .selection
+                .confirm(id, None)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::OutcomeUnknown, "{fault:?}");
+            assert_eq!(error.message, "selectionPolishWriteUnconfirmed");
+            assert_eq!(
+                error.details,
+                Some(serde_json::json!({
+                    "original_saved": true,
+                    "result_copied": !later_copy && fault != Fault::CancelledAfterWrite,
+                }))
+            );
+            let snapshot = backend.services().selection.snapshot().await.unwrap();
+            assert_eq!(snapshot.phase, SelectionPhase::Failed);
+            assert_ne!(snapshot.insert_outcome, Some(InsertOutcome::CopiedFallback));
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].raw_transcript, runtime.original);
+            assert_eq!(history[0].final_text, "XYZ");
+            assert_eq!(
+                history[0].error_code.as_deref(),
+                Some("selectionPolishWriteUnconfirmed")
+            );
+            assert!(backend
+                .services()
+                .selection
+                .confirm(id, None)
+                .await
+                .is_err());
+            {
+                let state = runtime.state.lock().unwrap();
+                assert_eq!(state.applies, 1);
+                assert_eq!(
+                    state.setters, 1,
+                    "an unconfirmed EM_REPLACESEL is never retried"
+                );
+                assert_eq!(state.range_checks, 1, "only before submission");
+                assert_eq!(
+                    state.readbacks,
+                    usize::from(!matches!(
+                        fault,
+                        Fault::SetterAfterWrite | Fault::TargetLost | Fault::CancelledAfterWrite
+                    ))
+                );
+                assert_eq!(state.copies[0], runtime.original);
+                assert_eq!(
+                    state.copies.len(),
+                    if fault == Fault::CancelledAfterWrite && !later_copy {
+                        1
+                    } else {
+                        2
+                    }
+                );
+                assert_eq!(
+                    state.clipboard,
+                    if later_copy || fault == Fault::CancelledAfterWrite {
+                        runtime.original.as_str()
+                    } else {
+                        "XYZ"
+                    }
+                );
+                let expected = control_text(true, "XYZ");
+                assert_eq!(
+                    state.control == expected,
+                    !matches!(fault, Fault::Win32LengthChanged | Fault::ReadbackMismatch)
+                );
+                assert_eq!(
+                    state.native_error.as_ref().unwrap().code,
+                    BackendErrorCode::OutcomeUnknown
+                );
+            }
+            backend.shutdown().await.unwrap();
+            directory.close().unwrap();
+        }
+    }
 }
