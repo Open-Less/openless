@@ -66,6 +66,39 @@ OAuth 渠道或不希望复制凭据时，在风格设置建立两个临时自�
 
 逐条检查信息是否遗漏、撤销是否生效、是否重复归组、层级与编号是否合理、专名数字是否保留、是否新增要求或代答。给每条记录通过 / 不通过和具体偏差；失败后可以修改提示词，但不能覆盖已有对照证据。最终效果由用户判断。渠道是否返回缓存读取和推理用量，仍须通过应用的用量账本另行检查；该并排记录不代替缓存或计费测量。
 
+## 使用既有 Actions secret 的手动状态对照
+
+仓库已有的 `Optional official-provider live acceptance` 增加了非默认选项
+`intent-style-comparison`。仅限 `Open-Less/openless` 仓库的 `main` / `beta`
+分支手动运行；fork、PR、tag 和其他分支不进入带 secret 的 job。默认仍为 `off`，
+普通 CI 不会调用模型。协调者先将本改动接入经审查的集成版本，核对分支 SHA 后可执行一次：
+
+```sh
+gh workflow run ci.yml --repo Open-Less/openless --ref beta \
+  -f live_acceptance=intent-style-comparison
+```
+
+这是未自动执行的真实付费调用命令；沿用调用前授权，不能重复运行消耗预算。
+它只使用现存 `DEEPSEEK_API_KEY` secret，不读取或搬运本机配置；渠道固定为官方 DeepSeek，
+模型与现有官方验收一致为 `deepseek-flash`，思考关闭，使用默认参数。
+两版在同一配置下按原 16 条夹具顺序比较旧运行版 **1.3.0** 与 **1.4.0**：
+12 条听写、2 条翻译、2 条选区；32 主请求加最多 4 个翻译兜底，总上限 36。
+这不是用户本机渠道身份/模型的证明，也不是旧应用二进制的完整复刻。
+
+先在无 secret 的 step 编译，再直接执行唯一已编译的 Core 测试二进制及精确 ignored
+测试。secret 只给执行 step；runner 专用目录 0700、配置文件 0600，
+不把密钥放进命令行。子进程不继承 secret 环境变量，stdout/stderr 丢弃，
+配置及原始结果由 Python finally 和 shell trap 清理。缺失凭据、渠道报错、超时、
+缺报告、零测试或不完整结果均使 step 失败，不自动重试。
+
+上传工件 `intent-style-comparison-status` 只含 `status.json`：可信夹具及期望、
+版本、请求模型、思考开关、源 SHA（格式有效时）、每侧 pending/completed/request_failed
+和有界端到端耗时。provider text、sourceText、原始错误、配置和 Cargo/HTTP 日志全部不上传。
+模型响应属于不可信数据，字段筛选本身无法保证任意响应内容不含凭据，因此这一模式
+保守地只留下安全执行状态。**completed 只表示请求返回，不表示语义通过；工件不能替代
+旧新正文的人审。** 如需实际语义对照，须由协调者另行确认能够安全查看响应的受控路径，
+或在 Dev 应用中按真实输入流程验收，不把状态工件称为 #26 通过证据。
+
 ## 版本与迁移设计
 
 运行版此前已是 1.3.0，所以本次递增为 1.4.0，而非回退至 1.1.0。主 JSON 的两个作者槽和共享 Markdown 内容一致，运行时仅追加一次全局口述撤回规则。稳定正文不包含热词占位符，组装器在正文之后追加可变热词和上下文，不向存储回写动态数据。
