@@ -70,7 +70,7 @@ export function useCapsulePickerMenu({
   useEffect(() => {
     const onKeydown = (event: KeyboardEvent) => controller.handleKeydown(kind, event);
     window.addEventListener('blur', close);
-    window.addEventListener('keydown', onKeydown);
+    if (kind === 'language') window.addEventListener('keydown', onKeydown);
     return () => {
       window.removeEventListener('blur', close);
       window.removeEventListener('keydown', onKeydown);
