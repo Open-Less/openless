@@ -360,6 +360,9 @@ export const de: typeof zhCN = {
     inserted: '{{count}} eingefügt',
     translateTo: 'Übersetzen in',
     translationChangeFailed: 'Sprache konnte nicht geändert werden. Bitte erneut auswählen.',
+    styleChoose: 'Ausgabestil wählen',
+    styleChangeFailed: 'Stil konnte nicht geändert werden. Bitte erneut auswählen.',
+    styleStatus: 'Ausgabestil',
     translating: 'Wird übersetzt',
     selectionPolish: {
       polishing: 'Wird überarbeitet…',
@@ -2063,6 +2066,8 @@ export const de: typeof zhCN = {
       cancel: 'Aktuelle Aufnahme abbrechen',
       confirm: 'Einfügen über die Kapsel bestätigen',
       switchStyle: 'Zum vorherigen Stil wechseln',
+      skipAutoStyle: 'Automatischen Stil überspringen',
+      skipAutoStylePicker: 'Stil nach Tastendruck wählen',
       openApp: 'OpenLess öffnen',
       stylePackTitle: 'Stilkurzbefehle',
       stylePackDesc:

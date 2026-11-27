@@ -347,6 +347,9 @@ export const ja: typeof zhCN = {
     inserted: '{{count}} 文字を入力しました',
     translateTo: '翻訳先',
     translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
+    styleChoose: '出力スタイルを選択',
+    styleChangeFailed: 'スタイルを変更できませんでした。もう一度選択してください。',
+    styleStatus: '出力スタイル',
     translating: '翻訳中',
     selectionPolish: {
       polishing: '推敲中…',
@@ -2000,6 +2003,8 @@ export const ja: typeof zhCN = {
       cancel: '本回の録音をキャンセル',
       confirm: 'カプセル入力を確定',
       switchStyle: '前のスタイルに切り替え',
+      skipAutoStyle: '自動スタイルをスキップ',
+      skipAutoStylePicker: '押した後にスタイルを選択',
       openApp: 'OpenLess を開く',
       stylePackTitle: 'スタイル直行ショートカット',
       stylePackDesc:

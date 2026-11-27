@@ -358,6 +358,9 @@ export const en: typeof zhCN = {
     inserted: 'Inserted {{count}}',
     translateTo: 'Translate to',
     translationChangeFailed: 'Could not change language. Please select it again.',
+    styleChoose: 'Choose output style',
+    styleChangeFailed: 'Could not change style. Please select it again.',
+    styleStatus: 'Output style',
     translating: 'Translating',
     selectionPolish: {
       polishing: 'Polishing…',
@@ -2017,6 +2020,8 @@ export const en: typeof zhCN = {
       cancel: 'Cancel current recording',
       confirm: 'Confirm capsule insertion',
       switchStyle: 'Switch to previous style',
+      skipAutoStyle: 'Skip auto style',
+      skipAutoStylePicker: 'Choose output style on press',
       openApp: 'Open OpenLess',
       stylePackTitle: 'Style shortcuts',
       stylePackDesc:

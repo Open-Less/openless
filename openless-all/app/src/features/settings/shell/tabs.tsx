@@ -213,7 +213,7 @@ export function InputMethodTab() {
 export function ShortcutsTab() {
   const platformCaps = usePlatformCaps();
   if (!platformCaps?.supportsDesktopHotkey) return null;
-  return <ShortcutsSection />;
+  return <ShortcutsSection platform={platformCaps} />;
 }
 
 export function AppearanceTab() {

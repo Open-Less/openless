@@ -329,6 +329,9 @@ export const zhCN = {
     inserted: '已插入 {{count}}',
     translateTo: '翻译为',
     translationChangeFailed: '语言切换失败，请重新选择。',
+    styleChoose: '选择输出风格',
+    styleChangeFailed: '风格切换失败，请重新选择。',
+    styleStatus: '输出风格',
     translating: '正在翻译',
     selectionPolish: {
       polishing: '正在润色…',
@@ -1909,6 +1912,8 @@ export const zhCN = {
       cancel: '取消本次录音',
       confirm: '胶囊确认插入',
       switchStyle: '切换到上一个风格',
+      skipAutoStyle: '跳过自动风格',
+      skipAutoStylePicker: '按下时选择输出风格',
       openApp: '打开 OpenLess',
       stylePackTitle: '风格直达快捷键',
       stylePackDesc: '为常用风格包各配一个快捷键，按下直接切换；停用中的包会自动启用。',

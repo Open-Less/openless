@@ -363,6 +363,9 @@ export const fr: typeof zhCN = {
     inserted: '{{count}} insérés',
     translateTo: 'Traduire en',
     translationChangeFailed: 'Impossible de changer de langue. Veuillez réessayer.',
+    styleChoose: 'Choisir le style de sortie',
+    styleChangeFailed: 'Impossible de changer de style. Veuillez réessayer.',
+    styleStatus: 'Style de sortie',
     translating: 'Traduction',
     selectionPolish: {
       polishing: 'Amélioration…',
@@ -2076,6 +2079,8 @@ export const fr: typeof zhCN = {
       cancel: 'Annuler l’enregistrement actuel',
       confirm: 'Confirmer l’insertion de la capsule',
       switchStyle: 'Passer au style précédent',
+      skipAutoStyle: 'Ignorer le style automatique',
+      skipAutoStylePicker: 'Choisir le style après appui',
       openApp: 'Ouvrir OpenLess',
       stylePackTitle: 'Raccourcis de styles',
       stylePackDesc:
