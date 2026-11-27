@@ -17,7 +17,7 @@ use openless_core::ask_context::{AppMetadata, ContextAuthorization};
 use openless_core::assistant_api::*;
 use openless_core::{BackendError, BackendErrorCode, TokioTaskSpawner};
 use parking_lot::Mutex;
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{future::Future, sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::Duration};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use uuid::Uuid;
 
@@ -78,11 +78,15 @@ impl AskModel for Model {
 struct Factory {
     model: Arc<Model>,
     pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+    fail_next: AtomicBool,
 }
 
 impl AskModelFactory for Factory {
     fn prepare(&self, _: bool) -> BoxFuture<'_, Result<Arc<dyn AskModel>, BackendError>> {
         Box::pin(async move {
+            if self.fail_next.swap(false, Ordering::AcqRel) {
+                return Err(BackendError::new(BackendErrorCode::Provider, "fixtureModelPreparation"));
+            }
             let pause = self.pause.lock().take();
             if let Some((entered, resume)) = pause {
                 entered.send(()).unwrap();
@@ -183,6 +187,7 @@ impl Fixture {
                 requests: Mutex::new(Vec::new()),
             }),
             pause: Mutex::new(None),
+            fail_next: AtomicBool::new(false),
         });
         let history = Arc::new(Mutex::new(Vec::new()));
         let saved = history.clone();
@@ -263,6 +268,125 @@ async fn terminal(
         }
     })
     .await
+}
+
+struct InvocationPage(Arc<AtomicUsize>);
+
+impl browser_context::BrowserReader for InvocationPage {
+    fn read(
+        &self, _: AskTurnKey, _: openless_core::browser_scene::SceneAuthorization,
+        cancellation: AskCancellation,
+    ) -> BoxFuture<'_, AssistantContextResult> {
+        Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return AssistantContextResult::Unavailable { reason: "browserReferenceExpired".into() };
+            }
+            self.0.fetch_add(1, Ordering::AcqRel);
+            AssistantContextResult::Available {
+                data: serde_json::json!({"referenceType":"syntheticOriginalInvocation"}),
+                source: "fixtureOriginalInvocation".into(), as_of: "synthetic".into(),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn real_submit_binds_desktop_browser_only_after_successful_admission_and_once_on_retry() {
+    let f = Fixture::new();
+    let id = f.service.current().unwrap();
+    f.context.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+    let authorization = f.context.capture_browser_authorization().unwrap();
+    let captured = authorization.freeze(|_| Some(())).unwrap().finish().unwrap();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let reader = captured.bind(&authorization, |_, _| {
+        Some(Arc::new(InvocationPage(reads.clone())) as Arc<dyn browser_context::BrowserReader>)
+    }).unwrap();
+    f.context.bind_browser_reference(id, authorization.grant(), reader);
+    let input = request(id, "answer");
+    let mut events = f.service.subscribe();
+
+    assert_eq!(bounded(f.service.submit_prepared(input.clone(), || async {
+        Err(BackendError::new(BackendErrorCode::Platform, "fixturePreparation"))
+    })).await.unwrap_err().message, "fixturePreparation");
+    f.factory.fail_next.store(true, Ordering::Release);
+    assert_eq!(bounded(f.service.submit_prepared(input.clone(), || async {
+        Ok(AskPreparation::default())
+    })).await.unwrap_err().message, "fixtureModelPreparation");
+    assert_eq!(bounded(f.service.submit_prepared_guarded(
+        input.clone(), || async { Ok(AskPreparation::default()) },
+        || false, f.fence.issue(),
+    )).await.unwrap_err().code, BackendErrorCode::Cancelled);
+    assert!(f.service.snapshot(id).unwrap().turns.is_empty());
+    assert_eq!(reads.load(Ordering::Acquire), 0);
+
+    // No direct begin_turn call: actual Core admission dispatches through
+    // Arc<dyn ask::ContextProvider> to DesktopContext's authorization state.
+    let turn_id = bounded(f.service.submit_prepared(input.clone(), || async {
+        Ok(AskPreparation::default())
+    })).await.unwrap();
+    let key = AskTurnKey { conversation_id: id, turn_id };
+    assert!(matches!(f.context.read(
+        key, AssistantContextQuery::BrowserTab, AskCancellation::default(),
+    ).await.unwrap(), AssistantContextResult::Available { .. }));
+    assert_eq!(bounded(f.service.submit_prepared(input.clone(), || async {
+        panic!("idempotent retry must not reprepare or bind")
+    })).await.unwrap(), turn_id);
+    assert!(matches!(f.context.read(
+        key, AssistantContextQuery::BrowserTab, AskCancellation::default(),
+    ).await.unwrap(), AssistantContextResult::Unavailable { .. }));
+    assert_eq!(reads.load(Ordering::Acquire), 1);
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    assert_eq!(bounded(f.service.submit(input)).await.unwrap(), turn_id);
+    assert_eq!(reads.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn failed_submit_then_regrant_cannot_resurrect_the_original_desktop_invocation() {
+    for revoke_app in [false, true] {
+        let f = Fixture::new();
+        let id = f.service.current().unwrap();
+        f.context.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+        let authorization = f.context.capture_browser_authorization().unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        f.context.bind_browser_reference(id, authorization.grant(), Arc::new(InvocationPage(reads.clone())));
+        let input = request(id, "answer");
+        assert!(bounded(f.service.submit_prepared(input.clone(), || async {
+            Err(BackendError::new(BackendErrorCode::Platform, "fixturePreparation"))
+        })).await.is_err());
+        if revoke_app { f.context.set_authorization(ContextAuthorization::default()); }
+        else { f.context.set_read_permissions(context::ReadPermissions::default()); }
+        f.context.set_authorization(ContextAuthorization { app_metadata: true, usage: false });
+        f.context.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+        let mut events = f.service.subscribe();
+        let turn_id = bounded(f.service.submit_prepared(input, || async {
+            Ok(AskPreparation::default())
+        })).await.unwrap();
+        let key = AskTurnKey { conversation_id: id, turn_id };
+        assert!(matches!(f.context.read(key, AssistantContextQuery::BrowserTab, AskCancellation::default()).await.unwrap(),
+            AssistantContextResult::Unavailable { .. }));
+        assert_eq!(reads.load(Ordering::Acquire), 0);
+        assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    }
+}
+
+#[tokio::test]
+async fn late_standalone_turn_callback_cannot_reopen_closed_desktop_context() {
+    let provider = context::DesktopContext::default();
+    let key = AskTurnKey { conversation_id: Uuid::new_v4(), turn_id: Uuid::new_v4() };
+    provider.open_conversation(key.conversation_id);
+    provider.close_conversation(key.conversation_id);
+    let standalone: &dyn ContextProvider = &provider;
+    standalone.begin_turn(key);
+    // Reopening an empty scope with the same synthetic ID must not inherit a
+    // stale turn marker or let a late callback authorize a newly bound source.
+    provider.open_conversation(key.conversation_id);
+    provider.set_authorization(ContextAuthorization { app_metadata: true, usage: false });
+    provider.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+    let reads = Arc::new(AtomicUsize::new(0));
+    provider.bind_browser_reference(key.conversation_id, provider.browser_authorization(), Arc::new(InvocationPage(reads.clone())));
+    assert!(matches!(provider.read(key, AssistantContextQuery::BrowserTab, AskCancellation::default()).await.unwrap(),
+        AssistantContextResult::Unavailable { .. }));
+    assert_eq!(reads.load(Ordering::Acquire), 0);
 }
 
 #[tokio::test]

@@ -301,6 +301,10 @@ fn browser_grant(state: &ContextState) -> SceneAuthorization {
 impl ContextProvider for DesktopContext {
     fn begin_turn(&self, key: AskTurnKey) {
         let mut state = self.state.lock();
+        // A late admitted-turn callback cannot recreate context after close.
+        if !state.conversations.contains_key(&key.conversation_id) {
+            return;
+        }
         state.browser_turns.insert(key.conversation_id, key);
         if let Some(source) = state.browser_sources.get_mut(&key.conversation_id) {
             if source.turn.is_none() {
@@ -685,6 +689,12 @@ mod native {
 }
 
 impl openless_core::ask::ContextProvider for DesktopContext {
+    fn begin_turn(&self, turn: AskTurnKey) {
+        // StandaloneQaService owns admission and the real key. Both provider
+        // contracts must reach the same grant/turn state, never a no-op shim.
+        <Self as openless_core::ask_context::ContextProvider>::begin_turn(self, turn);
+    }
+
     fn recent_voice(
         &self,
         turn: AskTurnKey,

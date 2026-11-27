@@ -139,6 +139,12 @@ pub struct AskMissingFact {
 }
 
 pub trait ContextProvider: Send + Sync {
+    /// Called once after a new turn is admitted and registered, before model
+    /// work starts and outside the Core state lock. Rejected attempts and
+    /// idempotent replays do not bind private invocation references. Older
+    /// providers without such references retain ordinary context behavior.
+    fn begin_turn(&self, _turn: AskTurnKey) {}
+
     fn context(
         &self,
         turn: AskTurnKey,
@@ -1146,7 +1152,6 @@ impl StandaloneQaService {
             conversation_id: request.conversation_id,
             turn_id: Uuid::new_v4(),
         };
-        self.0.deps.context.begin_turn(key);
         let preparation = tokio::select! {
             biased;
             _ = lifetime.cancelled() => return Err(no_conversation()),
@@ -1226,6 +1231,13 @@ impl StandaloneQaService {
             service: service.clone(),
             key,
         };
+        // Preparation, model/material validation and final admission have all
+        // succeeded, and Submitted is visible. Keep admission serialization
+        // through this synchronous hook, but never hold the state lock while
+        // calling a host that may reenter the service (including cancel/close).
+        if !lifetime.is_cancelled() && !cancellation.is_cancelled() {
+            self.0.deps.context.begin_turn(key);
+        }
         self.0.deps.spawner.spawn(Box::pin(async move {
             let _guard = guard;
             let result = tokio::select! {
