@@ -21,7 +21,7 @@ use windows::{
         Foundation::HWND,
         System::Com::{
             CoGetApartmentType, CoInitializeEx, CoUninitialize, APTTYPE, APTTYPEQUALIFIER,
-            APTTYPE_MTA, APTTYPE_STA, COINIT_APARTMENTTHREADED,
+            APTTYPE_MAINSTA, APTTYPE_MTA, APTTYPE_STA, COINIT_APARTMENTTHREADED,
         },
         UI::{
             Input::KeyboardAndMouse::{GetFocus, SetFocus},
@@ -69,6 +69,7 @@ fn apartment() -> APTTYPE {
     kind
 }
 struct Desktop {
+    apartment: APTTYPE,
     window: HWND,
     first: HWND,
     second: HWND,
@@ -76,6 +77,13 @@ struct Desktop {
 impl Desktop {
     unsafe fn new() -> Self {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+        let initial_apartment = apartment();
+        // COM distinguishes the process's main STA from other STAs. Both
+        // must stay exactly as initialized throughout the UI-side checks.
+        assert!(
+            initial_apartment == APTTYPE_STA || initial_apartment == APTTYPE_MAINSTA,
+            "UI test thread must initialize as STA or MAINSTA, got {initial_apartment:?}"
+        );
         let window = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
@@ -112,6 +120,7 @@ impl Desktop {
         let _ = SetForegroundWindow(window);
         let _ = SetFocus(first);
         Self {
+            apartment: initial_apartment,
             window,
             first,
             second,
@@ -161,7 +170,7 @@ fn real_sta_getter_reserve_delivery_and_late_mta_completion_preserve_focus_owner
         "test requires the controlled foreground desktop"
     );
     assert_eq!(unsafe { GetFocus() }, desktop.first);
-    assert_eq!(apartment(), APTTYPE_STA);
+    assert_eq!(apartment(), desktop.apartment);
     let owner = windows_focus::Owner::start().unwrap();
     let scope = windows_focus::Scope {
         session: openless_core::SessionId::new(),
@@ -222,7 +231,7 @@ fn real_sta_getter_reserve_delivery_and_late_mta_completion_preserve_focus_owner
     assert!(menu::is_owner(&key));
     assert_eq!(
         apartment(),
-        APTTYPE_STA,
+        desktop.apartment,
         "STA must never be reinitialized to MTA"
     );
 
@@ -291,7 +300,7 @@ fn real_sta_getter_reserve_delivery_and_late_mta_completion_preserve_focus_owner
     assert!(menu::close("capsule", next.session, &next_owner.menu_id));
     assert!(!menu::key(menu::Key::ArrowUp, true, false, false));
     assert!(!menu::key(menu::Key::ArrowUp, false, false, false));
-    assert_eq!(apartment(), APTTYPE_STA);
+    assert_eq!(apartment(), desktop.apartment);
 
     // A blocked/late owner must not grant an unlimited cached keyboard lease.
     let fresh = windows_focus::Scope {
@@ -417,7 +426,7 @@ fn real_sta_getter_reserve_delivery_and_late_mta_completion_preserve_focus_owner
     }
     assert!(!menu::owner_current(&mouse));
     assert!(!menu::key(menu::Key::Enter, false, false, false));
-    assert_eq!(apartment(), APTTYPE_STA);
+    assert_eq!(apartment(), desktop.apartment);
     menu::invalidate();
     menu::configure(Arc::new(|| None), Arc::new(|_| false));
 }
