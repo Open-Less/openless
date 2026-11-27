@@ -1,5 +1,5 @@
 import { TextField } from '../../ui/controls/TextField';
-import { memo, type RefObject } from 'react';
+import { memo, useId, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationSession } from '../../api/contracts';
 import { formatHistoryTime } from '../../lib/localeFormat';
@@ -8,6 +8,7 @@ import { Button as Btn } from '../../ui/controls/Button';
 import { Card } from '../../ui/layout/Card';
 import { Pill } from '../../ui/controls/Pill';
 import { formatDuration, historyTitle, TRUNCATED_PILL_STYLE } from './presentation';
+import type { useHistoryOriginalSelection } from './useHistoryOriginalSelection';
 import './history.css';
 
 interface Props {
@@ -24,6 +25,7 @@ interface Props {
   loadError: string | null;
   refresh: (notify: boolean) => Promise<void>;
   styleLabel: (session: DictationSession) => string;
+  originals: ReturnType<typeof useHistoryOriginalSelection>;
 }
 
 export function HistoryList({
@@ -40,6 +42,7 @@ export function HistoryList({
   loadError,
   refresh,
   styleLabel,
+  originals,
 }: Props) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
@@ -55,6 +58,39 @@ export function HistoryList({
         placeholder={t('history.searchPlaceholder', { shortcut: searchShortcut })}
         aria-label={t('history.searchPlaceholder', { shortcut: searchShortcut })}
       />
+      {(originals.active || originals.availableIds.size > 0) && (
+        <div
+          className="ol-history-original-actions"
+          role="group"
+          aria-label={t('history.selectOriginals')}
+        >
+          <Btn size="sm" disabled={originals.copying} onClick={originals.toggleMode}>
+            {originals.active ? t('common.cancel') : t('history.selectOriginals')}
+          </Btn>
+          {originals.active && (
+            <>
+              <Btn
+                size="sm"
+                disabled={
+                  originals.copying || originals.selectedIds.size === originals.availableIds.size
+                }
+                onClick={originals.selectAll}
+              >
+                {t('history.selectAllOriginals')}
+              </Btn>
+              <Btn
+                icon="copy"
+                size="sm"
+                variant="soft"
+                disabled={originals.copying || !originals.selectedIds.size}
+                onClick={() => void originals.copy()}
+              >
+                {t('history.copyOriginals')}
+              </Btn>
+            </>
+          )}
+        </div>
+      )}
       <div className="ol-thinscroll ol-history-list-scroll">
         <div className="ol-history-list-records">
           {loading && (
@@ -96,6 +132,13 @@ export function HistoryList({
               styleLabel={styleLabel(session)}
               t={t}
               locale={locale}
+              toggleOriginal={
+                originals.active && originals.availableIds.has(session.id)
+                  ? originals.toggleEntry
+                  : undefined
+              }
+              originalSelected={originals.selectedIds.has(session.id)}
+              copyingOriginals={originals.copying}
             />
           ))}
         </div>
@@ -111,6 +154,9 @@ const HistoryRow = memo(function HistoryRow({
   styleLabel,
   t,
   locale,
+  toggleOriginal,
+  originalSelected,
+  copyingOriginals,
 }: {
   session: DictationSession;
   selected: boolean;
@@ -118,10 +164,15 @@ const HistoryRow = memo(function HistoryRow({
   styleLabel: string;
   t: ReturnType<typeof useTranslation>['t'];
   locale: string;
+  toggleOriginal?: (id: string) => void;
+  originalSelected: boolean;
+  copyingOriginals: boolean;
 }) {
-  return (
+  const recordId = useId();
+  const row = (
     <button
       type="button"
+      id={recordId}
       data-history-record={session.id}
       aria-current={selected ? 'true' : undefined}
       onClick={() => onSelect(session.id)}
@@ -196,5 +247,20 @@ const HistoryRow = memo(function HistoryRow({
         </Pill>
       </div>
     </button>
-);
+  );
+  if (!toggleOriginal) return row;
+  return (
+    <div className="ol-history-selectable-record">
+      <label className="ol-history-original-check">
+        <input
+          type="checkbox"
+          aria-labelledby={recordId}
+          checked={originalSelected}
+          disabled={copyingOriginals}
+          onChange={() => toggleOriginal(session.id)}
+        />
+      </label>
+      {row}
+    </div>
+  );
 });
