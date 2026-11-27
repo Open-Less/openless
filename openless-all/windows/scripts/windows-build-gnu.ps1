@@ -30,6 +30,7 @@ if ($appRoot -match "\s") {
       $src = Join-Path $allRoot $_
       Test-Path -LiteralPath $src -PathType Leaf
     } | Sort-Object -Unique)
+    $inputSet = [Collections.Generic.HashSet[string]]::new([string[]]$inputs, [StringComparer]::OrdinalIgnoreCase)
     $mirrorBase = [IO.Path]::GetFullPath($MirrorRoot).TrimEnd('\', '/')
     $mirrorPrefix = $mirrorBase + [IO.Path]::DirectorySeparatorChar
     $manifestPath = Join-Path $MirrorRoot ".openless-mirror-manifest.txt"
@@ -40,7 +41,8 @@ if ($appRoot -match "\s") {
       }
       # Never treat reusable dependencies or build outputs as source inputs,
       # even if an interrupted/old manifest happens to contain one.
-      if ($relative -match '(^|[\\/])(node_modules|target|dist|\.artifacts)([\\/]|$)') {
+      $normalized = $relative -replace '\\', '/'
+      if ($normalized -match '(^|/)node_modules(/|$)|^(?:app/)?(?:target|dist|\.artifacts)(?:/|$)|^app/src-tauri/(?:backend-tests/)?target(?:/|$)|^(?:ios/CoreHost|linux/egui|harmony/rust)/target(?:/|$)') {
         throw "Mirror input points to a protected cache: $relative"
       }
       # Refuse junctions/symlinks before copying or removing through them.
@@ -57,7 +59,7 @@ if ($appRoot -match "\s") {
     }
     if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
       foreach ($previous in [IO.File]::ReadAllLines($manifestPath, [Text.Encoding]::UTF8)) {
-        if ([string]::IsNullOrWhiteSpace($previous) -or $inputs -contains $previous) { continue }
+        if ([string]::IsNullOrWhiteSpace($previous) -or $inputSet.Contains($previous)) { continue }
         $stale = Resolve-MirrorInput $previous
         if (Test-Path -LiteralPath $stale -PathType Leaf) {
           Remove-Item -LiteralPath $stale -Force
