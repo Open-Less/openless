@@ -804,11 +804,11 @@ assert.match(
   /update_skip_auto_style_hotkey_on_main\(inner, target\.skip_auto_style\.clone\(\)\)/,
   'absolute restore and journal rollback must install the target style binding',
 );
-assert.match(coordinatorHotkeys, /toggle_dictation_style_for_session\(context\.session_id\)/);
-assert.match(styleCommand, /set_capsule_picker_menu_impl\(window, coord, session_id, open, true\)/);
+assert.match(coordinatorHotkeys, /handle_skip_auto_style_hotkey\(&inner, context\.session_id\)/);
+assert.match(styleCommand, /set_capsule_picker_menu_impl\(window, coord, session_id, open, true, request_id, menu_id\)/);
 assert.match(
   styleCommand,
-  /set_capsule_picker_menu_impl\(window, coord, session_id, open, false\)/,
+  /set_capsule_picker_menu_impl\(window, coord, session_id, open, false, None, None\)/,
 );
 
 console.log('shared-backend-wire-contract.test.mjs passed');

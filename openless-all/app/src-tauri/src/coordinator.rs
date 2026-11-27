@@ -29,6 +29,8 @@ mod capsule_focus;
 #[path = "coordinator/dictation_core.rs"]
 mod dictation;
 mod hotkey_loops;
+#[cfg(not(mobile))]
+mod style_menu;
 mod native_dictation_key;
 mod restore_runtime;
 #[cfg(all(not(mobile), target_os = "windows"))]
@@ -43,6 +45,8 @@ pub(crate) use capsule_focus::{
     restore_focus_target_if_possible,
 };
 use hotkey_loops::*;
+#[cfg(not(mobile))]
+use style_menu::*;
 use native_dictation_key::try_install_mouse_dictation;
 
 // Instance-local Less Computer replay source used by the compatibility command.
@@ -832,6 +836,8 @@ impl Coordinator {
             });
             #[cfg(all(not(mobile), target_os = "windows"))]
             bind_qa_selection_voice_target(&qa_context, &inner.selection_voice_host);
+            #[cfg(not(mobile))]
+            configure_style_menu(&inner);
             Self { inner }
         }
     }
@@ -970,6 +976,7 @@ impl Coordinator {
             shutdown: AtomicBool::new(false),
         });
         bind_qa_selection_voice_target(&qa_context, &selection_voice_host);
+        configure_style_menu(&inner);
         Self { inner }
     }
 

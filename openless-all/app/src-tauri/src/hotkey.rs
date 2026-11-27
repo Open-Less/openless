@@ -1000,6 +1000,7 @@ pub(crate) mod platform {
         observe_shift_event(ctx, event_type, event);
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
+                crate::capsule_style_menu::invalidate();
                 reset_shared_held_state(&ctx.shared);
                 if let Some(pending) = ctx.pending_space.lock().take() {
                     pending.replay(std::ptr::null_mut());
@@ -1021,6 +1022,28 @@ pub(crate) mod platform {
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         let flags = unsafe { CGEventGetFlags(event) };
         let hardware = unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } == 0;
+        if hardware && matches!(event_type, KEY_DOWN | KEY_UP) {
+            let key = match keycode {
+                126 => Some(crate::capsule_style_menu::Key::ArrowUp),
+                125 => Some(crate::capsule_style_menu::Key::ArrowDown),
+                36 => Some(crate::capsule_style_menu::Key::Enter),
+                53 => Some(crate::capsule_style_menu::Key::Escape),
+                _ => None,
+            };
+            if let Some(key) = key {
+                let fn_held = flags & FLAG_MASK_SECONDARY_FN != 0
+                    && (crate::ask_window::hotkey::fn_is_held()
+                        || crate::side_aware_combo::platform::keycode_is_down(63));
+                // Require the physical Fn controller, rather than treating a
+                // function-key flag on a navigation event as a held modifier.
+                let modified = fn_held || flags & (FLAG_MASK_SHIFT | FLAG_MASK_CONTROL
+                    | FLAG_MASK_ALTERNATE | FLAG_MASK_COMMAND) != 0;
+                let repeat = unsafe { CGEventGetIntegerValueField(event, 8) } != 0;
+                if crate::capsule_style_menu::key(key, event_type == KEY_DOWN, repeat, modified) {
+                    return std::ptr::null_mut();
+                }
+            }
+        }
         let is_fn_down = event_type == FLAGS_CHANGED && hardware && keycode == 63
             && flags & FLAG_MASK_SECONDARY_FN != 0;
         if !is_fn_down {
@@ -1733,6 +1756,88 @@ pub(crate) mod platform {
                 );
                 assert_eq!(returned, event, "event kind={kind}, key={key} must pass");
                 CFRelease(event as *const c_void);
+            }
+        }
+
+        // Run by the standalone native harness, isolating its mock Runtime
+        // source from main-crate tests that construct another Coordinator.
+        pub(crate) fn style_menu_real_callback_preserves_key_pairs_across_open_close_and_cancel() {
+            use crate::capsule_style_menu::{self as menu, Event, Focus};
+            let _guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
+            let session = openless_core::SessionId::new();
+            let live = Arc::new(parking_lot::Mutex::new(Some(menu::Context {
+                session_id: session, mutable: false, skip_auto: true, picker_enabled: true,
+                keyboard_available: true, focus: Some(Focus(3, 1)), blocked_keys: [false; 4],
+            })));
+            let source = live.clone();
+            let (send, receive) = mpsc::channel();
+            menu::configure(Arc::new(move || source.lock().clone()),
+                Arc::new(move |event| send.send(event).is_ok()));
+            let shared = shared(HotkeyTrigger::RightOption);
+            let context = super::super::ShiftTranslationContext {
+                session_id: session, preferences_revision: 1, tap_count: 1, held_recording_key: None,
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move ||
+                Some((context, HotkeyTrigger::LeftCommand))));
+            let (ctx, rx, _) = callback_context_with_combo(shared);
+            assert!(menu::pending("capsule").is_none());
+            // Actual native tap classification emits exactly one provenance event.
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            assert!(rx.try_recv().is_err());
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(_)));
+            assert!(rx.try_recv().is_err());
+            let request = menu::hotkey_toggled(&openless_core::DictationStyleTarget {
+                session_id: session, selection: openless_core::DictationStyleSelection::SkipAuto,
+                skip_auto_style: true, mutable: false, style_pack_id: None, style_pack_name: None,
+                polish_style_pack_id: None, available_styles: vec![],
+            }).unwrap();
+            assert!(menu::reservation("capsule", session, Some(&request.request_id)).is_err());
+            // A down passed before the menu has no matching captured up.
+            assert!(!menu_callback(&ctx, 126, true, 0, false));
+            live.lock().as_mut().unwrap().mutable = true;
+            let owner = menu::reservation("capsule", session, Some(&request.request_id)).unwrap();
+            menu::commit(owner.clone(), Some(&request.request_id)).unwrap();
+            assert!(!menu_callback(&ctx, 126, true, 0, true));
+            assert!(!menu_callback(&ctx, 126, false, 0, false));
+            assert!(menu_callback(&ctx, 126, true, 0, false));
+            assert!(matches!(receive.try_recv().unwrap(), Event::Key(key)
+                if key.menu_id == owner.menu_id && key.key == menu::Key::ArrowUp));
+            assert!(menu::close("capsule", session, &owner.menu_id));
+            assert!(matches!(receive.try_recv().unwrap(), Event::Closed(closed) if closed.menu_id == owner.menu_id));
+            assert!(menu_callback(&ctx, 126, false, 0, false), "close drains captured release");
+            assert!(!menu_callback(&ctx, 36, true, 0, false));
+            assert!(!menu_callback(&ctx, 36, false, 0, false));
+            let replacement = menu::reservation("capsule", session, None).unwrap();
+            menu::commit(replacement.clone(), None).unwrap();
+            assert!(!menu_callback(&ctx, 125, true, FLAG_MASK_COMMAND | 0x8, false));
+            assert!(!menu_callback(&ctx, 125, false, FLAG_MASK_COMMAND | 0x8, false));
+            assert!(receive.try_recv().is_err(), "modified keys stay with the foreground target");
+            assert!(menu_callback(&ctx, 125, true, 0, false));
+            assert!(matches!(receive.try_recv().unwrap(), Event::Key(_)));
+            *live.lock() = None;
+            menu::refresh();
+            assert!(matches!(receive.try_recv().unwrap(), Event::Closed(_)));
+            assert!(menu_callback(&ctx, 125, false, 0, false), "cancel drains captured release");
+            assert!(!menu_callback(&ctx, 36, true, 0, false));
+            assert!(!menu_callback(&ctx, 36, false, 0, false));
+            assert!(receive.try_recv().is_err());
+            menu::invalidate();
+            menu::configure(Arc::new(|| None), Arc::new(|_| false));
+        }
+
+        fn menu_callback(ctx: &CallbackContext, key: u16, down: bool, flags: CgEventFlags, repeat: bool) -> bool {
+            unsafe {
+                let event = CGEventCreateKeyboardEvent(std::ptr::null_mut(), key, down);
+                assert!(!event.is_null());
+                CGEventSetFlags(event, flags);
+                CGEventSetIntegerValueField(event, SOURCE_PID_FIELD, 0);
+                CGEventSetIntegerValueField(event, 8, i64::from(repeat));
+                let returned = tap_callback(std::ptr::null_mut(), if down { KEY_DOWN } else { KEY_UP },
+                    event, ctx as *const _ as *mut c_void);
+                assert!(returned.is_null() || returned == event);
+                CFRelease(event as *const c_void);
+                returned.is_null()
             }
         }
 
@@ -2570,6 +2675,32 @@ mod platform {
                     use crate::ask_window::hotkey::{keyboard_edge, Disposition};
                     let down = matches!(wparam.0, WM_KEYDOWN | WM_SYSKEYDOWN);
                     let disabled = ctx.shared.recording_active.load(Ordering::SeqCst);
+                    if down || matches!(wparam.0, WM_KEYUP | WM_SYSKEYUP) {
+                        // Keep keypad aliases out of this physical pairing
+                        // slot: keypad Up/Down/Enter are distinct keys even
+                        // when Windows gives them the same virtual-key code.
+                        let extended = keyboard.flags.0 & LLKHF_EXTENDED.0 != 0;
+                        let key = match (vk_code, extended) {
+                            (0x26, true) => Some(crate::capsule_style_menu::Key::ArrowUp),
+                            (0x28, true) => Some(crate::capsule_style_menu::Key::ArrowDown),
+                            (0x0D, false) => Some(crate::capsule_style_menu::Key::Enter),
+                            (0x1B, false) => Some(crate::capsule_style_menu::Key::Escape),
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+                            let modified = [VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU,
+                                VK_LWIN, VK_RWIN, VK_LSHIFT, VK_RSHIFT].into_iter()
+                                .any(|vk| GetAsyncKeyState(vk as i32) < 0);
+                            // The LL callback runs before async state updates:
+                            // an already-down key is a repeat, including a
+                            // press that predated installation of this hook.
+                            let repeat = down && GetAsyncKeyState(vk_code as i32) < 0;
+                            if crate::capsule_style_menu::key(key, down, repeat, modified) {
+                                return LRESULT(1);
+                            }
+                        }
+                    }
                     if (down || matches!(wparam.0, WM_KEYUP | WM_SYSKEYUP))
                         && !(down && vk_code == VK_ESCAPE && super::capsule_menu_open())
                     {

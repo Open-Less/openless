@@ -251,6 +251,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_capsule_language_menu,
             #[cfg(not(mobile))]
             commands::set_capsule_style_menu,
+            #[cfg(not(mobile))]
+            commands::get_capsule_style_menu_request,
             commands::get_settings,
             commands::get_settings_snapshot,
             commands::get_voice_activation_state,
@@ -1140,6 +1142,10 @@ fn run_desktop() {
             RunEvent::Reopen { .. } => show_main_window(app),
             RunEvent::ExitRequested { code: None, api, .. } if desktop_resources::active() => api.prevent_exit(),
             RunEvent::WindowEvent { label, event, .. } => {
+                if matches!(event, tauri::WindowEvent::Destroyed)
+                    && capsule_style_menu::capsule_label(&label) {
+                    capsule_style_menu::window_lost(&label);
+                }
                 if label == "main" {
                     if let tauri::WindowEvent::CloseRequested { ref api, .. } = event {
                         api.prevent_close();
@@ -3441,6 +3447,8 @@ pub(crate) fn hide_less_computer_glow<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 /// inside the module stays `cfg(windows)`.
 mod capsule_mirrors;
 mod capsule_feedback;
+#[cfg(not(mobile))]
+mod capsule_style_menu;
 mod vocab_card_placement;
 
 /// Init and card-return paths use the default stage; the recording display path passes the
