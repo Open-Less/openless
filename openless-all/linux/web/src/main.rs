@@ -146,9 +146,9 @@ fn main() {
             if let Ok(Some(update)) = fetch_update_manifest(if beta { UpdateChannel::Beta } else { UpdateChannel::Stable }).await {
                 if update["newer"] == true {
                     if let Some(version) = update["version"].as_str() {
-                        let _ = openless_linux_host::notify(openless_linux_host::Notification {
-                            summary: "OpenLess", body: &format!("OpenLess {version}"), icon: "openless", timeout_ms: 0,
-                        });
+                        // Startup checks are silent: a version-only desktop popup
+                        // looks like an unsolicited launch/error notification.
+                        log::info!("Linux update available: {version}");
                     }
                 }
             }

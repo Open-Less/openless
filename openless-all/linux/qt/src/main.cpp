@@ -339,12 +339,6 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
             windowKind = "capsule";
             container_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
                                        Qt::Tool);
-            container_->setAttribute(Qt::WA_TranslucentBackground, true);
-            container_->setAttribute(Qt::WA_NoSystemBackground, true);
-            container_->setStyleSheet("background: transparent;");
-            view_->setAttribute(Qt::WA_TranslucentBackground, true);
-            view_->setStyleSheet("background: transparent;");
-            view_->page()->setBackgroundColor(Qt::transparent);
             compactSize_ = QSize(460, 228);
             break;
         case Surface::VoiceEdit:
@@ -358,15 +352,21 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
             windowKind = "qa";
             container_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
                                        Qt::Tool);
-            container_->setAttribute(Qt::WA_TranslucentBackground, true);
-            container_->setAttribute(Qt::WA_NoSystemBackground, true);
-            container_->setStyleSheet("background: transparent;");
-            view_->setAttribute(Qt::WA_TranslucentBackground, true);
-            view_->setStyleSheet("background: transparent;");
-            view_->page()->setBackgroundColor(Qt::transparent);
             compactSize_ = QSize(480, 80);
             expandedSize_ = QSize(760, 416);
             break;
+    }
+    // Configure every auxiliary surface before winId()/show(), including voice
+    // editing. CSS transparency alone cannot expose an opaque native backing.
+    if (kind_ != Surface::Main) {
+        container_->setAttribute(Qt::WA_TranslucentBackground, true);
+        container_->setAttribute(Qt::WA_NoSystemBackground, true);
+        container_->setAutoFillBackground(false);
+        container_->setStyleSheet("background: transparent;");
+        view_->setAttribute(Qt::WA_TranslucentBackground, true);
+        view_->setAutoFillBackground(false);
+        view_->setStyleSheet("background: transparent;");
+        view_->page()->setBackgroundColor(Qt::transparent);
     }
     container_->resize(compactSize_);
     view_->resize(compactSize_);
@@ -383,6 +383,7 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     // 用来单独验证透明/定位（例如塞一个纯色测试页）。
     const char *overrideKey = kind == Surface::Main   ? "OPENLESS_QT_URL_MAIN"
                               : kind == Surface::Qa ? "OPENLESS_QT_URL_QA"
+                              : kind == Surface::VoiceEdit ? "OPENLESS_QT_URL_VOICE_EDIT"
                                                     : "OPENLESS_QT_URL_CAPSULE";
     url_ = qEnvironmentVariable(overrideKey);
     if (url_.isEmpty()) {
@@ -403,8 +404,8 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
 }
 
 SurfaceWindow::~SurfaceWindow() {
+    // The layout parents the webview to container_; deleting both double-frees it.
     delete container_;
-    delete view_;
 }
 
 void SurfaceWindow::load() {
