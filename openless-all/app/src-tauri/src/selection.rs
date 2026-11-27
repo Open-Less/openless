@@ -834,6 +834,13 @@ pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionT
     native_input_target_is_current(target)
 }
 
+/// A successful SetValue may change the selection/caret. Its receipt must only
+/// fence cancellation and the original process/window/control, not the old range.
+#[cfg(target_os = "windows")]
+pub(crate) fn selection_write_identity_is_current(target: &SelectionInsertionTarget) -> bool {
+    native_input_target_is_current(target)
+}
+
 /// Read-only identity for a nonactivating picker. Unlike insertion validation,
 /// this never compares selection text or clipboard contents.
 pub(crate) fn capture_capsule_menu_input_target() -> Option<SelectionInsertionTarget> {

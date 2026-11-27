@@ -235,6 +235,7 @@ pub(super) fn replace_selection_direct(
     original: &str,
     replacement: &str,
     still_current: impl Fn() -> bool,
+    identity_current: impl Fn() -> bool,
 ) -> std::result::Result<(), String> {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -323,20 +324,22 @@ pub(super) fn replace_selection_direct(
                     || !uia.CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
                         .map_err(unavailable)?.as_bool()
                     || value.CurrentValue().map_err(unavailable)?.to_string() != original
-                    || !still_current()
                 {
                     return Err("selectionPolishTargetUnavailable".into());
                 }
                 Ok(())
             },
+            &still_current,
+            &identity_current,
             || value.SetValue(&windows::core::BSTR::from(replacement)),
             || {
                 // Read only the pattern belonging to the original element. A
                 // lost target or unreadable value after submission is unknown.
-                let confirmed = value.CurrentValue()?.to_string() == replacement;
-                Ok(confirmed && still_current()
-                    && uia.CompareElements(&element, &uia.GetFocusedElement()?)?.as_bool()
-                    && still_current())
+                Ok(!element.CurrentIsPassword()?.as_bool()
+                    && allowed_process(&element)?
+                    && !value.CurrentIsReadOnly()?.as_bool()
+                    && value.CurrentValue()?.to_string() == replacement
+                    && uia.CompareElements(&element, &uia.GetFocusedElement()?)?.as_bool())
             },
         )
     })
