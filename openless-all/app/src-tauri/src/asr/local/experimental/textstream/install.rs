@@ -49,6 +49,9 @@ fn current_worker_installed(directory: &Path) -> bool {
         && std::fs::read_to_string(script(directory)).is_ok_and(|s| s == WORKER)
 }
 
+/// `(environment hash, worker.py SHA-256)` of every worker a release has shipped
+/// against the current `requirements.lock`. When `worker.py` changes, add the
+/// outgoing pair, or existing installations stop counting as installed.
 const PREVIOUS_WORKERS: &[(&str, &str)] = &[
     (
         "f585f75ca2d669b48f75a40fe6a7213f9948ac84ce3c5c9378f2b84dfe77a243",
@@ -57,6 +60,16 @@ const PREVIOUS_WORKERS: &[(&str, &str)] = &[
     (
         "64e7ec7b3c3557bea2314d8a99564cf7cfb0402ff1cea586fc3c5366ef5e543b",
         "f08166fc2a375a42f9c86bcc75ded43e1bc8b742c4fba4289db4002a6bc464dc",
+    ),
+    // v2.0.2-Beta.1 to Beta.3.
+    (
+        "6815c8a1b0d0a1ff1bef18f0d67d33314c6c8ff1b014bc8fe30cee1c2ed22754",
+        "36c1f568c9f7ed246ce951637d057bfaa862d436bc0a71e0c9e509e4d0c277a0",
+    ),
+    // v2.0.2-Beta.4 to v2.0.3-Beta.3: the last worker without dictionary hotwords.
+    (
+        "2b057586461d02fb9350cdc1c9fb8def7b64f7471b1cc74538885fd086c73da5",
+        "da7d78a407857e0ade872d4b041451736ed044e4a609652934f3b30039555515",
     ),
 ];
 

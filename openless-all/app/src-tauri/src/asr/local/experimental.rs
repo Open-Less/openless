@@ -337,9 +337,11 @@ impl TranscriptionEngine for ExperimentalTranscriptionEngine {
             let (directory, generation) = models.lease(model)?;
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             if model == Model::TextStream {
+                // The session's frozen dictionary hotwords; selection flows clear them.
+                let hotwords = context.asr.prompt.clone();
                 return runtime
                     .textstream
-                    .start(directory, models, generation, _partials)
+                    .start(directory, models, generation, _partials, hotwords)
                     .await;
             }
             runtime.prepare(model, directory.clone()).await?;

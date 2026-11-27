@@ -32,6 +32,22 @@ use tokio::sync::oneshot;
 pub use install::{install, installed};
 const MAX_LINE: u64 = protocol::MAX_EVENT_BYTES as u64;
 const MAX_QUEUED_BYTES: usize = 32_000 * 600; // Ten-minute capture/retranscribe cap; no dropped speech.
+const CONTEXT_ENV: &str = "OPENLESS_TEXTSTREAM_CONTEXT";
+
+/// Hand the session's frozen dictionary hotwords to the worker, which feeds them
+/// to Qwen3-ASR as recognition context. Every local account can read argv through
+/// `ps`, the environment only this user; an unusable hint is dropped, never a
+/// start failure.
+fn apply_context(command: &mut Command, context: Option<&str>) {
+    match context
+        .map(str::trim)
+        .filter(|context| !context.is_empty() && !context.contains('\0'))
+    {
+        Some(context) => command.env(CONTEXT_ENV, context),
+        // Do not inherit a stale value from the application's own environment.
+        None => command.env_remove(CONTEXT_ENV),
+    };
+}
 fn error(message: impl std::fmt::Display) -> BackendError {
     BackendError::new(BackendErrorCode::Provider, message.to_string())
 }
@@ -98,6 +114,7 @@ impl Runtime {
         models: Arc<ExperimentalAsrService>,
         generation: u64,
         partials: Arc<dyn TextStreamSink>,
+        context: Option<String>,
     ) -> Result<Arc<dyn TranscriptionSession>, BackendError> {
         let expected_runtime = self.generation.load(Ordering::Acquire);
         install::refresh_worker(&directory).await?;
@@ -157,6 +174,7 @@ impl Runtime {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .process_group(0);
+            apply_context(&mut command, context.as_deref());
             let mut child = command.spawn().map_err(error)?;
             let stdin = child.stdin.take().expect("worker stdin");
             let stdout = child.stdout.take().expect("worker stdout");
@@ -478,6 +496,30 @@ mod tests {
         let mut cancelled = Vec::new();
         write_audio(&mut cancelled, queue).unwrap();
         assert!(cancelled.is_empty());
+    }
+
+    #[test]
+    fn dictionary_context_travels_by_environment_and_never_as_a_stale_value() {
+        fn sent(context: Option<&str>) -> Option<std::ffi::OsString> {
+            let mut command = Command::new("/usr/bin/true");
+            apply_context(&mut command, context);
+            assert!(
+                command.get_args().next().is_none(),
+                "vocabulary must stay out of argv"
+            );
+            let (_, value) = command
+                .get_envs()
+                .find(|(name, _)| name.to_str() == Some(CONTEXT_ENV))
+                .expect("set or explicitly removed, never inherited");
+            value.map(Into::into)
+        }
+        assert_eq!(
+            sent(Some(" OpenLess, 李梓涵. ")),
+            Some("OpenLess, 李梓涵.".into())
+        );
+        for unusable in [None, Some("  "), Some("Open\0Less")] {
+            assert_eq!(sent(unusable), None);
+        }
     }
 
     #[test]

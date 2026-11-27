@@ -16,6 +16,7 @@ import json
 import math
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -25,6 +26,61 @@ from urllib.parse import urlparse
 
 MAX_LINE = 1_000_000
 MAX_AUDIO_BYTES = 32_000 * 600
+CONTEXT_ENV = "OPENLESS_TEXTSTREAM_CONTEXT"
+RECITED_PHRASES = 4
+_CONTROL_MARKUP = str.maketrans("", "", "<>")
+
+
+def hotword_phrases() -> list[str]:
+    """Dictionary phrases OpenLess froze for this recording; empty when unused.
+
+    OpenLess joins them as "A, B." and already bounds the text. Angle brackets
+    would be tokenized as control tokens such as `<|audio_pad|>` and break the
+    prompt, so they never reach the tokenizer.
+    """
+    text = os.environ.get(CONTEXT_ENV, "").strip().removesuffix(".")
+    phrases = (
+        " ".join(phrase.translate(_CONTROL_MARKUP).replace(",", " ").split())
+        for phrase in text.split(", ")
+    )
+    return [phrase for phrase in phrases if phrase]
+
+
+
+def recitation(phrases: list[str]) -> re.Pattern | None:
+    """Match the context transcribed back instead of speech.
+
+    For a window without speech the decoder writes out its system prompt: several
+    dictionary phrases in a row, in dictionary order. Speech does not come out
+    that way. Sentence starts are capitalised and separators may vary.
+    """
+    terms = [r"\s+".join(map(re.escape, phrase.split())) for phrase in phrases]
+    runs = [
+        r"[\s,，、]*".join(terms[start:end])
+        for end in range(len(terms), RECITED_PHRASES - 1, -1)
+        for start in range(end - RECITED_PHRASES + 1)
+    ]
+    if not runs:
+        return None
+    runs.sort(key=len, reverse=True)
+    return re.compile(
+        "(?<![0-9A-Za-z])(?:" + "|".join(runs) + r")(?![0-9A-Za-z])[。.]?\s*",
+        re.IGNORECASE,
+    )
+
+
+def join_utterances(done: str, text: str) -> str:
+    """Chinese and Japanese join directly; spaced scripts, Korean included, get a space."""
+    if not done or not text:
+        return done or text
+
+    def spaceless(character: str) -> bool:
+        code = ord(character)
+        hangul = 0x3130 <= code <= 0x318F or 0xAC00 <= code <= 0xD7AF
+        return code >= 0x2E80 and not hangul
+
+    joiner = "" if spaceless(done[-1]) or spaceless(text[0]) else " "
+    return done + joiner + text
 
 
 def metal_memory_limits(memory_bytes: int, recommended_bytes: int) -> tuple[int, int]:
@@ -270,15 +326,25 @@ def run(model_dir: Path, port: int, parent: int):
             from silero_vad_lite import SileroVAD
 
             session = Session(model=str(model_dir))
-            state = session.init_streaming(
-                chunk_size_sec=2.0,
-                max_context_sec=30.0,
-                sample_rate=16000,
-                unfixed_chunk_num=2,
-                unfixed_token_num=5,
-                language=None,
-                finalization_mode="accuracy",
-            )
+            phrases = hotword_phrases()
+            # Qwen3-ASR documents space-separated terms; a comma list invites the
+            # decoder to continue it in the middle of ordinary speech.
+            context = " ".join(phrases)
+            recited = recitation(phrases)
+
+            def new_stream():
+                return session.init_streaming(
+                    context=context,
+                    chunk_size_sec=2.0,
+                    max_context_sec=30.0,
+                    sample_rate=16000,
+                    unfixed_chunk_num=2,
+                    unfixed_token_num=5,
+                    language=None,
+                    finalization_mode="accuracy",
+                )
+
+            state = new_stream()
             vad = SileroVAD(16000)
             mx.clear_cache()
         budget.checkpoint()
@@ -287,9 +353,23 @@ def run(model_dir: Path, port: int, parent: int):
         pending = bytearray()
         total = 0
         heard_speech = False
+        done = ""  # Transcript from before the decoder was last restarted.
+
+        def spoken(text: str) -> str:
+            text = recited.sub("", text).strip() if recited else text
+            return join_utterances(done, text)
+
+        def decode(audio, stream):
+            stream = session.feed_audio(audio, stream)
+            if stream.language == "None":
+                # With context, a chunk with little speech can be labelled "None";
+                # kept, it is forced on every later window and joins them with
+                # spaces.
+                stream.language = "unknown"
+            return stream
 
         def feed(raw):
-            nonlocal state, heard_speech
+            nonlocal state, heard_speech, done
             audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
             if not heard_speech:
                 for start in range(0, len(audio) - 511, 512):
@@ -300,12 +380,22 @@ def run(model_dir: Path, port: int, parent: int):
             # Once speech starts, keep silence for the decoder's own endpointing.
             if heard_speech:
                 with contextlib.redirect_stdout(sys.stderr):
-                    state = session.feed_audio(audio, state)
+                    state = decode(audio, state)
+                    if recited and recited.search(state.text):
+                        # The recitation stays in the decoder's forced prefix and
+                        # swallows the speech that follows. Keep what was said and
+                        # decode this block once more on its own, in case speech
+                        # begins in it; otherwise wait for speech as at the start.
+                        done = spoken(state.text)
+                        state = decode(audio, new_stream())
+                        if recited.search(state.text):
+                            state = new_stream()
+                            heard_speech = False
                     # Release dead allocations as the rolling window grows;
                     # live model weights/KV state remain owned by the session.
                     mx.clear_cache()
                 budget.checkpoint()
-                emit(snapshots.update(state.stable_text, state.text))
+                emit(snapshots.update(spoken(state.stable_text), spoken(state.text)))
 
         while True:
             line = sys.stdin.buffer.readline(MAX_LINE + 1)
@@ -332,9 +422,13 @@ def run(model_dir: Path, port: int, parent: int):
                         mx.clear_cache()
                     budget.checkpoint()
                     # finish_streaming's completed text, not our last draft.
-                    emit(snapshots.update(state.stable_text, state.text, terminal=True))
+                    emit(
+                        snapshots.update(
+                            spoken(state.stable_text), spoken(state.text), terminal=True
+                        )
+                    )
                 else:
-                    emit(snapshots.update("", "", terminal=True))
+                    emit(snapshots.update("", done, terminal=True))
                 return
             else:
                 raise ValueError("unknown worker request")
