@@ -203,6 +203,27 @@ fn backup_unparseable_preferences(path: &Path, bytes: &[u8]) -> Result<PathBuf, 
 pub struct PreferencesStore {
     path: PathBuf,
     state: Mutex<UserPreferences>,
+    document_authority: std::sync::Arc<crate::host_document::permission::DocumentAuthority>,
+}
+
+pub(crate) struct PreferencesAccess<'a> {
+    state: std::sync::MutexGuard<'a, UserPreferences>,
+    authority: &'a crate::host_document::permission::DocumentAuthority,
+    enabled: bool,
+}
+impl std::ops::Deref for PreferencesAccess<'_> {
+    type Target = UserPreferences;
+    fn deref(&self) -> &Self::Target { &self.state }
+}
+impl std::ops::DerefMut for PreferencesAccess<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.state }
+}
+impl Drop for PreferencesAccess<'_> {
+    fn drop(&mut self) {
+        if self.enabled != self.state.cursor_context_enabled {
+            self.authority.invalidate();
+        }
+    }
 }
 
 impl PreferencesStore {
@@ -224,6 +245,7 @@ impl PreferencesStore {
         Ok(Self {
             path,
             state: Mutex::new(preferences),
+            document_authority: Default::default(),
         })
     }
 
@@ -233,6 +255,7 @@ impl PreferencesStore {
         Self {
             path: PathBuf::new(),
             state: Mutex::new(UserPreferences::default()),
+            document_authority: Default::default(),
         }
     }
 
@@ -242,6 +265,7 @@ impl PreferencesStore {
         Self {
             path: path.into(),
             state: Mutex::new(UserPreferences::default()),
+            document_authority: Default::default(),
         }
     }
 
@@ -252,19 +276,30 @@ impl PreferencesStore {
             .clone()
     }
 
+    pub(crate) fn capture_document_permission(&self) -> (
+        UserPreferences, Option<crate::host_document::permission::DocumentPermit>,
+    ) {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let permit = state.cursor_context_enabled.then(|| self.document_authority.permit());
+        (state.clone(), permit)
+    }
+
+    fn document_transition(&self, previous: &UserPreferences, next: &UserPreferences) {
+        if previous.cursor_context_enabled != next.cursor_context_enabled {
+            self.document_authority.invalidate();
+        }
+    }
+
     /// Immutable Host-selected path, used to check a write barrier before taking store locks.
     pub(crate) fn persistence_path(&self) -> &Path {
         &self.path
     }
 
     /// Keep the live value locked until a coordinated restore has committed all of its files.
-    pub(crate) fn cloud_sync_access(&self) -> (std::sync::MutexGuard<'_, UserPreferences>, &Path) {
-        (
-            self.state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-            &self.path,
-        )
+    pub(crate) fn cloud_sync_access(&self) -> (PreferencesAccess<'_>, &Path) {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let enabled = state.cursor_context_enabled;
+        (PreferencesAccess { state, enabled, authority: &self.document_authority }, &self.path)
     }
 
     pub fn set(&self, mut preferences: UserPreferences) -> Result<(), BackendError> {
@@ -291,8 +326,10 @@ impl PreferencesStore {
         if self.path.exists() {
             let bytes =
                 fs::read(&self.path).map_err(|_| persistence_error("read sync preferences"))?;
-            *state = serde_json::from_slice(&bytes)
+            let next = serde_json::from_slice(&bytes)
                 .map_err(|_| persistence_error("decode sync preferences"))?;
+            self.document_transition(&state, &next);
+            *state = next;
         }
         let mut value = preferences_json_preserving_unknown(&self.path, &state)?;
         strip_local_only_preferences(&mut value);
@@ -324,6 +361,7 @@ impl PreferencesStore {
         let bytes = serde_json::to_vec_pretty(&value)
             .map_err(|_| persistence_error("encode restored preferences"))?;
         crate::persistence::atomic_write_for_sync(&self.path, &bytes, permit)?;
+        self.document_transition(&state, &parsed);
         *state = parsed;
         Ok(())
     }
@@ -367,6 +405,7 @@ impl PreferencesStore {
             let json = serde_json::to_vec_pretty(&value)
                 .map_err(|_| persistence_error("encode preferences"))?;
             atomic_write(&self.path, &json)?;
+            self.document_transition(&state, &next);
             *state = next;
             Ok((result, origin))
         })

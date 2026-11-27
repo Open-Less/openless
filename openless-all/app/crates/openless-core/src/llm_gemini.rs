@@ -393,6 +393,7 @@ impl GeminiProvider {
         body: &Value,
         sse: bool,
     ) -> Result<reqwest::Response, LLMError> {
+        crate::polish::check_document_dispatch()?;
         self.build_request(&self.client, url, body, sse)
             .send()
             .await

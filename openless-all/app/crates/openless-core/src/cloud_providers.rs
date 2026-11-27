@@ -1394,6 +1394,7 @@ async fn run_cloud_polish(
     if cancellation.is_cancelled() {
         return Err(cancelled_provider_error());
     }
+    let document_permit = context.document_request_permit();
     let call_label = match &provider {
         CloudPolisherProvider::OpenAi(provider) => provider.call_label(),
         CloudPolisherProvider::Gemini(_) => crate::polish::LlmCallLabel {
@@ -1433,7 +1434,8 @@ async fn run_cloud_polish(
     );
     let on_delta = |delta: &str| stream.publish(delta);
     let should_cancel = || stream.should_cancel();
-    let result = if context.polish.selection_input {
+    let result = crate::host_document::permission::dispatch(document_permit, async {
+    if context.polish.selection_input {
         let (system, user) = context.effective_polish_prompts(&raw_text);
         match &provider {
             CloudPolisherProvider::OpenAi(provider) => {
@@ -1524,7 +1526,8 @@ async fn run_cloud_polish(
                     .await
             }
         }
-    };
+    }
+    }).await?;
     if let Some(error) = stream.take_error() {
         return Err(error);
     }
@@ -2450,11 +2453,12 @@ pub(crate) async fn polish_with_omni_text(
             "polish input must not be empty",
         ));
     }
-    let (system_prompt, user_prompt) = context.effective_polish_prompts(raw_text);
     let provider = build_omni_provider(credentials, context).await?;
-    let polished = provider
-        .complete(&system_prompt, &user_prompt, None)
-        .await
+    let document_permit = context.document_request_permit();
+    let (system_prompt, user_prompt) = context.effective_polish_prompts(raw_text);
+    let polished = crate::host_document::permission::dispatch(
+        document_permit, provider.complete(&system_prompt, &user_prompt, None),
+    ).await?
         .map_err(|error| {
             if context.polish.selection_input {
                 map_selection_provider_error(error)
@@ -3019,6 +3023,11 @@ impl DictationEngine for SharedOmniDictationEngine {
                         .collect::<Vec<_>>(),
                 )
             };
+            let document_permit = if session.provider.is_transcription_only() {
+                None
+            } else {
+                context.document_request_permit()
+            };
             let system_prompt = build_omni_prompt(&context);
             let offset = Arc::new(AtomicU64::new(0));
             let publish_error: Arc<Mutex<Option<BackendError>>> = Arc::new(Mutex::new(None));
@@ -3057,9 +3066,9 @@ impl DictationEngine for SharedOmniDictationEngine {
                     if let Some(live) = live {
                         live.finish().await.map(|transcript| transcript.text).map_err(map_asr_error)
                     } else {
-                        provider.complete_streaming(
+                        crate::host_document::permission::dispatch(document_permit, provider.complete_streaming(
                             &system_prompt, "", Some(&wav), on_delta, should_cancel,
-                        ).await.map_err(map_omni_error)
+                        )).await?.map_err(map_omni_error)
                     }
                 } => result,
             };

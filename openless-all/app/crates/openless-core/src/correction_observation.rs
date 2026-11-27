@@ -307,6 +307,14 @@ mod tests {
             "原后文".into(),
         )
         .unwrap();
+        assert!(range.record_local_change(crate::host_document::OwnedRangeChange {
+            revision: 1,
+            start: 10,
+            removed_utf16: original.encode_utf16().count(),
+            inserted_utf16: edited.encode_utf16().count(),
+            total_before: 10 + original.encode_utf16().count() + 4,
+            total_after: 10 + edited.encode_utf16().count() + 4,
+        }));
         let mut seen = false;
         assert!(range.observe(
             10 + edited.encode_utf16().count() + 4,

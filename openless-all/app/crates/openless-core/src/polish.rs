@@ -1703,6 +1703,7 @@ impl CodexOAuthLLMProvider {
             .header("OpenAI-Beta", "responses=experimental")
             .header("originator", "codex_cli_rs")
             .json(&body);
+        check_document_dispatch()?;
         let response = match request.send().await {
             Ok(r) => r,
             Err(e) => {
@@ -1931,6 +1932,7 @@ fn should_retry_transient(is_connect: bool, is_request: bool, is_timeout: bool) 
 pub(crate) async fn send_with_transient_retry(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LLMError> {
+    check_document_dispatch()?;
     #[cfg(test)]
     if live_acceptance::intent_active() {
         let mut send = live_acceptance::intent_before_send()?;
@@ -1941,6 +1943,7 @@ pub(crate) async fn send_with_transient_retry(
     #[cfg(test)]
     if live_acceptance::active() {
         let attempt = live_acceptance::before_send()?;
+        check_document_dispatch()?;
         let response = request.send().await.map_err(llm_error_from_reqwest);
         println!("LIVE_HTTP {}", serde_json::json!({"attempt":attempt, "status":response.as_ref().ok().map(|response| response.status().as_u16()), "final_url":response.as_ref().ok().map(|response| response.url().as_str())}));
         return response;
@@ -1961,6 +1964,7 @@ pub(crate) async fn send_with_transient_retry(
             let failure = crate::net::request_error_kind(&e);
             log::warn!("[llm] send transient {failure} failure, retry in {RETRY_DELAY_MS}ms");
             tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+            check_document_dispatch()?;
             match request.send().await {
                 Ok(r) => Ok(r),
                 Err(e2) => Err(llm_error_from_reqwest(e2)),
@@ -1968,6 +1972,11 @@ pub(crate) async fn send_with_transient_retry(
         }
         Err(e) => Err(llm_error_from_reqwest(e)),
     }
+}
+
+pub(crate) fn check_document_dispatch() -> Result<(), LLMError> {
+    crate::host_document::permission::check_dispatch()
+        .map_err(|_| LLMError::Network("document context permission expired".into()))
 }
 
 fn codex_responses_url(base_url: &str) -> String {

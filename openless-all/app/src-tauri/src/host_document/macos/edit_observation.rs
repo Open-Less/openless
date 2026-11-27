@@ -243,7 +243,7 @@ unsafe extern "C" fn changed(
                 let total =
                     copy_index_attr(control, b"AXNumberOfCharacters\0").ok_or("unavailable")?;
                 let selected = copy_selected_range(control).ok_or("unavailable")?;
-                let (start, length) = delivery.proof.range(total).ok_or("unavailable")?;
+                let (start, length) = delivery.proof.known_range().ok_or("unavailable")?;
                 let caret = usize::try_from(selected.location).map_err(|_| "unavailable")?;
                 let size = usize::try_from(selected.length).map_err(|_| "unavailable")?;
                 if caret < start
@@ -253,13 +253,14 @@ unsafe extern "C" fn changed(
                 {
                     return Err("range changed".into());
                 }
-                Ok(())
-            })
-            .is_ok();
-            if valid {
-                watch.changed.set(Some(Instant::now()));
-            } else {
-                watch.stop.store(true, Ordering::Release);
+                // AX notifications supply no edit span. Field-length changes
+                // cannot advance the known range or authorize any text read.
+                Ok(delivery.proof.range(total).is_some())
+            });
+            match valid {
+                Ok(true) => watch.changed.set(Some(Instant::now())),
+                Ok(false) => watch.changed.set(None),
+                Err(_) => watch.stop.store(true, Ordering::Release),
             }
         }
         // Focus/window loss or destruction permanently invalidates this watch,

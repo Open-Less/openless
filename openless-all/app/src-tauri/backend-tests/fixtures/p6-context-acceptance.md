@@ -33,12 +33,12 @@ available. Do not enter credentials or other private content to test this.
 
 ## Same name and rewrite
 
-1. Dictate a test sentence whose ASR output is `请使用 codx 完成这个任务`.
-   Correct only `codx` to `codex` inside that insertion and leave the caret there.
+1. Dictate a test sentence whose ASR output is `请使用 Codox 完成这个任务`.
+   Correct only `Codox` to `Codex` inside that insertion and leave the caret there.
    Pause at least five seconds. A candidate may appear only if the native range
    and all required observer subscriptions were established.
 2. Before confirming, verify no new dictionary entry exists. Use the existing
-   confirmation card; after confirming the complete `codex` word should appear
+   confirmation card; after confirming the complete `Codex` word should appear
    once. Do not create a source-to-target replacement rule.
 3. Begin another recording after confirmation and say the same name. Inspect
    the exact request's hotword data without recording the surrounding field,
@@ -79,3 +79,12 @@ desktop learning stays off there until an owned UIA/native insertion-range
 receipt is available. Ordinary Windows insertion, manual vocabulary APIs and
 other legacy hosts keep their existing contracts. Browser input-kind labels
 never authorize page/URL reads, and these steps do not exercise P5's page reader.
+
+Plain AX value/selection notifications do not identify the edit span. A changed
+field length does not resize the insertion sample: do not read or learn that
+intermediate state. Equal-length corrections at the original fixed position
+remain eligible. Delete-then-type can resume only if it returns to the same
+proven length/range; net insertions/deletions require a real native range owner,
+which this AX path does not currently have. In particular, append once far
+after 64 repeated boundary newlines while leaving the original caret unchanged:
+there must be no expanded sample, vocabulary candidate or expression evidence.

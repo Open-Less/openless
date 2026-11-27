@@ -10619,7 +10619,9 @@ impl OpenLessBackend {
         host_context: &dyn HostContextAdapter,
     ) -> Result<DictationContext, BackendError> {
         let revision = self.dictation_provider_revision();
-        let preferences = self.get_preferences();
+        // Freeze data consent before any capture/configuration await. The
+        // permission belongs to this request, not to mutable style preferences.
+        let (preferences, document_permission) = self.preferences.capture_document_permission();
         let foreground_output = purpose == DictationContextPurpose::Dictation
             && options.insert_text
             && options.output_target == DictationOutputTarget::ForegroundApp;
@@ -10663,12 +10665,13 @@ impl OpenLessBackend {
             assigned_ids.iter().map(String::as_str), active_id, &preferences.active_style_pack_id,
         )?;
         let mut captured_options = options.clone();
-        let document_context = if foreground_output && preferences.cursor_context_enabled {
+        let document_context = if foreground_output
+            && document_permission.as_ref().is_some_and(|permit| permit.is_valid()) {
             host_context.capture_document_context().await
         } else {
             None
         };
-        if !preferences.cursor_context_enabled {
+        if !document_permission.as_ref().is_some_and(|permit| permit.is_valid()) {
             // This switch controls document text, including text supplied by
             // callers. Front-application metadata is still needed for history,
             // application-aware polish, and macOS Auto newline selection.
@@ -10678,7 +10681,7 @@ impl OpenLessBackend {
             || (preferences.cursor_context_enabled && captured_options.cursor_context.is_none())
         {
             match host_context
-                .capture(preferences.cursor_context_enabled)
+                .capture(document_permission.as_ref().is_some_and(|permit| permit.is_valid()))
                 .await
             {
                 Ok(capture) => {
@@ -10747,12 +10750,8 @@ impl OpenLessBackend {
         if options.skip_auto_style {
             context = context.with_style_selection(DictationStyleSelection::SkipAuto)?;
         }
-        if self.get_preferences().cursor_context_enabled {
-            context.polish.document_context = document_context;
-        } else {
-            // Privacy is live even while credentials/native capture are queued.
-            context.polish.cursor_context = None;
-        }
+        context.polish.document_context = document_context;
+        context.document_permission = document_permission;
         if foreground_output {
             context.polish.input_scene_prefix = Some(input_scene_prefix);
         }
@@ -10827,6 +10826,9 @@ impl OpenLessBackend {
             .into_iter()
             .filter(|rule| rule.enabled)
             .collect();
+        // Must follow llm_channel_configured and every other capture await.
+        // Retain the invalid token so a later grant cannot revive old data.
+        context.discard_invalid_document_context();
         Ok(context)
     }
 
@@ -11076,6 +11078,7 @@ fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<
 
 #[cfg(test)]
 mod tests {
+    include!("document_permission_tests.rs");
     include!("recording_overlap_tests.rs");
     include!("sync_dictation_fence_tests.rs");
     use std::sync::{Arc, Mutex};

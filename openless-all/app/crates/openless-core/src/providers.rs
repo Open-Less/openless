@@ -334,6 +334,7 @@ async fn send_chat_completion(
     if let Some(api_key) = configured_secret(config.api_key.as_ref()) {
         request = request.bearer_auth(api_key);
     }
+    crate::host_document::permission::check_dispatch()?;
     let response = run_cancellable(
         cancellation,
         read_response(request.send(), config.max_response_bytes),
@@ -403,6 +404,7 @@ impl TextPolisher for OpenAiChatPolisher {
                 provider: context.llm.provider_id.clone(),
                 model: model.clone(),
             };
+            let document_permit = context.document_request_permit();
             let (captured_prompt, user_prompt) = context.effective_polish_prompts(&raw_text);
             let system_prompt = if captured_prompt.trim().is_empty() {
                 config.system_prompt.clone()
@@ -433,8 +435,10 @@ impl TextPolisher for OpenAiChatPolisher {
                 "temperature": config.temperature,
                 "messages": messages,
             });
-            let cleaned =
-                send_chat_completion(&client, &config, Arc::clone(&cancellation), payload).await?;
+            let cleaned = crate::host_document::permission::dispatch(
+                document_permit,
+                send_chat_completion(&client, &config, Arc::clone(&cancellation), payload),
+            ).await??;
             let mut output = if context.polish.translation_active {
                 if let Some((source_text, text)) =
                     crate::prompt_compose::split_polish_translate_output(&cleaned)

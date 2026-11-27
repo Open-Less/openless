@@ -214,6 +214,7 @@ pub struct DictationContext {
     /// Owned start-time alternatives. Later preference, routing and pack edits
     /// cannot change either side of the toggle or a submitted parallel segment.
     pub(crate) style_choices: DictationStyleChoices,
+    pub(crate) document_permission: Option<crate::host_document::permission::DocumentPermit>,
     pub(crate) input_app: Option<crate::app_style_routing::InputApp>,
     /// Annotated built-in Raw prompt, captured before any later prompt changes.
     pub(crate) raw_passthrough_prompt: Option<String>,
@@ -437,6 +438,7 @@ impl DictationContext {
             unconfigured_llm_raw: None,
             raw_passthrough_prompt: None,
             expression_instructions: None,
+            document_permission: None,
             omni,
             polish: DictationPolishContext {
                 document_context: None,
@@ -686,10 +688,29 @@ impl DictationContext {
     }
 
     pub(crate) fn request_cursor_context(&self) -> Option<String> {
+        if self.document_permission.as_ref().is_some_and(|permit| !permit.is_valid()) {
+            return None;
+        }
         self.polish.document_context.as_ref()
             .filter(|context| !context.is_empty())
             .map(crate::host_document::CursorContext::request_input)
             .or_else(|| self.polish.cursor_context.clone())
+    }
+
+    pub(crate) fn discard_invalid_document_context(&mut self) {
+        if self.document_permission.as_ref().is_some_and(|permit| !permit.is_valid()) {
+            self.polish.document_context = None;
+            self.polish.cursor_context = None;
+        }
+    }
+
+    pub(crate) fn document_request_permit(
+        &self,
+    ) -> Option<crate::host_document::permission::DocumentPermit> {
+        let has_data = self.polish.document_context.as_ref().is_some_and(|context| !context.is_empty())
+            || self.polish.cursor_context.as_ref().is_some_and(|text| !text.trim().is_empty());
+        self.document_permission.as_ref()
+            .filter(|permit| has_data && permit.is_valid()).cloned()
     }
 
     /// Prepend metadata only for actual foreground-app dictation output.

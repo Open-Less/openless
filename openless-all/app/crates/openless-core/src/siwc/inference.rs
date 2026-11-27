@@ -39,6 +39,7 @@ impl SiwcAccess {
                 .header("Accept", "text/event-stream")
                 .json(body);
             // Do not replay a possibly accepted inference or switch its billing source.
+            crate::polish::check_document_dispatch()?;
             let mut response = tokio::time::timeout(timeouts.first_token, request.send())
                 .await
                 .map_err(|_| LLMError::Timeout)?
