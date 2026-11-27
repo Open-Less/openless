@@ -177,6 +177,11 @@ pub fn bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool
     }
     let left_legacy = legacy_modifier_trigger(left);
     let right_legacy = legacy_modifier_trigger(right);
+    let shift = |binding: &ShortcutBinding| binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift");
+    if (shift(left) && matches!(right_legacy, Some(HotkeyTrigger::LeftShift | HotkeyTrigger::RightShift)))
+        || (shift(right) && matches!(left_legacy, Some(HotkeyTrigger::LeftShift | HotkeyTrigger::RightShift))) {
+        return true;
+    }
     match (left_legacy, right_legacy) {
         (Some(left), Some(right)) => left == right,
         (Some(_), None) | (None, Some(_)) => false,
@@ -567,6 +572,7 @@ fn reject_style_pack_hotkey_overlap_with_others(
     binding: &ShortcutBinding,
     preferences: &UserPreferences,
 ) -> Result<(), String> {
+    reject_overlap(binding, &preferences.skip_auto_style_hotkey, "风格快捷键不能和跳过自动风格快捷键相同")?;
     reject_overlap(
         binding,
         &preferences.dictation_hotkey,
@@ -653,6 +659,7 @@ pub fn reconcile_hotkey_collisions(
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum NonCoreHotkey {
         Translation,
+        SkipAutoStyle,
         Qa,
         SwitchStyle,
         OpenApp,
@@ -665,6 +672,7 @@ pub fn reconcile_hotkey_collisions(
         fn get(self, preferences: &UserPreferences) -> Option<ShortcutBinding> {
             match self {
                 Self::Translation => Some(preferences.translation_hotkey.clone()),
+                Self::SkipAutoStyle => Some(preferences.skip_auto_style_hotkey.clone()),
                 Self::Qa => preferences.qa_hotkey.clone(),
                 Self::SwitchStyle => preferences.switch_style_hotkey.clone(),
                 Self::OpenApp => preferences.open_app_hotkey.clone(),
@@ -681,6 +689,8 @@ pub fn reconcile_hotkey_collisions(
                         preferences.translation_hotkey = value;
                     }
                 }
+                Self::SkipAutoStyle => preferences.skip_auto_style_hotkey =
+                    value.unwrap_or_else(ShortcutBinding::unassigned),
                 Self::Qa => preferences.qa_hotkey = value,
                 Self::SwitchStyle => preferences.switch_style_hotkey = value,
                 Self::OpenApp => preferences.open_app_hotkey = value,
@@ -695,6 +705,7 @@ pub fn reconcile_hotkey_collisions(
                 return false;
             }
             match self {
+                Self::SkipAutoStyle => validate_skip_auto_style_hotkey(binding).is_ok(),
                 Self::SelectionPolish => {
                     validate_shortcut_binding(binding).is_ok()
                         && reject_bare_shift_dictation_shortcut(binding).is_ok()
@@ -704,7 +715,7 @@ pub fn reconcile_hotkey_collisions(
         }
     }
 
-    const ORDER: [NonCoreHotkey; 7] = [
+    const ORDER: [NonCoreHotkey; 8] = [
         NonCoreHotkey::Translation,
         NonCoreHotkey::Qa,
         NonCoreHotkey::SwitchStyle,
@@ -712,6 +723,7 @@ pub fn reconcile_hotkey_collisions(
         NonCoreHotkey::QuickNote,
         NonCoreHotkey::SelectionPolish,
         NonCoreHotkey::LessComputer,
+        NonCoreHotkey::SkipAutoStyle,
     ];
     let mut higher = vec![preferences.dictation_hotkey.clone()];
     let mut adjusted = 0;
@@ -719,13 +731,19 @@ pub fn reconcile_hotkey_collisions(
         let Some(current) = key.get(preferences) else {
             continue;
         };
-        let collides = higher.iter().any(|held| bindings_overlap(held, &current));
+        let reserved = if key == NonCoreHotkey::SkipAutoStyle {
+            vec![preferences.coding_agent_panel_hotkey.as_ref(), preferences.coding_agent_quick_hotkey.as_ref()]
+        } else { Vec::new() };
+        let conflicts = |candidate: &ShortcutBinding| higher.iter()
+            .chain(reserved.iter().filter_map(|binding| *binding))
+            .any(|held| bindings_overlap(held, candidate));
+        let collides = conflicts(&current);
         if !collides && key.binding_is_valid(&current) {
             higher.push(current);
             continue;
         }
         let fallback = key.get(previous).filter(|candidate| {
-            !higher.iter().any(|held| bindings_overlap(held, candidate))
+            !conflicts(candidate)
                 && key.binding_is_valid(candidate)
         });
         let resolved = if key == NonCoreHotkey::Translation && fallback.is_none() {
@@ -776,6 +794,22 @@ pub fn reconcile_hotkey_collisions(
 }
 
 pub fn reject_hotkey_collisions(preferences: &UserPreferences) -> Result<(), String> {
+    validate_skip_auto_style_hotkey(&preferences.skip_auto_style_hotkey)?;
+    let skip = &preferences.skip_auto_style_hotkey;
+    for other in [
+        Some(&preferences.dictation_hotkey),
+        Some(&preferences.translation_hotkey),
+        preferences.qa_hotkey.as_ref(),
+        preferences.switch_style_hotkey.as_ref(),
+        preferences.open_app_hotkey.as_ref(),
+        preferences.coding_agent_voice_hotkey.as_ref(),
+        preferences.coding_agent_panel_hotkey.as_ref(),
+        preferences.coding_agent_quick_hotkey.as_ref(),
+        preferences.quick_note_hotkey.as_ref(),
+        preferences.selection_polish_hotkey.as_ref(),
+    ].into_iter().flatten() {
+        reject_overlap(skip, other, "跳过自动风格快捷键不能和其他快捷键相同")?;
+    }
     reject_non_dictation_side_specific_shortcuts(preferences)?;
     let switch_style = preferences.switch_style_hotkey.as_ref();
     let open_app = preferences.open_app_hotkey.as_ref();
@@ -886,6 +920,21 @@ pub fn reject_hotkey_collisions(preferences: &UserPreferences) -> Result<(), Str
         reject_selection_polish_hotkey_collisions(binding, preferences)?;
     }
     reject_style_pack_hotkey_conflicts(&preferences.style_pack_hotkeys, preferences)
+}
+
+pub fn validate_skip_auto_style_hotkey(binding: &ShortcutBinding) -> Result<(), String> {
+    if binding.is_unassigned() { return Ok(()); }
+    validate_shortcut_binding(binding).map_err(|error| error.to_string())?;
+    reject_side_specific_non_dictation(binding)?;
+    // The native tap path supports physical modifier keys; a generic Shift
+    // belongs to translation, and media/Fn have platform system actions.
+    if binding.modifiers.is_empty() && legacy_modifier_trigger(binding).is_none() {
+        return Err("跳过自动风格快捷键需要单个修饰键或组合键".into());
+    }
+    if matches!(legacy_modifier_trigger(binding), Some(HotkeyTrigger::Fn | HotkeyTrigger::MediaPlayPause)) {
+        return Err("跳过自动风格快捷键不支持 Fn 或媒体键".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
