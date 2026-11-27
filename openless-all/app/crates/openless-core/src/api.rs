@@ -4498,8 +4498,7 @@ impl OpenLessBackend {
             .expect("pending audio capture lock poisoned")
             .insert(PendingAudioCaptureKey::VoiceActivation(generation), capture);
         let mut reservation = match self.reserve_dictation_session(
-            true,
-            DictationOutputTarget::ForegroundApp,
+            &DictationStartOptions::default(),
             Some(PendingAudioCaptureKey::VoiceActivation(generation)),
         ) {
             Ok(reservation) => reservation,
@@ -6237,8 +6236,7 @@ impl OpenLessBackend {
                 let intent = hotkey.after_modifier_grace(press_id, self.snapshot().dictation.phase);
                 let reservation = if matches!(intent, HotkeyIntent::Start { .. }) {
                     Some(self.reserve_dictation_session(
-                        options.start.insert_text,
-                        options.start.output_target,
+                        &options.start,
                         Some(PendingAudioCaptureKey::Hotkey(press_id)),
                     ))
                 } else {
@@ -6262,8 +6260,7 @@ impl OpenLessBackend {
                             .expect("hotkey interpreter lock poisoned");
                         hotkey.start_is_current(press_id).then(|| {
                             self.reserve_dictation_session(
-                                options.start.insert_text,
-                                options.start.output_target,
+                                &options.start,
                                 Some(PendingAudioCaptureKey::Hotkey(press_id)),
                             )
                         })
@@ -8704,23 +8701,16 @@ impl OpenLessBackend {
 
     fn reserve_dictation_session(
         &self,
-        insert_text: bool,
-        output_target: DictationOutputTarget,
+        options: &DictationStartOptions,
         capture_key: Option<PendingAudioCaptureKey>,
     ) -> Result<DictationReservation, BackendError> {
-        self.reserve_dictation_session_with_id(
-            SessionId::new(),
-            insert_text,
-            output_target,
-            capture_key,
-        )
+        self.reserve_dictation_session_with_id(SessionId::new(), options, capture_key)
     }
 
     fn reserve_dictation_session_with_id(
         &self,
         session_id: SessionId,
-        insert_text: bool,
-        output_target: DictationOutputTarget,
+        options: &DictationStartOptions,
         capture_key: Option<PendingAudioCaptureKey>,
     ) -> Result<DictationReservation, BackendError> {
         {
@@ -8740,7 +8730,7 @@ impl OpenLessBackend {
         let starting_resources = self.voice_sessions.hold_resources(session_id)?;
         // Freeze the destination and its matching host-context reader before context/credential
         // awaits or feedback can change foreground focus. No native preparation happens yet.
-        let (inserter, host_context) = if insert_text {
+        let (inserter, host_context) = if options.insert_text {
             match self
                 .deps
                 .text_inserter
@@ -8771,13 +8761,20 @@ impl OpenLessBackend {
             state.dictation = DictationStateSnapshot {
                 phase: DictationPhase::Starting,
                 session_id: Some(session_id),
+                skip_auto_style: options.skip_auto_style,
                 ..DictationStateSnapshot::default()
             };
-            state.dictation_start_output_target = Some(output_target);
+            state.dictation_start_output_target = Some(options.output_target);
             state.dictation_translation_requested = None;
-            state.dictation_style_selection = None;
+            // Publish the actual initial choice with Starting, before host or
+            // credential capture can suspend and a style gesture can overtake it.
+            state.dictation_style_selection = Some(if options.skip_auto_style {
+                DictationStyleSelection::SkipAuto
+            } else {
+                DictationStyleSelection::Automatic
+            });
             state.dictation_destination_changed = false;
-            if output_target == DictationOutputTarget::ForegroundApp {
+            if options.output_target == DictationOutputTarget::ForegroundApp {
                 self.main_dictation_trace.begin(session_id);
             }
             self.events.publish(
@@ -8808,8 +8805,7 @@ impl OpenLessBackend {
         &self,
         options: DictationStartOptions,
     ) -> Result<SessionId, BackendError> {
-        let reservation =
-            self.reserve_dictation_session(options.insert_text, options.output_target, None)?;
+        let reservation = self.reserve_dictation_session(&options, None)?;
         self.start_reserved_dictation(reservation, options).await
     }
 
@@ -8827,7 +8823,7 @@ impl OpenLessBackend {
             ..Default::default()
         };
         let reservation =
-            self.reserve_dictation_session_with_id(session_id, false, options.output_target, None)?;
+            self.reserve_dictation_session_with_id(session_id, &options, None)?;
         if !is_current() {
             let _ = self.cancel_dictation(Some(session_id)).await;
             return Err(VoiceCaptureLifecycle::cancelled_error());
@@ -8919,9 +8915,13 @@ impl OpenLessBackend {
                 Some(requested) => Arc::new(context.with_translation_requested(requested)),
                 None => context,
             };
+            // An unchanged initial choice already belongs to the captured context;
+            // keep its prompt additions and fallback state intact.
             let context = match state.dictation_style_selection.clone() {
-                Some(selection) => Arc::new(context.with_style_selection(selection)?),
-                None => context,
+                Some(selection) if selection != context.style_choices.selection => {
+                    Arc::new(context.with_style_selection(selection)?)
+                }
+                _ => context,
             };
             state.silence_monitor = context.recording.silence_after_ms.map(|silence_ms| {
                 let started_at = std::time::Instant::now();
@@ -11044,7 +11044,10 @@ mod tests {
             assert!(backend.snapshot().dictation.session_id.is_none());
             assert_eq!(discarded.load(Ordering::SeqCst), 1);
             let next = backend
-                .reserve_dictation_session(false, DictationOutputTarget::ForegroundApp, None)
+                .reserve_dictation_session(
+                    &DictationStartOptions { insert_text: false, ..Default::default() },
+                    None,
+                )
                 .unwrap();
             backend.reset_dictation_session(next.session_id);
         }
@@ -16612,7 +16615,10 @@ mod tests {
         insert_text: bool,
     ) -> SessionId {
         let reservation = backend
-            .reserve_dictation_session(insert_text, DictationOutputTarget::ForegroundApp, None)
+            .reserve_dictation_session(
+                &DictationStartOptions { insert_text, ..Default::default() },
+                None,
+            )
             .unwrap();
         let id = reservation.session_id;
         *backend.voice_activation_session.lock().unwrap() =
@@ -20852,7 +20858,7 @@ mod tests {
                         ..Default::default()
                     };
                     let reservation = backend
-                        .reserve_dictation_session(false, options.output_target, None)
+                        .reserve_dictation_session(&options, None)
                         .unwrap();
                     let session_id = reservation.session_id;
                     let mut stopping = Some(Box::pin(backend.stop_dictation()));

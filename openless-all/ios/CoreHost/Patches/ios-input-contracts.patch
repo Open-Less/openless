@@ -189,7 +189,7 @@ diff --git a/crates/openless-core/src/api.rs b/crates/openless-core/src/api.rs
 +            ..Default::default()
 +        };
 +        let reservation =
-+            self.reserve_dictation_session(insert_text, options.output_target, None)?;
++            self.reserve_dictation_session(&options, None)?;
 +        self.start_reserved_dictation_with_raw_provider(
 +            reservation,
 +            options,
