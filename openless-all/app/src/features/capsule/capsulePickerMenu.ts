@@ -2,6 +2,7 @@ import type {
   CapsuleStyleMenuIdentity,
   CapsuleStyleMenuKey,
   CapsuleStyleMenuOwner,
+  CapsuleStyleMenuRequest,
 } from '../../api/contracts';
 
 /**
@@ -41,6 +42,8 @@ export interface CapsulePickerDeps {
   onOpenChange: (open: boolean) => void;
   /** An opening request failed while it was still the current one. */
   onFailure: () => void;
+  /** The host discarded this particular style request or owner. */
+  onStaleStyleRequest?: (request: CapsuleStyleMenuRequest) => void;
 }
 
 interface Reservation extends CapsulePickerOwner {
@@ -150,7 +153,13 @@ export class CapsulePickerMenu {
         await this.enqueue(async () => {
           if (owner.abort.signal.aborted) return;
           owner.nativeWriteStarted = true;
-          const nativeOwner = await deps.setNativeMenu(true, owner);
+          let nativeOwner: CapsuleStyleMenuOwner | void;
+          try {
+            nativeOwner = await deps.setNativeMenu(true, owner);
+          } catch (error) {
+            if (this.discardStaleStyleReservation(owner, error)) return;
+            throw error;
+          }
           if (!nativeOwner) return;
           owner.nativeOwner = nativeOwner;
           if (owner.styleInput?.closedMenuIds.has(nativeOwner.menuId)) {
@@ -229,6 +238,29 @@ export class CapsulePickerMenu {
     return result;
   }
 
+  private discardStaleStyleReservation(owner: Reservation, error: unknown): boolean {
+    if (owner.kind !== 'style') return false;
+    // Tauri's Result<_, String> rejects with a bare code. Use a structured
+    // code if present, and compare both forms exactly.
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? error.code
+        : error instanceof Error
+          ? error.message
+          : error;
+    if (code !== 'capsule_style_request_stale' && code !== 'capsule_style_menu_reservation_stale') {
+      return false;
+    }
+    // The host owns any rollback. This also prevents an already queued close
+    // for a superseded reservation from issuing a native write.
+    owner.nativeWriteStarted = false;
+    if (this.reservation === owner) this.close('style');
+    if (owner.requestId !== undefined) {
+      owner.deps.onStaleStyleRequest?.({ sessionId: owner.sessionId, requestId: owner.requestId });
+    }
+    return true;
+  }
+
   private release(owner: Reservation) {
     if (this.exiting === owner) this.exiting = undefined;
     owner.abort.abort();
@@ -237,6 +269,10 @@ export class CapsulePickerMenu {
         owner.nativeWriteStarted = false;
         await owner.deps.setNativeMenu(false, owner, owner.nativeOwner);
       }
-    }).catch((error) => console.warn('[capsule] failed to restore picker menu geometry', error));
+    }).catch((error) => {
+      if (!this.discardStaleStyleReservation(owner, error)) {
+        console.warn('[capsule] failed to restore picker menu geometry', error);
+      }
+    });
   }
 }

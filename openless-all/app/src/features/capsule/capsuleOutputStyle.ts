@@ -75,6 +75,15 @@ export function stylePickerRequestForSession(
   return enabled && request?.sessionId === captureSessionId ? request : null;
 }
 
+export function forgetStylePickerRequest<T extends CapsuleStyleMenuRequest>(
+  current: T | null,
+  stale: CapsuleStyleMenuRequest,
+): T | null {
+  return current?.sessionId === stale.sessionId && current.requestId === stale.requestId
+    ? null
+    : current;
+}
+
 export class CapsuleStylePickerRequests {
   private sessionId: string | undefined;
   private consumed = new Set<string>();
