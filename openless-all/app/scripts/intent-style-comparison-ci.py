@@ -1,14 +1,22 @@
-"""Opt-in CI runner. Never publish untrusted provider text, errors, or config."""
+"""Opt-in CI runner. Review text leaves the runner only in authenticated CMS."""
+import base64
+import copy
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
+from urllib.parse import quote
 
 TARGET = "intent_style_tests::intent_live_configured_channel_comparison"
 MODEL = "deepseek-flash"
 ENDPOINT = "https://api.deepseek.com/v1"
+MAX_REPORT = 2_000_000
+MAX_REVIEW = 1_000_000
+MAX_TEXT = 32_768
 FIXTURE = Path(__file__).resolve().parent.parent / (
     "crates/openless-core/tests/fixtures/intent-reconstruction-evaluation.json"
 )
@@ -45,7 +53,7 @@ def safe_report(evaluation):
         "primaryRequestLimit": 32,
         "totalRequestLimit": 36,
         "executionStatus": "not_started",
-        "semanticReview": "pending; provider text intentionally not published",
+        "semanticReview": "pending human review; outputs are untrusted text",
         "cases": [
             {
                 **{
@@ -97,6 +105,161 @@ def apply_status(report, raw):
                 raise ValueError("unexpected result")
 
 
+def openssl(arguments, data=None):
+    result = subprocess.run(
+        ["openssl", *arguments], input=data, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, timeout=30, check=False,
+        env={name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG")
+             if name in os.environ},
+    )
+    if result.returncode != 0:
+        raise ValueError("cryptographic operation failed")
+    return result.stdout
+
+
+def private_write(path, data):
+    with open(path, "xb", opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
+        stream.write(data)
+
+
+def cms_encrypt(plaintext, ciphertext, certificate):
+    openssl([
+        "cms", "-encrypt", "-binary", "-aes-256-gcm",
+        "-in", str(plaintext), "-outform", "DER", "-out", str(ciphertext),
+        "-recip", str(certificate), "-keyopt", "rsa_padding_mode:oaep",
+        "-keyopt", "rsa_oaep_md:sha256", "-keyopt", "rsa_mgf1_md:sha256",
+    ])
+    validate_ciphertext(ciphertext)
+
+
+def validate_ciphertext(ciphertext):
+    # Both sides reject unauthenticated CBC, even for an otherwise valid CMS file.
+    if not 128 <= ciphertext.stat().st_size <= MAX_REPORT:
+        raise ValueError("unexpected ciphertext size")
+    structure = openssl(["cms", "-cmsout", "-inform", "DER", "-in", str(ciphertext), "-print"])
+    for field in (
+        rb"^  contentType: id-smime-ct-authEnvelopedData \(",
+        rb"^\s+algorithm: aes-256-gcm \(",
+        rb"^\s+algorithm: rsaesOaep \(",
+    ):
+        if not re.search(field, structure, re.M):
+            raise ValueError("authenticated CMS required")
+
+
+def validate_recipient(certificate, directory):
+    if (
+        not isinstance(certificate, str) or len(certificate) > 8192
+        or not re.fullmatch(
+            r"\s*-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+"
+            r"-----END CERTIFICATE-----\s*", certificate
+        )
+    ):
+        raise ValueError("one public PEM certificate required")
+    path = directory / "recipient.pem"
+    private_write(path, certificate.encode("ascii"))
+    der = openssl(["x509", "-in", str(path), "-outform", "DER"])
+    openssl(["x509", "-in", str(path), "-checkend", "3600", "-noout"])
+    public = openssl(["x509", "-in", str(path), "-pubkey", "-noout"])
+    details = openssl(["rsa", "-pubin", "-text", "-noout"], public)
+    bits = re.search(rb"Public-Key: \((\d+) bit\)", details)
+    if not bits or not 3072 <= int(bits[1]) <= 8192:
+        raise ValueError("RSA 3072..8192 recipient required")
+    # Prove that this installed OpenSSL supports the exact authenticated format
+    # before the caller reads provider credentials or starts a paid request.
+    probe = directory / "probe.json"
+    encrypted = directory / "probe.cms"
+    private_write(probe, b'{"preflight":"non-sensitive fixture"}')
+    cms_encrypt(probe, encrypted, path)
+    probe.unlink()
+    encrypted.unlink()
+    return path, hashlib.sha256(der).hexdigest()
+
+
+def review_text(text, key, allowed_urls):
+    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_TEXT:
+        raise ValueError("invalid review text")
+    if any(ord(char) < 32 and char not in "\r\n\t" for char in text):
+        raise ValueError("unexpected control character")
+    variants = {
+        key, quote(key, safe=""), key.encode().hex(),
+        base64.b64encode(key.encode()).decode(),
+        base64.urlsafe_b64encode(key.encode()).decode(),
+        json.dumps(key)[1:-1],
+    }
+    if any(value in text for value in variants):
+        raise ValueError("credential echo rejected")
+    if re.search(
+        r"-----BEGIN (?:[A-Z ]*PRIVATE KEY|CERTIFICATE)-----"
+        r"|authorization\s*:\s*bearer|(?:api[_ -]?key|token)\s*[:=]"
+        r"|\bsk-[A-Za-z0-9_-]{16,}", text, re.I
+    ):
+        raise ValueError("credential-like content rejected")
+    if set(re.findall(r'https?://[^\s<>"`()，。；）]+', text)) - allowed_urls:
+        raise ValueError("unexpected URL")
+    return text
+
+
+def review_payload(report, raw, key):
+    payload = copy.deepcopy(report)
+    for target, canonical, case in zip(payload["cases"], report["cases"], raw["cases"]):
+        allowed_urls = set(re.findall(r'https?://[^\s<>"`()，。；）]+', canonical["input"]))
+        for side in ("old", "new"):
+            value = case.get(side)
+            if value is None:
+                target[side] = None
+            elif "errorCode" in value:
+                target[side] = {"errorCode": "request_failed"}
+            else:
+                selected = {"text": review_text(value["text"], key, allowed_urls)}
+                source = value.get("sourceText")
+                if source is not None:
+                    selected["sourceText"] = review_text(source, key, allowed_urls)
+                elapsed = canonical[side].get("elapsedMs")
+                if elapsed is not None:
+                    selected["elapsedMs"] = elapsed
+                target[side] = selected
+    encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode()
+    if len(encoded) > MAX_REVIEW:
+        raise ValueError("oversize review")
+    return encoded
+
+
+def decrypt_review(ciphertext, certificate, private_key, output):
+    """Local explicit command only. Never writes unauthenticated plaintext."""
+    ciphertext = Path(ciphertext)
+    validate_ciphertext(ciphertext)
+    plaintext = openssl([
+        "cms", "-decrypt", "-binary", "-inform", "DER", "-in", str(ciphertext),
+        "-recip", certificate, "-inkey", private_key,
+    ])
+    if len(plaintext) > MAX_REVIEW:
+        raise ValueError("oversize review")
+    payload = json.loads(plaintext)
+    canonical = safe_report(json.loads(FIXTURE.read_text()))
+    apply_status(canonical, payload)
+    # Keep the plaintext out of stdout; the original renderer reads this private file.
+    private_write(Path(output), plaintext)
+
+
+def check_recipient(certificate, private_key):
+    """Coordinator-only local receipt check, with fixed non-sensitive bytes."""
+    with tempfile.TemporaryDirectory(prefix="openless-local-recipient-") as scratch:
+        directory = Path(scratch)
+        recipient, fingerprint = validate_recipient(Path(certificate).read_text(), directory)
+        plaintext = directory / "local-check.txt"
+        ciphertext = directory / "local-check.cms"
+        expected = b"OpenLess one-time recipient possession check"
+        private_write(plaintext, expected)
+        cms_encrypt(plaintext, ciphertext, recipient)
+        actual = openssl([
+            "cms", "-decrypt", "-binary", "-inform", "DER", "-in", str(ciphertext),
+            "-recip", str(recipient), "-inkey", private_key,
+        ])
+        if actual != expected:
+            raise ValueError("recipient possession check failed")
+        return fingerprint
+
+
 def run(binary, private_directory, evidence_directory):
     report = safe_report(json.loads(FIXTURE.read_text()))
     source_sha = os.environ.get("GITHUB_SHA", "")
@@ -117,7 +280,16 @@ def run(binary, private_directory, evidence_directory):
     config = private_directory / "channel.json"
     raw_output = private_directory / "results.json"
     result = 1
+    ciphertext = evidence_directory / "comparison.cms"
     try:
+        try:
+            recipient, fingerprint = validate_recipient(
+                os.environ.get("INTENT_RECIPIENT_CERTIFICATE", ""), private_directory
+            )
+            report["recipientSha256"] = fingerprint
+        except Exception:
+            report["executionStatus"] = "recipient_invalid_or_crypto_unavailable"
+            return 1
         key = os.environ.pop("DEEPSEEK_API_KEY", "")
         if not key or key != key.strip() or any(char.isspace() for char in key):
             report["executionStatus"] = "credentials_missing_or_invalid"
@@ -155,10 +327,11 @@ def run(binary, private_directory, evidence_directory):
             timeout=900,
             check=False,
         )
-        if not raw_output.is_file() or raw_output.stat().st_size > 2_000_000:
+        if not raw_output.is_file() or raw_output.stat().st_size > MAX_REPORT:
             report["executionStatus"] = "missing_or_invalid_report"
             return result
-        apply_status(report, json.loads(raw_output.read_text()))
+        raw = json.loads(raw_output.read_text())
+        apply_status(report, raw)
         all_completed = all(
             case[side]["status"] == "completed"
             for case in report["cases"]
@@ -166,6 +339,16 @@ def run(binary, private_directory, evidence_directory):
         )
         result = 0 if completed.returncode == 0 and all_completed else 1
         report["executionStatus"] = "completed" if result == 0 else "test_failed"
+        try:
+            plaintext = private_directory / "review.json"
+            private_write(plaintext, review_payload(report, raw, key))
+            encrypted = private_directory / "comparison.cms"
+            cms_encrypt(plaintext, encrypted, recipient)
+            encrypted.replace(ciphertext)
+            report["encryptedReview"] = "available"
+        except Exception:
+            report["executionStatus"] = "review_rejected_or_encryption_failed"
+            return 1
         return result
     except subprocess.TimeoutExpired:
         report["executionStatus"] = "timed_out"
@@ -175,8 +358,11 @@ def run(binary, private_directory, evidence_directory):
         report["executionStatus"] = "execution_or_report_failed"
         return 1
     finally:
-        config.unlink(missing_ok=True)
-        raw_output.unlink(missing_ok=True)
+        for name in (
+            "channel.json", "results.json", "review.json", "comparison.cms",
+            "recipient.pem", "probe.json", "probe.cms",
+        ):
+            (private_directory / name).unlink(missing_ok=True)
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 
 
@@ -184,6 +370,15 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "select-binary":
             select_binary(sys.argv[2])
+        elif len(sys.argv) == 2 and sys.argv[1] == "preflight":
+            with tempfile.TemporaryDirectory(prefix="openless-intent-recipient-") as scratch:
+                validate_recipient(
+                    os.environ.get("INTENT_RECIPIENT_CERTIFICATE", ""), Path(scratch)
+                )
+        elif len(sys.argv) == 6 and sys.argv[1] == "decrypt":
+            decrypt_review(*sys.argv[2:])
+        elif len(sys.argv) == 4 and sys.argv[1] == "check-recipient":
+            print("recipientSha256=" + check_recipient(*sys.argv[2:]))
         elif len(sys.argv) == 5 and sys.argv[1] == "run":
             sys.exit(run(*sys.argv[2:]))
         else:
