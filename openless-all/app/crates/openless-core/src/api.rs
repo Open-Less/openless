@@ -1832,6 +1832,9 @@ struct MutableState {
     /// by every stop entry; no Host latch survives into the next session.
     dictation_translation_requested: Option<bool>,
     dictation_style_selection: Option<DictationStyleSelection>,
+    /// Style intent not yet included in the snapshot handed to engine.start.
+    /// The current selection above also exists for an unchanged initial choice.
+    dictation_style_needs_update: bool,
     dictation_destination_changed: bool,
     credentials: CredentialsStatus,
     transcripts: HashMap<SessionId, crate::types::TranscriptAccumulator>,
@@ -3675,6 +3678,7 @@ impl OpenLessBackend {
                 dictation_start_output_target: None,
                 dictation_translation_requested: None,
                 dictation_style_selection: None,
+                dictation_style_needs_update: false,
                 dictation_destination_changed: false,
                 credentials: CredentialsStatus::default(),
                 transcripts: HashMap::new(),
@@ -5728,6 +5732,8 @@ impl OpenLessBackend {
                 state.running = false;
                 state.dictation = DictationStateSnapshot::default();
                 state.dictation_context = None;
+                state.dictation_style_selection = None;
+                state.dictation_style_needs_update = false;
                 state.dictation_start_output_target = None;
                 state.silence_monitor = None;
                 state.transcripts.clear();
@@ -6563,6 +6569,7 @@ impl OpenLessBackend {
         }
         state.dictation.skip_auto_style = selection != DictationStyleSelection::Automatic;
         state.dictation_style_selection = Some(selection);
+        state.dictation_style_needs_update = true;
         let result = Self::style_target(&state).expect("checked active session");
         self.events.publish(Some(session_id),
             BackendEventKind::DictationStateChanged(state.dictation.clone()));
@@ -8773,6 +8780,7 @@ impl OpenLessBackend {
             } else {
                 DictationStyleSelection::Automatic
             });
+            state.dictation_style_needs_update = false;
             state.dictation_destination_changed = false;
             if options.output_target == DictationOutputTarget::ForegroundApp {
                 self.main_dictation_trace.begin(session_id);
@@ -8951,6 +8959,11 @@ impl OpenLessBackend {
             state.dictation.style_pack_id = Some(context.polish.style_pack_id.clone());
             state.dictation.style_pack_name = Some(context.polish.style_pack_name.clone());
             state.dictation_context = Some(Arc::clone(&context));
+            // This exact local snapshot will be passed to engine.start, even if
+            // insertion preparation or engine startup suspends. Consume only the
+            // changes it includes, under the same lock as style requests; later
+            // changes must survive through startup and be synchronized at stop.
+            state.dictation_style_needs_update = false;
             state.dictation_start_output_target = None;
             context
         };
@@ -9312,7 +9325,7 @@ impl OpenLessBackend {
                         };
                         let context_changed =
                             std::mem::take(&mut state.dictation_destination_changed)
-                                | state.dictation_style_selection.take().is_some()
+                                | std::mem::take(&mut state.dictation_style_needs_update)
                                 || state.dictation_translation_requested.take().is_some()
                                 || state.dictation_context.as_ref().is_some_and(|previous| {
                                     previous.polish.translation_active
@@ -9449,6 +9462,8 @@ impl OpenLessBackend {
                 },
             );
             state.dictation_context = None;
+            state.dictation_style_selection = None;
+            state.dictation_style_needs_update = false;
             state.dictation_start_output_target = None;
             state.silence_monitor = None;
             hotkey.submitted();
@@ -10135,6 +10150,8 @@ impl OpenLessBackend {
         }
         state.dictation = DictationStateSnapshot::default();
         state.dictation_context = None;
+        state.dictation_style_selection = None;
+        state.dictation_style_needs_update = false;
         state.dictation_start_output_target = None;
         state.silence_monitor = None;
         state.transcripts.remove(&session_id);
@@ -10471,6 +10488,8 @@ impl OpenLessBackend {
             );
             state.dictation = DictationStateSnapshot::default();
             state.dictation_context = None;
+            state.dictation_style_selection = None;
+            state.dictation_style_needs_update = false;
             state.dictation_start_output_target = None;
             state.silence_monitor = None;
             state.transcripts.remove(&active);

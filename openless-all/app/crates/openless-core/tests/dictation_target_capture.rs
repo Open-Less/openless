@@ -83,16 +83,25 @@ struct Focus {
 }
 
 #[derive(Default)]
-struct HostCaptureBarrier {
+struct StartupBarrier {
     armed: AtomicBool,
     entered: Notify,
     release: Notify,
 }
 
+impl StartupBarrier {
+    async fn wait_if_armed(&self) {
+        if self.armed.swap(false, Ordering::AcqRel) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
 struct FocusContextAdapter {
     focus: Arc<Mutex<Focus>>,
     target: &'static str,
-    barrier: Arc<HostCaptureBarrier>,
+    barrier: Arc<StartupBarrier>,
 }
 
 impl HostContextAdapter for FocusContextAdapter {
@@ -127,10 +136,7 @@ impl HostContextAdapter for FocusContextAdapter {
         let front_app = self.target.to_string();
         let barrier = self.barrier.clone();
         Box::pin(async move {
-            if barrier.armed.swap(false, Ordering::AcqRel) {
-                barrier.entered.notify_one();
-                barrier.release.notified().await;
-            }
+            barrier.wait_if_armed().await;
             Ok(HostContextCapture {
                 front_app: Some(front_app),
                 cursor_context: None,
@@ -142,11 +148,12 @@ impl HostContextAdapter for FocusContextAdapter {
 struct FocusInserter {
     focus: Arc<Mutex<Focus>>,
     target: Option<&'static str>,
-    barrier: Arc<HostCaptureBarrier>,
+    barrier: Arc<StartupBarrier>,
+    preparation: Arc<StartupBarrier>,
 }
 impl TextInserter for FocusInserter {
     fn defer_preparation_until_stop(&self) -> bool {
-        true
+        !self.preparation.armed.load(Ordering::Acquire)
     }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let mut focus = self.focus.lock().unwrap();
@@ -157,6 +164,7 @@ impl TextInserter for FocusInserter {
                 focus: self.focus.clone(),
                 target: Some(target),
                 barrier: self.barrier.clone(),
+                preparation: self.preparation.clone(),
             }),
             host_context: Arc::new(FocusContextAdapter {
                 focus: self.focus.clone(),
@@ -178,7 +186,11 @@ impl TextInserter for FocusInserter {
             focus: self.focus.clone(),
             target,
         });
-        Box::pin(async move { Ok(session) })
+        let preparation = self.preparation.clone();
+        Box::pin(async move {
+            preparation.wait_if_armed().await;
+            Ok(session)
+        })
     }
 }
 struct FocusSession {
@@ -212,7 +224,8 @@ struct Fixture {
     backend: Arc<OpenLessBackend>,
     credentials: Arc<DelayedCredentials>,
     focus: Arc<Mutex<Focus>>,
-    host_capture: Arc<HostCaptureBarrier>,
+    host_capture: Arc<StartupBarrier>,
+    preparation: Arc<StartupBarrier>,
     directory: std::path::PathBuf,
 }
 
@@ -240,7 +253,8 @@ impl Fixture {
         )
         .unwrap();
         let credentials = Arc::new(DelayedCredentials::default());
-        let host_capture = Arc::new(HostCaptureBarrier::default());
+        let host_capture = Arc::new(StartupBarrier::default());
+        let preparation = Arc::new(StartupBarrier::default());
         let focus = Arc::new(Mutex::new(Focus {
             current: "A",
             captured: Vec::new(),
@@ -258,6 +272,7 @@ impl Fixture {
             focus: focus.clone(),
             target: None,
             barrier: host_capture.clone(),
+            preparation: preparation.clone(),
         });
         let backend = Arc::new(
             OpenLessBackend::new(
@@ -275,6 +290,7 @@ impl Fixture {
             credentials,
             focus,
             host_capture,
+            preparation,
             directory,
         }
     }
@@ -325,6 +341,163 @@ async fn skip_auto_style_capture_explicit_translation_and_history_use_actual_sty
         let history = backend.list_history().unwrap();
         assert_eq!(history[0].style_pack_id.as_deref(), Some(expected));
         assert!(history[0].translation_active);
+    }
+}
+
+#[tokio::test]
+async fn skip_auto_style_unchanged_sessions_support_engines_without_context_updates() {
+    use openless_core::{DictationEngine, EngineFailure, EngineProgressSink, EngineResult};
+    use openless_core::testing::FixtureEngineAction;
+
+    struct StartOnlyEngine(FixtureDictationEngine);
+    impl DictationEngine for StartOnlyEngine {
+        fn start(
+            &self, id: SessionId, context: Arc<DictationContext>, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.0.start(id, context, progress)
+        }
+        fn finish(
+            &self, id: SessionId, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+            self.0.finish(id, progress)
+        }
+        fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.0.cancel(id)
+        }
+        // Intentionally inherit the production trait's Unsupported update_context.
+    }
+
+    let engine = FixtureDictationEngine::successful("spoken", "polished");
+    let fixture = Fixture::with_engine(|_| Arc::new(StartOnlyEngine(engine.clone()))).await;
+    fixture.credentials.waited.store(true, Ordering::Release);
+    for initial_skip in [false, true, false] {
+        let id = fixture.backend.start_dictation_with_options(DictationStartOptions {
+            skip_auto_style: initial_skip,
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(fixture.backend.snapshot().dictation.skip_auto_style, initial_skip);
+        let result = fixture.backend.stop_dictation_session(id).await.unwrap();
+        assert_eq!(result.session_id, id);
+        assert_eq!(result.polished_text, "polished");
+        assert_eq!(engine.actions().iter().rev().take(2).cloned().collect::<Vec<_>>(),
+            [FixtureEngineAction::Finish(id), FixtureEngineAction::Start(id)]);
+        let history = fixture.backend.list_history().unwrap();
+        assert!(history.iter().any(|row| row.id == id.to_string() && row.error_code.is_none()));
+    }
+    assert_eq!(engine.contexts().len(), 3, "unchanged sessions must never request context updates");
+    fixture.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn skip_auto_style_sync_consumes_only_changes_in_the_engine_start_snapshot() {
+    use openless_core::{DictationEngine, DictationPhase, EngineFailure, EngineProgressSink, EngineResult};
+    use openless_core::testing::FixtureEngineAction;
+    use std::time::Duration;
+
+    struct GatedStartEngine {
+        inner: FixtureDictationEngine,
+        barrier: Arc<StartupBarrier>,
+    }
+    impl DictationEngine for GatedStartEngine {
+        fn start(
+            &self, id: SessionId, context: Arc<DictationContext>, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            let starting = self.inner.start(id, context, progress);
+            let barrier = self.barrier.clone();
+            Box::pin(async move {
+                barrier.wait_if_armed().await;
+                starting.await
+            })
+        }
+        fn finish(
+            &self, id: SessionId, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+            self.inner.finish(id, progress)
+        }
+        fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.inner.cancel(id)
+        }
+        fn update_context(
+            &self, id: SessionId, context: Arc<DictationContext>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.inner.update_context(id, context)
+        }
+    }
+
+    for initial_skip in [false, true] {
+        for stage in ["host", "credentials", "insertion", "engine", "recording"] {
+            let engine = FixtureDictationEngine::successful("spoken", "polished");
+            let engine_start = Arc::new(StartupBarrier::default());
+            engine_start.armed.store(stage == "engine", Ordering::Release);
+            let fixture = Fixture::with_engine(|_| Arc::new(GatedStartEngine {
+                inner: engine.clone(), barrier: engine_start.clone(),
+            })).await;
+            fixture.credentials.waited.store(stage != "credentials", Ordering::Release);
+            fixture.host_capture.armed.store(stage == "host", Ordering::Release);
+            fixture.preparation.armed.store(stage == "insertion", Ordering::Release);
+            fixture.backend.activate_style_pack("builtin.light").unwrap();
+            let starting = tokio::spawn({
+                let backend = fixture.backend.clone();
+                async move {
+                    backend.start_dictation_with_options(DictationStartOptions {
+                        skip_auto_style: initial_skip,
+                        style_pack_id: Some("builtin.formal".into()),
+                        ..Default::default()
+                    }).await
+                }
+            });
+            let barrier = match stage {
+                "host" => Some((&fixture.host_capture.entered, &fixture.host_capture.release)),
+                "credentials" => Some((fixture.credentials.entered.as_ref(), fixture.credentials.release.as_ref())),
+                "insertion" => Some((&fixture.preparation.entered, &fixture.preparation.release)),
+                "engine" => Some((&engine_start.entered, &engine_start.release)),
+                _ => None,
+            };
+            let mut starting = Some(starting);
+            if let Some((entered, _)) = barrier {
+                tokio::time::timeout(Duration::from_secs(2), entered.notified()).await.unwrap();
+                assert_eq!(fixture.backend.snapshot().dictation.phase, DictationPhase::Starting);
+                assert!(!starting.as_ref().unwrap().is_finished());
+            } else {
+                starting.take().unwrap().await.unwrap().unwrap();
+                assert_eq!(fixture.backend.snapshot().dictation.phase, DictationPhase::Recording);
+            }
+            let id = fixture.backend.snapshot().dictation.session_id.unwrap();
+            let early = matches!(stage, "host" | "credentials");
+            if early || stage == "insertion" {
+                assert!(engine.contexts().is_empty(), "engine must not have its snapshot at {stage}");
+            } else {
+                assert_eq!(engine.contexts().len(), 1);
+            }
+            fixture.backend.toggle_dictation_style_for_session(id).unwrap();
+            if let Some((_, release)) = barrier {
+                release.notify_one();
+                assert_eq!(tokio::time::timeout(Duration::from_secs(2), starting.take().unwrap())
+                    .await.unwrap().unwrap().unwrap(), id);
+            }
+            let expected = if initial_skip { "builtin.formal" } else { "builtin.light" };
+            let initial = if initial_skip { "builtin.light" } else { "builtin.formal" };
+            assert_eq!(engine.contexts()[0].polish.style_pack_id,
+                if early { expected } else { initial });
+            fixture.backend.stop_dictation_session(id).await.unwrap();
+            let mut expected_actions = vec![FixtureEngineAction::Start(id)];
+            if !early {
+                expected_actions.push(FixtureEngineAction::UpdateContext(id));
+            }
+            expected_actions.push(FixtureEngineAction::Finish(id));
+            assert_eq!(engine.actions(), expected_actions, "stage={stage}, initial_skip={initial_skip}");
+            assert_eq!(engine.contexts().last().unwrap().polish.style_pack_id, expected);
+            assert_eq!(fixture.backend.list_history().unwrap()[0].style_pack_id.as_deref(), Some(expected));
+
+            // A consumed update must not dirty a successor, and a stale request
+            // cannot alter its current choice or engine snapshot.
+            let next = fixture.backend.start_dictation().await.unwrap();
+            assert!(fixture.backend.toggle_dictation_style_for_session(id).is_err());
+            fixture.backend.stop_dictation_session(next).await.unwrap();
+            assert_eq!(engine.actions().iter().rev().take(2).cloned().collect::<Vec<_>>(),
+                [FixtureEngineAction::Finish(next), FixtureEngineAction::Start(next)]);
+            fixture.backend.shutdown().await.unwrap();
+        }
     }
 }
 
