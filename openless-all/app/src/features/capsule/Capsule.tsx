@@ -9,6 +9,7 @@ import { useReducedMotion } from '../../lib/motion';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
+import { CapsulePickerMenu } from './capsulePickerMenu';
 import { useMainCaptionTrace } from './useMainCaptionTrace';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
 import { getSettings } from '../../api/preferences';
@@ -185,6 +186,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
 // white-and-blue recording/processing surface inside that stable host.
 
 interface ClassicCapsuleProps {
+  pickerController: CapsulePickerMenu;
   sessionId?: string;
   os: OS;
   state: CapsuleState;
@@ -207,6 +209,7 @@ interface ClassicCapsuleProps {
  * interaction only appears while recording).
  */
 function ClassicCapsule({
+  pickerController,
   sessionId,
   os,
   state,
@@ -262,6 +265,7 @@ function ClassicCapsule({
         }}
       >
         <CapsuleTranslationBadge
+          pickerController={pickerController}
           visible={translating && !leaving}
           processing={state !== 'recording'}
         />
@@ -378,6 +382,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const os = forcedOs ?? getRuntimeOS();
   const isTauri = isTauriHost();
   const [publishInputRegions] = useState(createCapsuleRegionPublisher);
+  const [pickerController] = useState(() => new CapsulePickerMenu());
   const preview = useMemo(() => getPreviewCapsulePayload(), []);
   const reducedMotion = useReducedMotion();
   const metrics = getCapsulePillMetrics(os);
@@ -983,6 +988,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       {!renderedSelectionPolish &&
         (isClassic ? (
           <ClassicCapsule
+            pickerController={pickerController}
             sessionId={displayedSession}
             os={os}
             state={renderedState}
