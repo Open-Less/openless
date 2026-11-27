@@ -50,6 +50,12 @@ pub struct CapsulePopupState {
     /// Display name of the translation target, already localized by the host.
     #[serde(default)]
     pub translation_target: Option<String>,
+    #[serde(default)]
+    pub skip_auto_style: bool,
+    #[serde(default)]
+    pub style_pack_id: Option<String>,
+    #[serde(default)]
+    pub style_pack_name: Option<String>,
 }
 
 /// Copy shared with the WebView capsule (`src/i18n/*.ts`, `capsule.*`).

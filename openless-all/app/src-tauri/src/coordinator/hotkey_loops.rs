@@ -13,6 +13,83 @@ use crate::issue1266_debug::{
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(super) fn skip_auto_style_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) { return; }
+        let registration = crate::issue1266_debug::lock_host(
+            &inner.settings_host_gate, DebugKind::TranslationHotkey);
+        if inner.backend.ensure_runtime_ready().is_ok() {
+            match try_update_skip_auto_style_hotkey_binding(&inner) {
+                Ok(()) => return,
+                Err(error) => log::warn!("[hotkey] style registration failed: {error}"),
+            }
+        }
+        drop(registration);
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(super) fn try_update_skip_auto_style_hotkey_binding(inner: &Arc<Inner>) -> Result<(), String> {
+    let binding = hotkey_runtime_target(inner).skip_auto_style;
+    if let Some(monitor) = inner.hotkey.lock().as_ref() {
+        configure_shift_translation(inner, monitor);
+    }
+    let (send, receive) = mpsc::sync_channel(1);
+    let main = Arc::clone(inner);
+    inner.host.run_on_main_thread(move || {
+        let update = || -> Result<(), String> {
+            if binding.is_unassigned()
+                || crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
+                main.skip_auto_style_hotkey.lock().take();
+                return Ok(());
+            }
+            {
+                let slot = main.skip_auto_style_hotkey.lock();
+                if let Some(monitor) = slot.as_ref() {
+                    return monitor.update_binding(binding).map_err(|error| error.to_string());
+                }
+            }
+            let (tx, rx) = mpsc::channel();
+            let monitor = ComboHotkeyMonitor::start(binding, tx).map_err(|error| error.to_string())?;
+            let bridge = Arc::clone(&main);
+            std::thread::Builder::new().name("openless-style-hotkey-bridge".into())
+                .spawn(move || skip_auto_style_hotkey_bridge_loop(bridge, rx))
+                .map_err(|error| error.to_string())?;
+            *main.skip_auto_style_hotkey.lock() = Some(monitor);
+            Ok(())
+        };
+        let _ = send.send(update());
+    })?;
+    receive.recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "style hotkey registration timed out".to_string())?
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn skip_auto_style_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+    // The press records ownership; a release after a new capture cannot toggle it.
+    let mut owner = None;
+    while let Ok(event) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) { owner = None; continue; }
+        match event {
+            ComboHotkeyEvent::Pressed { .. } => {
+                let snapshot = inner.backend.snapshot();
+                owner = matches!(snapshot.dictation.phase,
+                    openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording)
+                    .then_some((snapshot.dictation.session_id, snapshot.preferences_revision));
+            },
+            ComboHotkeyEvent::Released { .. } => {
+                if let Some((Some(id), revision)) = owner.take() {
+                    if inner.backend.snapshot().preferences_revision == revision {
+                        let _ = inner.backend.toggle_dictation_style_for_session(id);
+                    }
+                }
+            },
+        }
+    }
+}
+
 /// Dedicated consumer thread for Esc cancellation. Not merged into
 /// `hotkey_bridge_loop` because the bridge serializes Pressed/Released with
 /// block_on (the #468/#475 latch fix): after a Hold release, `end_session`
@@ -576,7 +653,7 @@ pub(super) fn less_computer_modifier_bridge_loop(
             // functions).
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
             #[cfg(not(mobile))]
-            HotkeyEvent::TranslationShiftTapped(_) => {}
+            HotkeyEvent::TranslationShiftTapped(_) | HotkeyEvent::SkipAutoStyleTapped(_) => {}
             #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed
             | HotkeyEvent::SelectionPolishShortcutReleased => {}
@@ -1904,6 +1981,19 @@ pub(super) fn handle_style_pack_hotkey_pressed(inner: &Arc<Inner>, pack_id: &str
 #[cfg(not(mobile))]
 pub(super) fn configure_shift_translation(inner: &Arc<Inner>, monitor: &HotkeyMonitor) {
     let weak = Arc::downgrade(inner);
+    let style_weak = Arc::downgrade(inner);
+    monitor.set_skip_auto_style_source(Arc::new(move || {
+        let inner = style_weak.upgrade()?;
+        let target = hotkey_runtime_target(&inner);
+        let trigger = crate::shortcut_binding::legacy_modifier_trigger(&target.skip_auto_style)?;
+        let snapshot = inner.backend.snapshot();
+        if !matches!(snapshot.dictation.phase, openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording) { return None; }
+        Some((crate::hotkey::ShiftTranslationContext {
+            session_id: snapshot.dictation.session_id?,
+            preferences_revision: snapshot.preferences_revision,
+            tap_count: 1, held_recording_key: None,
+        }, trigger))
+    }));
     monitor.set_shift_translation_source(Arc::new(move || {
         let inner = weak.upgrade()?;
         let target = hotkey_runtime_target(&inner);
@@ -2123,6 +2213,12 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // esc_cancel_bridge_loop / combo_abort_bridge_loop so they are not
             // stuck in the queue behind the synchronous Released → end_session
             // / Pressed → begin_session flows above (see those functions).
+            #[cfg(not(mobile))]
+            HotkeyEvent::SkipAutoStyleTapped(context) => {
+                if inner.backend.snapshot().preferences_revision == context.preferences_revision {
+                    let _ = inner.backend.toggle_dictation_style_for_session(context.session_id);
+                }
+            }
             #[cfg(not(mobile))]
             HotkeyEvent::TranslationShiftTapped(context) => {
                 if inner.backend.snapshot().preferences_revision == context.preferences_revision
@@ -2404,6 +2500,7 @@ pub(crate) mod less_computer_test_support {
             side_aware_combo: Mutex::new(None),
             mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
+            skip_auto_style_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
             quick_note_hotkey: Mutex::new(None),
@@ -2729,6 +2826,9 @@ pub(crate) mod windows_less_computer_tests {
             inserted_chars: None,
             warming: true,
             translation: true,
+            skip_auto_style: false,
+            style_pack_id: None,
+            style_pack_name: None,
             operating: true,
             selection_polish: false,
             qa: false,
