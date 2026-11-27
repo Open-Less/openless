@@ -2005,6 +2005,7 @@ export const ja: typeof zhCN = {
       switchStyle: '前のスタイルに切り替え',
       skipAutoStyle: '自動スタイルをスキップ',
       skipAutoStylePicker: '押した後にスタイルを選択',
+      skipAutoStyleComboRequired: 'キーの組み合わせを使用してください。',
       openApp: 'OpenLess を開く',
       stylePackTitle: 'スタイル直行ショートカット',
       stylePackDesc:

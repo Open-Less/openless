@@ -1914,6 +1914,7 @@ export const zhCN = {
       switchStyle: '切换到上一个风格',
       skipAutoStyle: '跳过自动风格',
       skipAutoStylePicker: '按下时选择输出风格',
+      skipAutoStyleComboRequired: '请使用组合键。',
       openApp: '打开 OpenLess',
       stylePackTitle: '风格直达快捷键',
       stylePackDesc: '为常用风格包各配一个快捷键，按下直接切换；停用中的包会自动启用。',

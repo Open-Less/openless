@@ -1992,6 +1992,7 @@ export const ko: typeof zhCN = {
       switchStyle: '이전 스타일로 전환',
       skipAutoStyle: '자동 스타일 건너뛰기',
       skipAutoStylePicker: '누른 후 스타일 선택',
+      skipAutoStyleComboRequired: '키 조합을 사용해 주세요.',
       openApp: 'OpenLess 열기',
       stylePackTitle: '스타일 바로가기 단축키',
       stylePackDesc:

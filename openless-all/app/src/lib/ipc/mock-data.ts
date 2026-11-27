@@ -18,6 +18,7 @@ import type {
 import { OL_DATA } from '../mockData';
 import { publishPreviewChange } from '../../preview/events';
 import { readPreviewThemePreference } from '../../preview/preferences';
+import { getShortcutPlatform } from '../../runtime/environment';
 import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
@@ -95,12 +96,7 @@ export let mockSettings: UserPreferences = {
   qaSaveHistory: false,
   customComboHotkey: null,
   skipAutoStyleHotkey: {
-    primary:
-      typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
-        ? 'LeftCommand'
-        : typeof navigator !== 'undefined' && /Win/.test(navigator.platform)
-          ? ''
-          : 'LeftAlt',
+    primary: getShortcutPlatform().isMac ? 'LeftCommand' : '',
     modifiers: [],
   },
   skipAutoStylePickerEnabled: false,
