@@ -1,12 +1,13 @@
 import { TextField } from '../../ui/controls/TextField';
 import { Segmented } from '../../ui/controls/Segmented';
-import { useDeferredValue, useEffect, useState } from 'react';
+import { Fragment, useDeferredValue, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { Kbd } from '../../components/Kbd';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { PageSkeleton } from '../../components/ui/PageSkeleton';
+import { Toggle } from '../../ui/controls/SettingRow';
 import { getRuntimeOS } from '../../runtime/environment';
 import {
   defaultDictationHotkey,
@@ -22,18 +23,25 @@ import {
   setOpenAppHotkey,
   setQuickNoteHotkey,
   setSelectionPolishHotkey,
+  setSkipAutoStyleHotkey,
   setStylePackHotkeys,
   setSwitchStyleHotkey,
   setTranslationHotkey,
 } from '../../api/hotkeys';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
-import type { ShortcutBinding, StylePack, StylePackHotkey } from '../../api/contracts';
+import type {
+  PlatformCapabilities,
+  ShortcutBinding,
+  StylePack,
+  StylePackHotkey,
+} from '../../api/contracts';
 import { useHotkeySettings } from '../../data/preferences';
+import { supportsSkipAutoStyleHotkey } from './skipAutoStyleSettings';
 
-export function ShortcutsSection() {
+export function ShortcutsSection({ platform }: { platform: PlatformCapabilities }) {
   const { t } = useTranslation();
   const os = getRuntimeOS();
-  const { prefs, hotkey, refresh, updatePrefs } = useHotkeySettings();
+  const { prefs, hotkey, capability, refresh, updatePrefs } = useHotkeySettings();
   const [packs, setPacks] = useState<StylePack[]>([]);
   const [query, setQuery] = useState('');
   const search = useDeferredValue(query.trim().toLocaleLowerCase());
@@ -43,6 +51,7 @@ export function ShortcutsSection() {
   const [draftPackId, setDraftPackId] = useState('');
   const [error, setError] = useState('');
   const tr = (key: string) => t(`uiRefinement.${key}`);
+  const stylePickerLabel = t('settings.shortcuts.skipAutoStylePicker');
   useEffect(() => {
     let cancelled = false;
     void listStylePacks()
@@ -60,6 +69,7 @@ export function ShortcutsSection() {
     id: string;
     label: string;
     desc?: string;
+    searchLabel?: string;
     group: string;
     binding: ShortcutBinding | null;
     unavailable?: boolean;
@@ -101,6 +111,25 @@ export function ShortcutsSection() {
         await refresh();
       },
     },
+    ...(supportsSkipAutoStyleHotkey(platform, capability?.adapter)
+      ? [
+          {
+            id: 'skipAutoStyle',
+            label: t('settings.shortcuts.skipAutoStyle'),
+            searchLabel: stylePickerLabel,
+            group: 'recording',
+            binding: prefs.skipAutoStyleHotkey ?? null,
+            save: async (binding: ShortcutBinding) => {
+              await setSkipAutoStyleHotkey(binding);
+              await refresh();
+            },
+            disable: async () => {
+              await setSkipAutoStyleHotkey(null);
+              await refresh();
+            },
+          },
+        ]
+      : []),
     {
       id: 'note',
       label: t('settings.shortcuts.quickNote'),
@@ -180,7 +209,8 @@ export function ShortcutsSection() {
     (status === 'all' || (status === 'assigned') === Boolean(binding?.primary.trim()));
   const visible = commands.filter(
     (command) =>
-      (category === 'all' || category === command.group) && matches(command.label, command.binding),
+      (category === 'all' || category === command.group) &&
+      matches([command.label, command.searchLabel].filter(Boolean).join(' '), command.binding),
   );
   const packHotkeys = prefs.stylePackHotkeys ?? [];
   const savePacks = async (next: StylePackHotkey[]) => {
@@ -267,26 +297,42 @@ export function ShortcutsSection() {
         <div className="ol-shortcut-results">
           <p className="ol-section-note">{tr('shortcutHint')}</p>
           {visible.map((command) => (
-            <div
-              className="ol-shortcut-row"
-              role="group"
-              aria-label={command.label}
-              aria-disabled={command.unavailable}
-              key={command.id}
-            >
-              <div>
-                <span>{command.label}</span>
-                {command.desc && <small>{command.desc}</small>}
+            <Fragment key={command.id}>
+              <div
+                className="ol-shortcut-row"
+                role="group"
+                aria-label={command.label}
+                aria-disabled={command.unavailable}
+              >
+                <div>
+                  <span>{command.label}</span>
+                  {command.desc && <small>{command.desc}</small>}
+                </div>
+                <ShortcutRecorder
+                  value={command.binding}
+                  disabled={command.unavailable}
+                  onSave={command.save}
+                  onDisable={command.disable}
+                  onReset={command.reset}
+                  sideSpecificModifiers={command.id === 'dictation'}
+                />
               </div>
-              <ShortcutRecorder
-                value={command.binding}
-                disabled={command.unavailable}
-                onSave={command.save}
-                onDisable={command.disable}
-                onReset={command.reset}
-                sideSpecificModifiers={command.id === 'dictation'}
-              />
-            </div>
+              {command.id === 'skipAutoStyle' && (
+                <div className="ol-shortcut-row">
+                  <span>{stylePickerLabel}</span>
+                  <Toggle
+                    label={stylePickerLabel}
+                    on={prefs.skipAutoStylePickerEnabled ?? false}
+                    onToggle={(skipAutoStylePickerEnabled) => {
+                      // The shared preference store handles rollback and error feedback.
+                      void updatePrefs((current) => ({ ...current, skipAutoStylePickerEnabled })).catch(
+                        () => {},
+                      );
+                    }}
+                  />
+                </div>
+              )}
+            </Fragment>
           ))}
           {readonly.map((row) => (
             <div className="ol-shortcut-row" key={row.label}>

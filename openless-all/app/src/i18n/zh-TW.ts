@@ -330,6 +330,9 @@ export const zhTW: typeof zhCN = {
     inserted: '已插入 {{count}}',
     translateTo: '翻譯為',
     translationChangeFailed: '語言切換失敗，請重新選擇。',
+    styleChoose: '選擇輸出風格',
+    styleChangeFailed: '風格切換失敗，請重新選擇。',
+    styleStatus: '輸出風格',
     translating: '正在翻譯',
     selectionPolish: {
       polishing: '正在潤色…',
@@ -1911,6 +1914,8 @@ export const zhTW: typeof zhCN = {
       cancel: '取消本次錄音',
       confirm: '膠囊確認插入',
       switchStyle: '切換到上一個風格',
+      skipAutoStyle: '跳過自動風格',
+      skipAutoStylePicker: '按下時選擇輸出風格',
       openApp: '開啟 OpenLess',
       stylePackTitle: '風格直達快捷鍵',
       stylePackDesc: '為常用風格包各配一個快捷鍵，按下直接切換；停用中的包會自動啟用。',

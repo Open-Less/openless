@@ -341,6 +341,9 @@ export const ko: typeof zhCN = {
     inserted: '{{count}}자 입력됨',
     translateTo: '번역 언어',
     translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
+    styleChoose: '출력 스타일 선택',
+    styleChangeFailed: '스타일을 변경하지 못했습니다. 다시 선택해 주세요.',
+    styleStatus: '출력 스타일',
     translating: '번역 중',
     selectionPolish: {
       polishing: '다듬는 중…',
@@ -1987,6 +1990,8 @@ export const ko: typeof zhCN = {
       cancel: '이번 녹음 취소',
       confirm: '캡슐 입력 확정',
       switchStyle: '이전 스타일로 전환',
+      skipAutoStyle: '자동 스타일 건너뛰기',
+      skipAutoStylePicker: '누른 후 스타일 선택',
       openApp: 'OpenLess 열기',
       stylePackTitle: '스타일 바로가기 단축키',
       stylePackDesc:
