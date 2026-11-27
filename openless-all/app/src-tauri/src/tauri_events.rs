@@ -1520,6 +1520,9 @@ mod tests {
                     message: Some("fixture".to_string()),
                     translation_active: true,
                     recording_ready: phase != DictationPhase::Starting,
+                    skip_auto_style: false,
+                    style_pack_id: None,
+                    style_pack_name: None,
                 },
                 CapsuleStyle::Classic,
             );
