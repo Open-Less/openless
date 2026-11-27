@@ -70,6 +70,11 @@ pub(super) mod stream_send {
     }
 
     impl PacedSendClock {
+        #[cfg(test)]
+        pub(in crate::asr) fn diagnostic_deadline(&self) -> Option<tokio::time::Instant> {
+            self.next_send_at
+        }
+
         pub(in crate::asr) fn new() -> Self {
             Self { next_send_at: None }
         }
@@ -138,9 +143,20 @@ pub(super) mod stream_send {
                 let Some(ws) = guard.as_mut() else {
                     return Err(WsSendError::NotOpen);
                 };
-                ws.send(msg)
+                #[cfg(test)]
+                if let Some(result) = super::xfyun::evidence::controlled_write(&msg).await {
+                    return result;
+                }
+                #[cfg(test)]
+                super::xfyun::evidence::write_begin(&msg);
+                let result = ws.send(msg)
                     .await
-                    .map_err(|e| WsSendError::Transport(e.to_string()))
+                    .map_err(|e| WsSendError::Transport(e.to_string()));
+                #[cfg(test)]
+                if result.is_ok() {
+                    super::xfyun::evidence::write_complete();
+                }
+                result
             }) => {
                 match result {
                     Ok(inner) => inner,

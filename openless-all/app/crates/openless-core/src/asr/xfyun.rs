@@ -58,6 +58,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// enablement and a corresponding `lang` param.
 const DEFAULT_LANG: &str = "cn";
 
+#[cfg(test)]
+pub(super) mod evidence;
+
 enum SendItem {
     Audio(Vec<u8>),
     End(oneshot::Sender<Result<(), XfyunASRError>>),
@@ -136,6 +139,8 @@ pub struct XfyunStreamingASR {
     /// on error. `open_session` awaits it to fail fast on auth rejection.
     handshake_tx: ParkingMutex<Option<oneshot::Sender<Result<(), XfyunASRError>>>>,
     partial_sink: ParkingMutex<Option<Arc<dyn TextStreamSink>>>,
+    #[cfg(test)]
+    evidence: Arc<evidence::Probe>,
 }
 
 impl XfyunStreamingASR {
@@ -157,6 +162,8 @@ impl XfyunStreamingASR {
             final_rx: ParkingMutex::new(None),
             handshake_tx: ParkingMutex::new(None),
             partial_sink: ParkingMutex::new(None),
+            #[cfg(test)]
+            evidence: Arc::new(evidence::Probe::default()),
         }
     }
 
@@ -234,7 +241,9 @@ impl XfyunStreamingASR {
         let weak_self_for_worker = Arc::downgrade(self);
         let frame_send_timeout = self.frame_send_timeout;
         let task_spawner = Arc::clone(&self.task_spawner);
-        task_spawner.spawn(Box::pin(async move {
+        let worker = async move {
+            #[cfg(test)]
+            let _stopped = evidence::WorkerStopped;
             let mut clock = PacedSendClock::new();
             loop {
                 let item = tokio::select! {
@@ -252,7 +261,17 @@ impl XfyunStreamingASR {
 
                 match item {
                     SendItem::Audio(chunk) => {
-                        let Some(scheduled_start) = clock.wait_slot(&mut cancel_rx).await else {
+                        #[cfg(test)]
+                        evidence::frame(&chunk, false);
+                        #[cfg(not(test))]
+                        let Some(scheduled_start) = clock.wait_slot(&mut cancel_rx).await
+                        else {
+                            break;
+                        };
+                        #[cfg(test)]
+                        let Some(scheduled_start) =
+                            evidence::wait_slot(&clock, &mut cancel_rx).await
+                        else {
                             break;
                         };
                         let chunk_len = chunk.len();
@@ -264,6 +283,8 @@ impl XfyunStreamingASR {
                         )
                         .await
                         {
+                            #[cfg(test)]
+                            evidence::event("Failed");
                             let err = XfyunASRError::ConnectionFailed(
                                 ws_err.into_message("websocket not open"),
                             );
@@ -281,6 +302,8 @@ impl XfyunStreamingASR {
                         clock.mark_sent(scheduled_start, chunk_len, BYTES_PER_MS, 1);
                     }
                     SendItem::End(ack_tx) => {
+                        #[cfg(test)]
+                        evidence::frame(br#"{"end": true}"#, true);
                         let result = send_ws_message_with_timeout(
                             &writer_for_worker,
                             Message::Binary(br#"{"end": true}"#.to_vec().into()),
@@ -300,6 +323,8 @@ impl XfyunStreamingASR {
                                 }
                             }
                             Err(err) => {
+                                #[cfg(test)]
+                                evidence::event("Failed");
                                 log::error!("[xfyun-asr] end frame send failed: {err}");
                                 if let Some(this) = weak_self_for_worker.upgrade() {
                                     this.record_send_failure(err.clone());
@@ -311,7 +336,10 @@ impl XfyunStreamingASR {
                     }
                 }
             }
-        }));
+        };
+        #[cfg(test)]
+        let worker = evidence::ACTIVE.scope(Arc::clone(&self.evidence), worker);
+        task_spawner.spawn(Box::pin(worker));
 
         // Receive loop: handles started / result / error, plus server disconnect.
         let weak_self = Arc::downgrade(self);
@@ -438,6 +466,8 @@ impl XfyunStreamingASR {
     }
 
     pub fn cancel(&self) {
+        #[cfg(test)]
+        self.evidence.record("Cancel", None);
         {
             let mut st = self.state.lock();
             st.pending_audio.clear();
@@ -1051,7 +1081,9 @@ mod tests {
         assert!(asr.handshake_tx.lock().is_none());
     }
 
-    async fn spawn_loopback_ws<F, Fut>(handler: F) -> (String, tokio::task::JoinHandle<()>)
+    pub(super) async fn spawn_loopback_ws<F, Fut>(
+        handler: F,
+    ) -> (String, tokio::task::JoinHandle<()>)
     where
         F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut
             + Send
@@ -1072,7 +1104,7 @@ mod tests {
         (format!("ws://{addr}"), handle)
     }
 
-    fn loopback_asr(endpoint: String) -> Arc<XfyunStreamingASR> {
+    pub(super) fn loopback_asr(endpoint: String) -> Arc<XfyunStreamingASR> {
         Arc::new(
             XfyunStreamingASR::new(XfyunCredentials {
                 app_id: "test-app".into(),
@@ -1082,7 +1114,7 @@ mod tests {
         )
     }
 
-    fn xfyun_result_json(text: &str, is_final: bool) -> String {
+    pub(super) fn xfyun_result_json(text: &str, is_final: bool) -> String {
         let data = serde_json::json!({
             "seg_id": 0,
             "cn": {
@@ -1140,6 +1172,15 @@ mod tests {
         server_handle.await.expect("server join");
 
         let recorded = frames.lock();
+        let receiver_trace: Vec<_> = recorded
+            .iter()
+            .enumerate()
+            .map(|(i, (at, bytes))| (i + 1, at, bytes.len(), evidence::payload_tag(bytes)))
+            .collect();
+        eprintln!(
+            "xfyun sender: {:#?}\nreceiver: {receiver_trace:#?}",
+            asr.evidence.snapshot()
+        );
         assert_eq!(recorded.len(), 7, "5 chunks + 1 leftover + 1 end marker");
         for i in 0..5 {
             assert_eq!(recorded[i].1.len(), TARGET_AUDIO_CHUNK_BYTES);
