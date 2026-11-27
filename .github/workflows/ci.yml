@@ -24,6 +24,11 @@ on:
         type: choice
         options: ['off', style, style-diagnostic, search, intent-style-comparison]
         default: 'off'
+      intent_recipient_certificate:
+        description: Public PEM recipient certificate for encrypted intent evidence (never a private key)
+        type: string
+        required: false
+        default: ''
       platform:
         description: Platforms to check (macos runs only macOS gates)
         type: choice
@@ -1302,6 +1307,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Validate intent evidence recipient before any paid request
+        if: inputs.live_acceptance == 'intent-style-comparison'
+        env:
+          INTENT_RECIPIENT_CERTIFICATE: ${{ inputs.intent_recipient_certificate }}
+        run: python3 scripts/intent-style-comparison-ci.py preflight
       - uses: dtolnay/rust-toolchain@stable
       - name: Build acceptance without credentials
         id: live-build
@@ -1332,6 +1342,7 @@ jobs:
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           INTENT_TEST_BINARY: ${{ steps.live-build.outputs.binary }}
+          INTENT_RECIPIENT_CERTIFICATE: ${{ inputs.intent_recipient_certificate }}
         run: |
           set -euo pipefail
           umask 077
@@ -1347,12 +1358,14 @@ jobs:
           name: official-provider-live-acceptance
           path: openless-all/app/live-acceptance.log
           if-no-files-found: ignore
-      - name: Preserve only safe intent execution status
+      - name: Preserve encrypted intent review and safe execution status
         if: always() && inputs.live_acceptance == 'intent-style-comparison'
         uses: actions/upload-artifact@v4
         with:
-          name: intent-style-comparison-status
-          path: ${{ runner.temp }}/openless-intent-evidence/status.json
+          name: intent-style-comparison-evidence
+          path: |
+            ${{ runner.temp }}/openless-intent-evidence/status.json
+            ${{ runner.temp }}/openless-intent-evidence/comparison.cms
           if-no-files-found: ignore
           retention-days: 7
       - name: Clean dedicated live acceptance artifacts

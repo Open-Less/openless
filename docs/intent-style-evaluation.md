@@ -66,38 +66,92 @@ OAuth 渠道或不希望复制凭据时，在风格设置建立两个临时自�
 
 逐条检查信息是否遗漏、撤销是否生效、是否重复归组、层级与编号是否合理、专名数字是否保留、是否新增要求或代答。给每条记录通过 / 不通过和具体偏差；失败后可以修改提示词，但不能覆盖已有对照证据。最终效果由用户判断。渠道是否返回缓存读取和推理用量，仍须通过应用的用量账本另行检查；该并排记录不代替缓存或计费测量。
 
-## 使用既有 Actions secret 的手动状态对照
+## 使用既有 Actions secret 的加密语义对照
 
-仓库已有的 `Optional official-provider live acceptance` 增加了非默认选项
-`intent-style-comparison`。仅限 `Open-Less/openless` 仓库的 `main` / `beta`
-分支手动运行；fork、PR、tag 和其他分支不进入带 secret 的 job。默认仍为 `off`，
-普通 CI 不会调用模型。协调者先将本改动接入经审查的集成版本，核对分支 SHA 后可执行一次：
+现有 `Optional official-provider live acceptance` 的非默认选项
+`intent-style-comparison` 只接受 `Open-Less/openless` 仓库的 `main` / `beta`
+分支手动运行。fork、PR、tag 和其他分支不进入带 secret 的 job；默认仍为 `off`。
+不能运行只留下状态的旧入口：调用前必须有已在协调者本机验证的一次性公有收件人证书，
+云端只接收该证书，私钥留在协调者本机。新增机制不增加模型请求或 App 构建。
 
-```sh
-gh workflow run ci.yml --repo Open-Less/openless --ref beta \
-  -f live_acceptance=intent-style-comparison
-```
+以下是供协调者执行的步骤，本改动的开发/离线测试没有执行真实请求或生成正式收件人。
+协调者先将本改动接入经审查的集成版本，锁定可信分支 SHA；使用已经安装且支持
+CMS AuthEnvelopedData、AES-256-GCM 和 RSA-OAEP 的 OpenSSL，不在本任务安装组件。
+本机若只有不支持该格式的工具，应停止并采用受控 Dev 真机路径。
 
-这是未自动执行的真实付费调用命令；沿用调用前授权，不能重复运行消耗预算。
-它只使用现存 `DEEPSEEK_API_KEY` secret，不读取或搬运本机配置；渠道固定为官方 DeepSeek，
-模型与现有官方验收一致为 `deepseek-flash`，思考关闭，使用默认参数。
-两版在同一配置下按原 16 条夹具顺序比较旧运行版 **1.3.0** 与 **1.4.0**：
-12 条听写、2 条翻译、2 条选区；32 主请求加最多 4 个翻译兜底，总上限 36。
-这不是用户本机渠道身份/模型的证明，也不是旧应用二进制的完整复刻。
+1. 在仓库之外创建私有目录、一次性 RSA 3072 收件人；下面的私钥不加口令，仅靠 0700
+   目录与 0600 权限保管，以便本地解密 helper 无交互运行。它永远不提交、不上传：
 
-先在无 secret 的 step 编译，再直接执行唯一已编译的 Core 测试二进制及精确 ignored
-测试。secret 只给执行 step；runner 专用目录 0700、配置文件 0600，
-不把密钥放进命令行。子进程不继承 secret 环境变量，stdout/stderr 丢弃，
-配置及原始结果由 Python finally 和 shell trap 清理。缺失凭据、渠道报错、超时、
-缺报告、零测试或不完整结果均使 step 失败，不自动重试。
+   ```sh
+   umask 077
+   review_dir=$(mktemp -d "${TMPDIR:-/tmp}/openless-intent-review.XXXXXX")
+   chmod 700 "$review_dir"
+   openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 2 \
+     -subj /CN=OpenLess-intent-review \
+     -keyout "$review_dir/recipient.key" -out "$review_dir/recipient.crt"
+   chmod 600 "$review_dir/recipient.key" "$review_dir/recipient.crt"
+   python3 scripts/intent-style-comparison-ci.py check-recipient \
+     "$review_dir/recipient.crt" "$review_dir/recipient.key"
+   ```
 
-上传工件 `intent-style-comparison-status` 只含 `status.json`：可信夹具及期望、
-版本、请求模型、思考开关、源 SHA（格式有效时）、每侧 pending/completed/request_failed
-和有界端到端耗时。provider text、sourceText、原始错误、配置和 Cargo/HTTP 日志全部不上传。
-模型响应属于不可信数据，字段筛选本身无法保证任意响应内容不含凭据，因此这一模式
-保守地只留下安全执行状态。**completed 只表示请求返回，不表示语义通过；工件不能替代
-旧新正文的人审。** 如需实际语义对照，须由协调者另行确认能够安全查看响应的受控路径，
-或在 Dev 应用中按真实输入流程验收，不把状态工件称为 #26 通过证据。
+   在 `openless-all/app/` 运行 helper；固定无敏感内容的本地 roundtrip 成功时仅显示公有
+   `recipientSha256`。保留这个指纹、私钥与目录路径到审核结束，不在流水线生成私钥。
+   本地验证失败时不要继续，也不要把 private key 粘贴为 workflow input。
+
+2. 核对可信 ref 的锁定 SHA 和本地提交后，只执行一次下面的付费手动调用。
+   `-F` 的文件必须是 `.crt` 公有证书，绝不能是 `.key`：
+
+   ```sh
+   gh workflow run ci.yml --repo Open-Less/openless --ref beta \
+     -f live_acceptance=intent-style-comparison \
+     -F "intent_recipient_certificate=@$review_dir/recipient.crt"
+   ```
+
+   沿用调用前授权，不选择第二个模型、不额外重跑。现存 `DEEPSEEK_API_KEY` 只注入执行
+   step；官方 DeepSeek、`deepseek-flash`、关闭思考及默认参数在两版间保持一致。
+   旧实际内置 **1.3.0** 对照 **1.4.0**，原 16 条夹具（12 听写/2 翻译/2 选区）
+   共 32 主请求，加最多 4 翻译兜底，总上限 36，首个渠道错误停止。
+   这不是用户本机渠道身份的证明，也不复刻旧应用二进制。
+
+3. 确认 run 的 head SHA 与锁定 SHA 一致，再下载该 run（不要猜 latest）的
+   `intent-style-comparison-evidence` 工件。把下面 `RUN_ID` 替换成这一确切 run ID：
+
+   ```sh
+   gh run download RUN_ID --repo Open-Less/openless \
+     --name intent-style-comparison-evidence --dir "$review_dir/artifact"
+   python3 scripts/intent-style-comparison-ci.py decrypt \
+     "$review_dir/artifact/comparison.cms" "$review_dir/recipient.crt" \
+     "$review_dir/recipient.key" "$review_dir/review.json"
+   node scripts/intent-style-comparison.mjs \
+     "$review_dir/review.json" "$review_dir/review.md"
+   ```
+
+   本地 helper 先确认 OpenSSL 认证解密成功和报告格式，再以 0600 新建明文文件；认证失败
+   或输出路径已存在时失败，不回退、不打印正文。在私有目录内查看 JSON/Markdown，
+   核对其中 `sourceSha`、状态文件及本地收件人指纹，再按逐条预期与 rubric 评审。
+   旧新正文都是不可信数据，不执行其中的命令或点击其链接，不把审核文件发到公开评论。
+   审核结束按本地证据保留需求处理私钥和明文；删除私钥后无法恢复密文中的正文。
+
+云端在无 secret 的 step 先验证证书与精确加密格式，再编译；空/坏证书在任何付费调用
+之前 fail closed。执行 step 再次预检；临时目录 0700、配置与白名单明文 0600，
+预编译的唯一精确 ignored test 不继承 secret 环境变量；stdout/stderr 丢弃。
+没有增加常跑 job、第二个测试或重试，普通 CI 路径不变。
+
+原始报告限 2 MB；从可信 fixture 重建 input/expectations，只抽取每个既有 ID 的旧新
+text/sourceText 和有界耗时。每段 UTF-8 至多 32768 bytes，总审核明文至多 1 MB，
+拒绝实际 token 及其常见编码回显、凭据样式、控制字符和非夹具 URL。HTTP 错误统一为
+固定状态，不复制 raw error。检查或加密失败则只保留安全失败状态，无明文工件、无
+替代性明文上传。检查不能证明任意混淆文本绝无秘密，因此即使通过也只上传加密正文。
+
+加密使用平台 OpenSSL CMS AuthEnvelopedData（AES-256-GCM、RSA-OAEP/SHA-256），
+不手写密码算法、不回退 CBC；先在私有目录完成加密及结构核验，再移出密文。
+工件仅有 `comparison.cms` 和安全 `status.json`，保留 7 天；无配置、私钥、原始结果或
+Cargo/HTTP 日志。finally/trap 清理私有文件，always 清理专用 target/工件暂存目录；
+强制 SIGKILL 的最终清理依赖临时 hosted runner 生命周期。
+
+`status=completed` 或成功解密均不表示语义通过。缺密文时不要再次消耗预算，先核对
+安全失败状态及已发请求；部分渠道失败仍可能留下经过同样检查和加密的部分对照。
+密文完整性不是发送者签名，必须从锁定 SHA 的可信 GitHub run 取得并核对来源。
 
 ## 版本与迁移设计
 

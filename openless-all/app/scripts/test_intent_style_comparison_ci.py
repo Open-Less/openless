@@ -17,9 +17,25 @@ SPEC = importlib.util.spec_from_file_location("intent_comparison_ci", SCRIPT)
 ci = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ci)
 SENTINEL = "synthetic-ci-fixture-secret"
+REAL_RUN = subprocess.run
 
 
 class IntentComparisonCiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.recipient_scratch = tempfile.TemporaryDirectory(prefix="openless-dummy-recipient-")
+        cls.addClassCleanup(cls.recipient_scratch.cleanup)
+        cls.cert = Path(cls.recipient_scratch.name) / "dummy.crt"
+        cls.key = Path(cls.recipient_scratch.name) / "dummy.key"
+        result = REAL_RUN([
+            "openssl", "req", "-x509", "-newkey", "rsa:3072", "-sha256", "-nodes",
+            "-keyout", str(cls.key), "-out", str(cls.cert), "-days", "2",
+            "-subj", "/CN=OpenLess-offline-dummy",
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError("existing OpenSSL required for offline dummy roundtrip")
+        cls.certificate = cls.cert.read_text()
+
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="openless-intent-ci-test-")
         self.addCleanup(self.scratch.cleanup)
@@ -36,15 +52,19 @@ class IntentComparisonCiTests(unittest.TestCase):
                 {
                     "id": case["id"],
                     "input": SENTINEL,
-                    "old": {"text": SENTINEL, "elapsedMs": 12},
-                    "new": {"text": "https://private.invalid/" + SENTINEL, "elapsedMs": 15},
+                    "old": {"text": "合成旧版正文。", "elapsedMs": 12},
+                    "new": {"text": "合成新版正文。", "sourceText": "合成源文。", "elapsedMs": 15},
                 }
                 for case in self.evaluation["cases"]
             ],
         }
 
-    def execute(self, raw=None, returncode=0, exception=None, key=SENTINEL):
+    def execute(self, raw=None, returncode=0, exception=None, key=SENTINEL, certificate=None):
+        model_calls = []
         def fake_process(argv, **kwargs):
+            if argv[0] != "/unused/test-binary":
+                return REAL_RUN(argv, **kwargs)
+            model_calls.append(argv)
             self.assertEqual(argv, [
                 "/unused/test-binary", ci.TARGET, "--ignored", "--exact", "--test-threads=1"
             ])
@@ -52,6 +72,7 @@ class IntentComparisonCiTests(unittest.TestCase):
             self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
             self.assertNotIn("DEEPSEEK_API_KEY", kwargs["env"])
             self.assertNotIn("GITHUB_TOKEN", kwargs["env"])
+            self.assertNotIn("INTENT_RECIPIENT_CERTIFICATE", kwargs["env"])
             config = self.private / "channel.json"
             self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
             settings = json.loads(config.read_text())
@@ -66,15 +87,28 @@ class IntentComparisonCiTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, returncode)
 
         with patch.dict(os.environ, {
-            "DEEPSEEK_API_KEY": key, "GITHUB_TOKEN": SENTINEL, "GITHUB_SHA": "a" * 40
+            "DEEPSEEK_API_KEY": key, "GITHUB_TOKEN": SENTINEL, "GITHUB_SHA": "a" * 40,
+            "INTENT_RECIPIENT_CERTIFICATE": (
+                self.certificate if certificate is None else certificate
+            ),
         }):
-            with patch.object(ci.subprocess, "run", side_effect=fake_process) as process:
+            with patch.object(ci.subprocess, "run", side_effect=fake_process):
                 code = ci.run("/unused/test-binary", self.private, self.evidence)
         published = (self.evidence / "status.json").read_text()
         self.assertNotIn(SENTINEL, published)
         self.assertNotIn("private.invalid", published)
+        self.assertNotIn("合成旧版正文", published)
+        self.assertNotIn("合成新版正文", published)
         self.assertEqual(list(self.private.iterdir()), [])
-        return code, json.loads(published), process.call_count
+        if code == 0:
+            self.assertTrue((self.evidence / "comparison.cms").is_file())
+        else:
+            self.assertFalse((self.evidence / "review.json").exists())
+        self.assertEqual(
+            {path.name for path in self.evidence.iterdir()} - {"status.json", "comparison.cms"},
+            set(),
+        )
+        return code, json.loads(published), len(model_calls)
 
     def test_success_uploads_only_canonical_fixtures_and_status(self):
         code, report, calls = self.execute(self.raw())
@@ -85,6 +119,109 @@ class IntentComparisonCiTests(unittest.TestCase):
         self.assertNotIn("credentials", report)
         self.assertNotIn("text", report["cases"][0]["new"])
         self.assertEqual(report["sourceSha"], "a" * 40)
+        self.assertEqual(report["encryptedReview"], "available")
+        output = Path(self.scratch.name) / "reviewed.json"
+        ci.decrypt_review(
+            self.evidence / "comparison.cms", str(self.cert), str(self.key), str(output)
+        )
+        review = json.loads(output.read_text())
+        self.assertEqual(review["cases"][0]["old"]["text"], "合成旧版正文。")
+        self.assertEqual(review["cases"][0]["new"]["sourceText"], "合成源文。")
+        self.assertNotIn(SENTINEL, output.read_text())
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+    def test_missing_recipient_fails_before_any_model_process(self):
+        code, report, calls = self.execute(certificate="")
+        self.assertEqual((code, calls), (1, 0))
+        self.assertEqual(report["executionStatus"], "recipient_invalid_or_crypto_unavailable")
+        self.assertFalse((self.evidence / "comparison.cms").exists())
+
+    def test_private_key_or_bad_certificate_is_rejected_before_model(self):
+        code, report, calls = self.execute(certificate=self.key.read_text())
+        self.assertEqual((code, calls), (1, 0))
+        self.assertEqual(report["executionStatus"], "recipient_invalid_or_crypto_unavailable")
+
+    def test_malformed_public_certificate_is_rejected_before_model(self):
+        code, _, calls = self.execute(
+            certificate="-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+        )
+        self.assertEqual((code, calls), (1, 0))
+
+    def test_sensitive_echo_is_rejected_and_no_plaintext_is_published(self):
+        raw = self.raw()
+        raw["cases"][0]["new"]["text"] = SENTINEL
+        code, report, calls = self.execute(raw)
+        self.assertEqual((code, calls), (1, 1))
+        self.assertEqual(report["executionStatus"], "review_rejected_or_encryption_failed")
+        self.assertFalse((self.evidence / "comparison.cms").exists())
+
+    def test_encoded_echo_and_abnormal_output_are_rejected(self):
+        for index, text in enumerate((
+            ci.base64.b64encode(SENTINEL.encode()).decode(),
+            "Authorization: Bearer hidden", "https://private.invalid/path",
+            "\x00", "x" * (ci.MAX_TEXT + 1),
+        )):
+            self.evidence = Path(self.scratch.name) / f"rejected-{index}"
+            raw = self.raw()
+            raw["cases"][0]["new"]["sourceText"] = text
+            code, report, _ = self.execute(raw)
+            self.assertEqual(code, 1)
+            self.assertEqual(report["executionStatus"], "review_rejected_or_encryption_failed")
+            self.assertFalse((self.evidence / "comparison.cms").exists())
+
+    def test_tampered_ciphertext_never_writes_decrypted_output(self):
+        self.execute(self.raw())
+        ciphertext = self.evidence / "comparison.cms"
+        data = bytearray(ciphertext.read_bytes())
+        data[-1] ^= 1
+        ciphertext.write_bytes(data)
+        output = Path(self.scratch.name) / "must-not-exist.json"
+        with self.assertRaises(ValueError):
+            ci.decrypt_review(ciphertext, str(self.cert), str(self.key), str(output))
+        self.assertFalse(output.exists())
+
+    def test_cms_uses_fresh_randomness(self):
+        plain = self.private / "dummy.json"
+        plain.write_bytes(b'{"dummy":true}')
+        first = self.private / "first.cms"
+        second = self.private / "second.cms"
+        ci.cms_encrypt(plain, first, self.cert)
+        ci.cms_encrypt(plain, second, self.cert)
+        self.assertNotEqual(first.read_bytes(), second.read_bytes())
+
+    def test_local_decrypt_rejects_unauthenticated_cms_before_private_key_use(self):
+        plain = self.private / "dummy.txt"
+        plain.write_bytes(b"non-sensitive fixture")
+        cipher = self.private / "cbc.cms"
+        ci.openssl([
+            "cms", "-encrypt", "-binary", "-aes-256-cbc", "-in", str(plain),
+            "-outform", "DER", "-out", str(cipher), str(self.cert)
+        ])
+        output = self.private / "must-not-exist.json"
+        with patch.object(ci, "openssl", wraps=ci.openssl) as operations:
+            with self.assertRaises(ValueError):
+                ci.decrypt_review(cipher, str(self.cert), str(self.key), str(output))
+        self.assertFalse(any("-decrypt" in call.args[0] for call in operations.call_args_list))
+        self.assertFalse(output.exists())
+
+    def test_encrypt_failure_cleans_plaintext_and_publishes_no_ciphertext(self):
+        real_encrypt = ci.cms_encrypt
+        calls = []
+        def fail_second(plain, cipher, certificate):
+            calls.append(plain)
+            if len(calls) == 1:
+                return real_encrypt(plain, cipher, certificate)
+            cipher.write_bytes(b"partial cipher")
+            raise ValueError(SENTINEL)
+        with patch.object(ci, "cms_encrypt", side_effect=fail_second):
+            code, report, _ = self.execute(self.raw())
+        self.assertEqual(code, 1)
+        self.assertEqual(report["executionStatus"], "review_rejected_or_encryption_failed")
+        self.assertFalse((self.evidence / "comparison.cms").exists())
+
+    def test_coordinator_can_check_dummy_recipient_without_paid_requests(self):
+        fingerprint = ci.check_recipient(str(self.cert), str(self.key))
+        self.assertRegex(fingerprint, "^[0-9a-f]{64}$")
 
     def test_provider_failure_drops_error_and_retains_pending(self):
         raw = self.raw()
@@ -149,6 +286,9 @@ class IntentComparisonCiTests(unittest.TestCase):
         self.assertIn("trap 'rm -rf", live)
         self.assertIn("inputs.live_acceptance != 'intent-style-comparison'", live)
         self.assertIn("openless-intent-evidence/status.json", live)
+        self.assertIn("openless-intent-evidence/comparison.cms", live)
+        self.assertNotIn("openless-intent-evidence/*.json", live)
+        self.assertLess(live.index("preflight"), live.index("Build acceptance without credentials"))
         self.assertIn("CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target", live)
         self.assertIn('rm -rf "$RUNNER_TEMP/openless-live-target"', live)
         suite = SCRIPT.parent.parent / "crates/openless-core/src/deepseek_suite.rs"
