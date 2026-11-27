@@ -1,14 +1,14 @@
 // Generates the Android English keyboard's base word-frequency dictionary
-// asset (android/assets/english-frequency.tsv) from a local copy of
+// asset (openless-all/android/assets/english-frequency.tsv) from a local copy of
 // hermitdave/FrequencyWords' English OpenSubtitles-2018 frequency list
-// (MIT licensed — see android/assets/english-frequency.LICENSE.txt).
+// (MIT licensed — see openless-all/android/assets/english-frequency.LICENSE.txt).
 //
 // Re-fetch the source with:
 //   curl -L -o /tmp/en_50k.txt \
 //     https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt
 //
 // Then regenerate the asset with:
-//   node ../android/scripts/generate-english-dictionary.mjs /tmp/en_50k.txt android/assets/english-frequency.tsv
+//   node ../android/scripts/generate-english-dictionary.mjs /tmp/en_50k.txt ../android/assets/english-frequency.tsv
 //
 // This is a build/dev-time tool only — the generated TSV is committed and
 // read as a plain local asset at runtime; nothing on-device ever fetches

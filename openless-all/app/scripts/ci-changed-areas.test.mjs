@@ -118,6 +118,14 @@ try {
   });
   reset();
 
+  commit({ 'openless-all/linux/egui/package-revision': '81\n' }, 'shared package revision');
+  expect('shared package revision', {
+    ...every('false'),
+    linux: 'true',
+    harmony: 'true',
+  });
+  reset();
+
   // ArkTS lives only in the HarmonyOS host.
   commit({ 'openless-all/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' }, 'arkts');
   expect('arkts source', {

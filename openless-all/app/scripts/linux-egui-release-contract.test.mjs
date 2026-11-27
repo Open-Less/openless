@@ -41,7 +41,7 @@ assert.match(buildScript, /OPENLESS_APP_VERSION=\{expected\}/);
 assert.match(host, /env!\("OPENLESS_APP_VERSION"\)/);
 assert.match(verify, /DEB_VERSION=\$\(dpkg-deb --field/);
 assert.match(verify, /OpenLess \$DEB_VERSION/);
-assert.match(pack, /linux-egui\/package-revision/);
+assert.match(pack, /linux\/egui\/package-revision/);
 assert.match(pack, /if \[ "\$VERSION" != "\$EXPECTED_VERSION" \]/);
 assert.match(pack, /dpkg-deb --build/);
 assert.match(pack, /rpmbuild --define/);
