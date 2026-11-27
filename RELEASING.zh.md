@@ -59,11 +59,11 @@
 ### Linux（自动化暂停）
 
 - Linux 专用 CI 与自动发布挂载当前处于暂停状态；源码与本地打包脚本持续维护。
-- 手动打包或分发 `.deb` / `.rpm` 前，须递增 `openless-all/app/linux-egui/package-revision`（如 `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`），并对该确切候选版本完成真机安装与听写验收。Linux 不提供 AppImage 或应用内更新器。
+- 手动打包或分发 `.deb` / `.rpm` 前，须递增 `openless-all/linux/egui/package-revision`（如 `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`），并对该确切候选版本完成真机安装与听写验收。Linux 不提供 AppImage 或应用内更新器。
 
 ## 5. HarmonyOS 打包、签名与 AppGallery Connect
 
-HarmonyOS 通过 `.github/workflows/release-harmony.yml` 构建，`scripts/prepare-harmony-sdk.sh` 自动从公开镜像拉取并校验 SHA-256 后的命令行工具并由 `actions/cache` 缓存（可通过 `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` 或配置了 `HARMONY_TOOLCHAIN` 的自托管 runner 覆盖）；切勿将 SDK 归档提交进仓库。
+HarmonyOS 通过 `.github/workflows/release-harmony.yml` 构建，`../harmony/scripts/prepare-harmony-sdk.sh` 自动从公开镜像拉取并校验 SHA-256 后的命令行工具并由 `actions/cache` 缓存（可通过 `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` 或配置了 `HARMONY_TOOLCHAIN` 的自托管 runner 覆盖）；切勿将 SDK 归档提交进仓库。
 
 ### 渠道与产物矩阵
 
@@ -74,9 +74,9 @@ HarmonyOS 通过 `.github/workflows/release-harmony.yml` 构建，`scripts/prepa
 | `test` | `OpenLess_harmony_arm64-signed.hap` | `test.{cer,p7b,p12}` | 仅上传至 AppGallery 测试渠道 |
 
 - `release-tauri.yml` 默认以 `HARMONY_AUTO_CHANNEL || 'none'` 调用；将仓库变量 `HARMONY_AUTO_CHANNEL` 设为 `release` 或 `test` 可自动上传签名候选包到 AGC，但**绝不自动提交审核**，上架仍需人工确认。
-- `ci.yml` 始终以未签名模式构建（`OPENLESS_HARMONY_CHANNEL=none`）。本地可用 `scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned` 校验未签名包。
-- `openless-all/app/harmony/AppScope/app.json5` 中的 `versionName`/`versionCode` 为开发占位值；打包脚本构建时自动从 `package.json` 与 `linux-egui/package-revision` 注入，完成后还原。
-- 签名步骤经 `$GITHUB_ENV` 导出 `OPENLESS_HARMONY_SIGNING_DIR` 并在编译前通过 `scripts/check-harmony-signing.sh` 预检（不可在 job 级 `env:` 中声明同名占位变量）。
+- `ci.yml` 始终以未签名模式构建（`OPENLESS_HARMONY_CHANNEL=none`）。本地可用 `../harmony/scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned` 校验未签名包。
+- `openless-all/harmony/AppScope/app.json5` 中的 `versionName`/`versionCode` 为开发占位值；打包脚本构建时自动从 `package.json` 与 `../linux/egui/package-revision` 注入，完成后还原。
+- 签名步骤经 `$GITHUB_ENV` 导出 `OPENLESS_HARMONY_SIGNING_DIR` 并在编译前通过 `../harmony/scripts/check-harmony-signing.sh` 预检（不可在 job 级 `env:` 中声明同名占位变量）。
 
 ### HarmonyOS 所需仓库 Secrets 与变量
 

@@ -24,7 +24,7 @@
 | 开发者全平台构建指南（macOS / Windows / Linux / Android / HarmonyOS / iOS） | [中文全平台构建指南](../openless-all/README.zh.md) · [English Build Guide](../openless-all/README.md) |
 | 命令与事件兼容基线 | [命令与事件兼容基线 JSON](linux-egui-command-event-baseline.json) |
 | iOS 原生应用、键盘扩展、构建与签名指南 | [iOS 中文构建指南](../openless-all/ios/README.zh.md) · [iOS English Guide](../openless-all/ios/README.md) |
-| Android 构建与输入法说明 | [Android 中文说明](../openless-all/app/android/README.zh.md) · [Android English Guide](../openless-all/app/android/README.md) |
+| Android 构建与输入法说明 | [Android 中文说明](../openless-all/android/README.zh.md) · [Android English Guide](../openless-all/android/README.md) |
 | 移动端共享输入法核心（Android / HarmonyOS） | [Mobile IME 中文说明](../openless-all/app/mobile-ime/README.zh.md) · [Mobile IME English](../openless-all/app/mobile-ime/README.md) |
 
 ## 发布、署名与许可

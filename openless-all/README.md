@@ -14,12 +14,14 @@ This directory contains the cross-platform OpenLess source tree. Start with the 
 | `app/src` | Shared React + TypeScript frontend for Tauri desktop/Android and HarmonyOS ArkWeb. |
 | `app/src-tauri` | macOS, Windows, and Android Tauri host, native adapters, and vendored crates (`src-tauri/vendor/`). |
 | `app/ask-window` | Standalone Ask Anything desktop window assets and bridge. |
-| `app/linux-egui` | Native Linux host and `egui`/`eframe` UI (no Tauri or WebKitGTK dependency). |
-| `app/android` | Android host packaging, manifest merges, and native glue. |
-| `app/harmony` | HarmonyOS ArkTS + ArkWeb host and `harmony/rust` Node-API bridge. |
+| `linux/egui` | Native Linux host and `egui`/`eframe` UI (no Tauri or WebKitGTK dependency). |
+| `android` | Android host packaging, manifest merges, and native glue. |
+| `harmony` | HarmonyOS ArkTS + ArkWeb host and `harmony/rust` Node-API bridge. |
 | `app/mobile-ime` | Shared native input-method core for Android and HarmonyOS. |
-| `app/windows-ime` | Windows TSF/IME integration scripts and helpers. |
-| `app/scripts/linux-fcitx5-plugin` | Fcitx5 addon used by the Linux host for text insertion. |
+| `windows/ime` | Windows TSF/IME integration scripts and helpers. |
+| `windows/nsis`, `windows/wix`, `windows/scripts` | Windows installer assets and build/acceptance tools. |
+| `macos/dmg`, `macos/scripts`, `macos/*.plist` | macOS installer layout, build/acceptance tools, and application permissions. |
+| `linux/fcitx5-plugin` | Fcitx5 addon used by the Linux host for text insertion. |
 | `ios/` | Native Swift iPhone app, Chinese/English keyboard extension, recording widget, and `CoreHost` Rust bridge. |
 
 > **No Git submodules required:** Patched crates under `app/src-tauri/vendor/` (`cpal`, `tauri-runtime-wry`) are vendored directly in the repository, so a fresh clone is ready to build.
@@ -53,15 +55,15 @@ cargo test --locked -p openless-core
 
 The root Rust workspace (`openless-all/app/Cargo.toml`) covers `openless-core`, `micyou-dsp`, `micyou-infer`, `openless-capsule`, `native-capsule`, `linux-egui`, and `harmony/rust`, excluding `src-tauri` so core and Linux checks run independently without Tauri or WebKitGTK.
 
-`linux-egui` talks to `openless-core` in-process via the typed Rust `contract` module and communicates with its UI subprocess over Unix sockets (JSONL v2). Text insertion uses Fcitx5 (`scripts/linux-fcitx5-plugin`).
+`linux-egui` talks to `openless-core` in-process via the typed Rust `contract` module and communicates with its UI subprocess over Unix sockets (JSONL v2). Text insertion uses Fcitx5 (`linux/fcitx5-plugin`).
 
 Run tests and local packaging on Linux:
 
 ```bash
 cd openless-all/app
 cargo test --locked -p openless-linux-egui
-bash scripts/package-linux-egui.sh
-bash scripts/verify-linux-egui-packages.sh
+OPENLESS_LINUX_VERSION="$(node -p "require('./package.json').version.split('+')[0]")-$(cat ../linux/egui/package-revision)" bash ../linux/scripts/package-linux-egui.sh
+bash ../linux/scripts/verify-linux-egui-packages.sh
 ```
 
 > Linux CI and automated release workflows remain paused while device/packaging acceptance is pending. Local scripts still produce verified `.deb` / `.rpm` packages and the Fcitx5 addon (AppImage is retired). See [`RELEASING.md`](../RELEASING.md) before distributing Linux packages.
@@ -72,7 +74,7 @@ Use the repository build script rather than invoking `tauri build` directly:
 
 ```bash
 cd openless-all/app
-INSTALL=0 ./scripts/build-mac.sh
+INSTALL=0 ./../macos/scripts/build-mac.sh
 ```
 
 Generated macOS outputs:
@@ -80,7 +82,7 @@ Generated macOS outputs:
 - `openless-all/app/src-tauri/target/release/bundle/macos/OpenLess.app`
 - `openless-all/app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel)
 
-To build and install locally during development, run `./scripts/build-mac.sh` without `INSTALL=0`. Local macOS builds fall back to ad-hoc signing when Apple signing credentials are absent.
+To build and install locally during development, run `./../macos/scripts/build-mac.sh` without `INSTALL=0`. Local macOS builds fall back to ad-hoc signing when Apple signing credentials are absent.
 
 ## Windows Build
 
@@ -88,7 +90,7 @@ Run the preflight script first so missing MSVC, Windows SDK, or MinGW components
 
 ```powershell
 cd openless-all/app
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-preflight.ps1
 ```
 
 ### MSVC Route (Recommended)
@@ -97,7 +99,7 @@ Install Visual Studio Build Tools with `Microsoft.VisualStudio.Workload.VCTools`
 
 ```powershell
 cd openless-all/app
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-package-msvc.ps1
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-package-msvc.ps1
 ```
 
 ### GNU / MinGW Route
@@ -109,15 +111,15 @@ cd openless-all/app
 scoop install rustup mingw
 rustup toolchain install stable-x86_64-pc-windows-gnu
 rustup target add x86_64-pc-windows-gnu
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1 -Toolchain gnu
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-build-gnu.ps1
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-preflight.ps1 -Toolchain gnu
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-build-gnu.ps1
 ```
 
 Generated GNU artifacts:
 
-- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\openless.exe`
-- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\msi\OpenLess_*_x64_en-US.msi`
-- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\nsis\OpenLess_*_x64-setup.exe`
+- `%TEMP%\openless-windows-gnu\app\src-tauri\target\x86_64-pc-windows-gnu\release\openless.exe`
+- `%TEMP%\openless-windows-gnu\app\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\msi\OpenLess_*_x64_en-US.msi`
+- `%TEMP%\openless-windows-gnu\app\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\nsis\OpenLess_*_x64-setup.exe`
 
 ### Hotkey Injection Gate & Runtime Notes
 
@@ -125,7 +127,7 @@ Before/after Windows hotkey changes without a physical keyboard regression, run 
 
 ```powershell
 cd openless-all/app
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-hotkey-injection-smoke.ps1 -ExePath .\.artifacts\windows-gnu\dev\openless.exe
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-hotkey-injection-smoke.ps1 -ExePath .\.artifacts\windows-gnu\dev\openless.exe
 ```
 
 - Windows does not require macOS Accessibility permission; inspect listener health under **Settings → Permissions → Global hotkey**.
@@ -134,18 +136,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows-hotkey-injection-smok
 
 ## Android Build
 
-See [`app/android/README.md`](app/android/README.md#build-and-ci) for Android SDK/NDK versions, generated Tauri Android scaffolding, APK builds across ABIs (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`), and device verification.
+See [`android/README.md`](android/README.md#build-and-ci) for Android SDK/NDK versions, generated Tauri Android scaffolding, APK builds across ABIs (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`), and device verification.
 
 ## HarmonyOS Build
 
-Requirements: HarmonyOS Command Line Tools (`scripts/prepare-harmony-sdk.sh` fetches the pinned archive with SHA-256 verification), Python 3, Node.js 22+, and `rustup target add aarch64-unknown-linux-ohos`.
+Requirements: HarmonyOS Command Line Tools (`../harmony/scripts/prepare-harmony-sdk.sh` fetches the pinned archive with SHA-256 verification), Python 3, Node.js 22+, and `rustup target add aarch64-unknown-linux-ohos`.
 
 ```bash
 cd openless-all/app
-bash scripts/build-harmony-frontend.sh
+bash ../harmony/scripts/build-harmony-frontend.sh
 ```
 
-Unsigned HAP output is placed under `app/harmony/openless-project/entry/build/default/outputs/default/`. See [`RELEASING.md`](../RELEASING.md) for release signing and AppGallery uploads.
+Unsigned HAP output is placed under `${OPENLESS_CACHE_ROOT:-/data-win/openless-cache}/harmony/openless-project/entry/build/default/outputs/default/`. The packaging script stages deliverables in `app/target/harmony-packages/`. See [`RELEASING.md`](../RELEASING.md) for release signing and AppGallery uploads.
 
 ## iOS Build
 
