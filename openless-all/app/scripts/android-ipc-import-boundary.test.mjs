@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 const panelUrl = new URL(
-  '../android/frontend/components/AndroidPermissionsPanel.tsx',
+  '../../android/frontend/components/AndroidPermissionsPanel.tsx',
   import.meta.url,
 );
 const source = await readFile(panelUrl, 'utf8');
@@ -14,8 +14,8 @@ function moduleFor(name) {
 }
 
 for (const [name, expected] of [
-  ['useHotkeySettings', '../../../src/data/preferences'],
-  ['useInteraction', '../../../src/ui/overlays/InteractionProvider'],
+  ['useHotkeySettings', '../../../app/src/data/preferences'],
+  ['useInteraction', '../../../app/src/ui/overlays/InteractionProvider'],
 ]) {
   const modules = moduleFor(name);
   if (modules.length !== 1 || modules[0] !== expected) {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = (name) =>
-  readFileSync(new URL(`../android/kotlin/${name}.kt`, import.meta.url), 'utf8');
+  readFileSync(new URL(`../../android/kotlin/${name}.kt`, import.meta.url), 'utf8');
 const accessibility = source('OpenLessAccessibilityService');
 const overlay = source('OpenLessOverlayService');
 

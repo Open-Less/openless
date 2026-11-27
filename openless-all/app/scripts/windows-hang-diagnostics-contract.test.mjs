@@ -191,7 +191,7 @@ assert.match(symbolTooling.run, /LASTEXITCODE -ne 0/);
 assert.match(symbolTooling.run, /bytes\.Length -eq 0/);
 assert.match(
   verify.run,
-  /python -I release-tooling\/openless-all\/app\/scripts\/windows-symbol-pair\.py/,
+  /python -I release-tooling\/openless-all\/windows\/scripts\/windows-symbol-pair\.py/,
 );
 assert.ok(steps.indexOf(symbolTooling) < steps.indexOf(verify));
 

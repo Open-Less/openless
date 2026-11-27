@@ -2,12 +2,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { mergeShizukuManifest } from './merge-android-shizuku-manifest.mjs';
+import { mergeShizukuManifest } from '../../android/scripts/merge-android-shizuku-manifest.mjs';
 
 const manifestScript = fileURLToPath(
-  new URL('./merge-android-shizuku-manifest.mjs', import.meta.url),
+  new URL('../../android/scripts/merge-android-shizuku-manifest.mjs', import.meta.url),
 );
-const depsScript = fileURLToPath(new URL('./patch-android-shizuku-deps.mjs', import.meta.url));
+const depsScript = fileURLToPath(
+  new URL('../../android/scripts/patch-android-shizuku-deps.mjs', import.meta.url),
+);
 const ANDROID_NAMESPACE_URI = 'http://schemas.android.com/apk/res/android';
 
 const manifestSource = readFileSync(manifestScript, 'utf8');

@@ -4,10 +4,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const servicePath = fileURLToPath(
-  new URL('../android/kotlin/OpenLessAccessibilityService.kt', import.meta.url),
+  new URL('../../android/kotlin/OpenLessAccessibilityService.kt', import.meta.url),
 );
 const receiverPath = fileURLToPath(
-  new URL('../android/kotlin/OpenLessAccessibilityCommandReceiver.kt', import.meta.url),
+  new URL('../../android/kotlin/OpenLessAccessibilityCommandReceiver.kt', import.meta.url),
 );
 const serviceSource = readFileSync(servicePath, 'utf8');
 const receiverSource = readFileSync(receiverPath, 'utf8');

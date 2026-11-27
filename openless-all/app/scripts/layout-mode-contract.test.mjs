@@ -14,7 +14,7 @@ const pageHeader = read('src/ui/layout/PageHeader.tsx');
 const rowCss = read('src/ui/controls/setting-row.css');
 const channelList = read('src/features/providers/ChannelList.tsx');
 const permissions = read('src/features/input/PermissionsSection.tsx');
-const androidPermissions = read('android/frontend/components/AndroidPermissionsPanel.tsx');
+const androidPermissions = read('../android/frontend/components/AndroidPermissionsPanel.tsx');
 const about = read('src/features/settings/sections/AboutSection.tsx');
 const updateButton = read('src/features/settings/sections/CheckUpdateButton.tsx');
 const updateButtonCss = read('src/features/settings/sections/check-update-button.css');
@@ -53,9 +53,15 @@ assert.match(about, /ol-inline-composite/);
 assert.match(about, /compact=\{compactLayout\}/);
 assert.match(updateButton, /data-compact=\{compact \|\| undefined\}/);
 assert.match(updateButtonCss, /\.ol-check-update-button\s*\{[^}]*\bmin-width:\s*160px/);
-assert.match(updateButtonCss, /\.ol-check-update-button\[data-compact\]\s*\{[^}]*\bmin-width:\s*32px/);
+assert.match(
+  updateButtonCss,
+  /\.ol-check-update-button\[data-compact\]\s*\{[^}]*\bmin-width:\s*32px/,
+);
 assert.match(updateButton, /aria-label=\{compact\s*\?\s*label\s*:\s*undefined\}/);
-assert.match(updateButtonCss, /\.ol-check-update-button\[data-compact\] \.ol-check-update-label\s*\{[^}]*\bdisplay:\s*none/);
+assert.match(
+  updateButtonCss,
+  /\.ol-check-update-button\[data-compact\] \.ol-check-update-label\s*\{[^}]*\bdisplay:\s*none/,
+);
 assert.match(mobileSheet, /chevRight/);
 assert.match(mobileSheet, /<Modal[^]*?overlayClassName="ol-mobile-navigation-sheet"/);
 assert.match(mobileSheetCss, /align-items: end/);

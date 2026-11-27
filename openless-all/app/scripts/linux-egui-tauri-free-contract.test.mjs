@@ -4,8 +4,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const appRoot = new URL('..', import.meta.url);
 const roots = [
-  new URL('../linux-egui', import.meta.url),
-  new URL('../scripts/package-linux-egui.sh', import.meta.url),
+  new URL('../../linux/egui', import.meta.url),
+  new URL('../../linux/scripts/package-linux-egui.sh', import.meta.url),
 ];
 const sourceExtensions = new Set(['.rs', '.toml', '.sh', '.yml', '.yaml']);
 

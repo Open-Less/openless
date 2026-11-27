@@ -433,7 +433,7 @@ jobs:
       # prebuilt download of its own.
       - name: Prepare sherpa-onnx Android libraries
         timeout-minutes: 10
-        run: echo "SHERPA_ONNX_LIB_DIR=$(node scripts/sherpa-onnx-android.mjs)" >> "$GITHUB_ENV"
+        run: echo "SHERPA_ONNX_LIB_DIR=$(node ../android/scripts/sherpa-onnx-android.mjs)" >> "$GITHUB_ENV"
 
       - name: Check Tauri backend (Android target)
         timeout-minutes: 25
@@ -455,7 +455,7 @@ jobs:
           cargo check --locked --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
 
       - name: Copy Android production and test scaffolding
-        run: node scripts/copy-android-scaffolding.mjs
+        run: node ../android/scripts/copy-android-scaffolding.mjs
 
       - name: Restore Android Rime instrumentation dependencies
         id: rime_cache
@@ -479,10 +479,10 @@ jobs:
           key: ${{ steps.rime_cache.outputs.cache-primary-key }}
 
       - name: Merge Shizuku manifest
-        run: node scripts/merge-android-shizuku-manifest.mjs
+        run: node ../android/scripts/merge-android-shizuku-manifest.mjs
 
       - name: Patch Shizuku Gradle dependencies
-        run: node scripts/patch-android-shizuku-deps.mjs
+        run: node ../android/scripts/patch-android-shizuku-deps.mjs
 
       - name: Run JVM credential tests and compile instrumentation tests
         timeout-minutes: 15
@@ -497,7 +497,7 @@ jobs:
           --no-daemon
 
       - name: Check Android emulator cleanup
-        run: bash scripts/android-emulator-cleanup.test.sh
+        run: bash ../android/scripts/android-emulator-cleanup.test.sh
 
       - name: Enable KVM for Android instrumentation tests
         run: |
@@ -704,7 +704,7 @@ jobs:
         # The report is committed so the ArkTS coverage is reviewable; a stale
         # report hides commands that the Harmony host does not implement yet.
         run: |
-          node scripts/audit-harmony-ipc.mjs
+          node ../harmony/scripts/audit-harmony-ipc.mjs
           git diff --exit-code harmony/ipc-audit.json
       - name: Harmony ArkTS contracts
         run: |
@@ -742,13 +742,13 @@ jobs:
           OPENLESS_HARMONY_CHANNEL: none
         run: |
           set -euo pipefail
-          bash scripts/prepare-harmony-sdk.sh
-          bash scripts/package-harmony-hap.sh
+          bash ../harmony/scripts/prepare-harmony-sdk.sh
+          bash ../harmony/scripts/package-harmony-hap.sh
           # AppGallery needs a numeric versionName, so the packaging script keeps
           # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
           version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
           version_code=$(cat linux-egui/package-revision)
-          bash scripts/verify-harmony-hap.sh \
+          bash ../harmony/scripts/verify-harmony-hap.sh \
             target/harmony-packages/OpenLess_harmony_arm64.hap \
             "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
             "$version_name" "$version_code" --allow-unsigned
@@ -879,7 +879,7 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 15
         shell: pwsh
-        run: ./scripts/prepare-windows-sherpa.ps1
+        run: ./../windows/scripts/prepare-windows-sherpa.ps1
 
       - name: Install frontend dependencies
         timeout-minutes: 10
@@ -888,13 +888,13 @@ jobs:
       - name: Check Windows prerequisites
         if: matrix.preflight
         shell: pwsh
-        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
+        run: ./../windows/scripts/windows-preflight.ps1 -Toolchain msvc
 
       - name: Check PowerShell scripts
         if: matrix.preflight
         shell: pwsh
         run: |
-          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1", "./scripts/prepare-windows-sherpa.ps1")) {
+          foreach ($script in @("./../windows/scripts/windows-preflight.ps1", "./../windows/scripts/windows-build-gnu.ps1", "./../windows/scripts/windows-runtime-smoke.ps1", "./../windows/scripts/prepare-windows-sherpa.ps1")) {
             $errors = $null
             [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
             if ($errors) {
@@ -992,24 +992,24 @@ jobs:
         timeout-minutes: 10
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
-        run: python scripts/test-windows-hang-diagnostics.py
+        run: python ../windows/scripts/test-windows-hang-diagnostics.py
 
       - name: Run owner-thread target ownership tests
         timeout-minutes: 10
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
-        run: python scripts/test-windows-runtime-target.py
+        run: python ../windows/scripts/test-windows-runtime-target.py
 
       - name: Run real Windows runtime ownership lifecycle
         if: runner.os == 'Windows'
         timeout-minutes: 15
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
-        run: python scripts/test-windows-runtime-target.py --runtime
+        run: python ../windows/scripts/test-windows-runtime-target.py --runtime
 
       - name: Run Windows symbol-pair format tests
         timeout-minutes: 10
-        run: python scripts/windows-symbol-pair.test.py
+        run: python ../windows/scripts/windows-symbol-pair.test.py
 
       - name: Run Rust-only backend unit tests (Windows)
         # The standalone test crate does not link the full Tauri app lib; it verifies the public
@@ -1046,7 +1046,7 @@ jobs:
       - name: Compile the TSF IME (x64, Release)
         if: runner.os == 'Windows'
         timeout-minutes: 20
-        working-directory: openless-all/app/windows-ime
+        working-directory: openless-all/windows/ime
         run: msbuild OpenLessIme.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal
 
       - name: Verify version sync across all 5 files
@@ -1181,7 +1181,7 @@ jobs:
       - name: Prepare Windows Sherpa static libraries
         timeout-minutes: 15
         shell: pwsh
-        run: ./scripts/prepare-windows-sherpa.ps1
+        run: ./../windows/scripts/prepare-windows-sherpa.ps1
       - run: npm ci
         timeout-minutes: 10
       - run: npm run build

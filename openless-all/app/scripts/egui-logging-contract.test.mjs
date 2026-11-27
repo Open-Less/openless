@@ -20,9 +20,9 @@ import { fileURLToPath } from 'node:url';
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => readFileSync(join(appRoot, relative), 'utf8');
 
-const logging = read('linux-egui/src/logging.rs');
-const main = read('linux-egui/src/main.rs');
-const window = read('linux-egui/src/linux_app/window.rs');
+const logging = read('../linux/egui/src/logging.rs');
+const main = read('../linux/egui/src/main.rs');
+const window = read('../linux/egui/src/linux_app/window.rs');
 const adapter = read('crates/openless-core/src/cloud_sync_e2ee/adapter.rs');
 
 // 1. Level filter from the environment, not a constant baked in at build time.
@@ -105,7 +105,7 @@ for (const [, body] of logCalls) {
 // 7. The level chosen in the UI has to outlive the process, and the export has to
 //    carry the rotated history - otherwise the file the user sends us is exactly
 //    the one that no longer contains the incident.
-const settingsSave = read('linux-egui/src/linux_app/settings_save.rs');
+const settingsSave = read('../linux/egui/src/linux_app/settings_save.rs');
 assert.match(
   logging,
   /pub fn write_log_level/,
@@ -127,7 +127,7 @@ assert.match(logging, /pub fn export_error_logs/, 'logging.rs must provide the m
 // 8. The gaps that used to make a report unusable: no capture line on success, no
 //    dictation start, no single-instance outcome.
 assert.match(
-  read('linux-egui/src/audio.rs'),
+  read('../linux/egui/src/audio.rs'),
   /"\[audio\] capture started backend=/,
   'capture start must name the backend, device and format that actually won',
 );

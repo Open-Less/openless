@@ -45,7 +45,7 @@ fn get_min_buffer_size(
 
 pub fn get_audio_track_min_buffer_size(sample_rate: i32, channel_mask: i32, format: i32) -> i32 {
     get_min_buffer_size(
-        "android/media/AudioTrack",
+        "../android/media/AudioTrack",
         sample_rate,
         channel_mask,
         format,
@@ -54,7 +54,7 @@ pub fn get_audio_track_min_buffer_size(sample_rate: i32, channel_mask: i32, form
 
 pub fn get_audio_record_min_buffer_size(sample_rate: i32, channel_mask: i32, format: i32) -> i32 {
     get_min_buffer_size(
-        "android/media/AudioRecord",
+        "../android/media/AudioRecord",
         sample_rate,
         channel_mask,
         format,

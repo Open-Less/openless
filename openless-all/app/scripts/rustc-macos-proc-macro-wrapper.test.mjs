@@ -11,7 +11,7 @@ if (process.platform === 'win32') {
 }
 
 const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const wrapper = join(appRoot, 'scripts', 'rustc-macos-proc-macro-wrapper.sh');
+const wrapper = join(appRoot, '../macos/scripts/rustc-macos-proc-macro-wrapper.sh');
 const root = mkdtempSync(join(tmpdir(), 'openless-rustc-wrapper-test-'));
 const fakeRustc = join(root, 'fake-rustc.sh');
 

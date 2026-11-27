@@ -3,7 +3,7 @@
 //
 // The two UIs ship as one product and support the same five locales, but they
 // keep separate catalogs: the Tauri app uses `src/i18n/*.ts`, the egui host uses
-// the Rust table in `linux-egui/src/i18n.rs`. This script removes the duplicated
+// the Rust table in `../linux/egui/src/i18n.rs`. This script removes the duplicated
 // translation work: for every key the egui catalog shares with the Tauri one it
 // copies the five translations over, so translators only maintain the Tauri
 // files.
@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
-const CATALOG_PATH = resolve(APP_ROOT, 'linux-egui/src/i18n.rs');
+const CATALOG_PATH = resolve(APP_ROOT, '../linux/egui/src/i18n.rs');
 
 // Rust row order: [zh-CN, zh-TW, en, ja, ko].
 const LOCALES = [
@@ -227,7 +227,7 @@ function referencedKeys() {
       else if (entry.name.endsWith('.rs')) files.push(path);
     }
   };
-  walk(resolve(APP_ROOT, 'linux-egui/src'));
+  walk(resolve(APP_ROOT, '../linux/egui/src'));
   const pattern = /\b(?:tr_l10n|fmt_l10n)\(\s*[^,()]+,\s*"([^"]+)"/g;
   for (const file of files) {
     const source = readFileSync(file, 'utf8');

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const source = readFileSync(
-  new URL('../android/kotlin/OpenLessImeService.kt', import.meta.url),
+  new URL('../../android/kotlin/OpenLessImeService.kt', import.meta.url),
   'utf8',
 );
 const keyboardKey = source.slice(

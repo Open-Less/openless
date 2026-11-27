@@ -19,11 +19,18 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@android/*": ["android/frontend/*"],
-      "@/*": ["third_party/rare-ui/*"]
-    }
+      "@android/*": ["../android/frontend/*"],
+      "@/*": ["third_party/rare-ui/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"],
+      "react-i18next": ["./node_modules/react-i18next"],
+      "i18next": ["./node_modules/i18next"]
+    },
+    "typeRoots": ["./node_modules/@types"]
   },
-  "include": ["src", "android/frontend", "ask-window"],
+  "include": ["src", "../android/frontend", "ask-window"],
   "references": [
     {
       "path": "./tsconfig.node.json"

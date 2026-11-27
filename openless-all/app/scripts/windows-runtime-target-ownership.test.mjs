@@ -8,7 +8,7 @@ const owner = read('../src-tauri/vendor/tauri-runtime-wry/src/owner_thread.rs');
 const manifest = read('../src-tauri/Cargo.toml');
 const lock = read('../src-tauri/Cargo.lock').replace(/\r\n/g, '\n');
 const host = read('../src-tauri/src/tauri_coordinator_host.rs');
-const harness = read('./test-windows-runtime-target.py');
+const harness = read('../../windows/scripts/test-windows-runtime-target.py');
 const ci = yaml.load(read('../../../.github/workflows/ci.yml'));
 
 // A registry-owned target fixture must fail this same shape oracle. This is a
@@ -70,11 +70,13 @@ assert.match(harness, /cargo\(root, 'build', '--locked'\)/);
 assert.match(harness, /package\['source'\] is None/);
 assert.match(harness, /'tracing' not in/);
 const steps = Object.values(ci.jobs).flatMap((job) => job.steps ?? []);
-assert.ok(steps.some((step) => step.run === 'python scripts/test-windows-runtime-target.py'));
+assert.ok(
+  steps.some((step) => step.run === 'python ../windows/scripts/test-windows-runtime-target.py'),
+);
 assert.ok(
   steps.some(
     (step) =>
-      step.run === 'python scripts/test-windows-runtime-target.py --runtime' &&
+      step.run === 'python ../windows/scripts/test-windows-runtime-target.py --runtime' &&
       step.if === "runner.os == 'Windows'",
   ),
 );

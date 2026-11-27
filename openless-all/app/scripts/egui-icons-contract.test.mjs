@@ -7,10 +7,10 @@ import ts from 'typescript';
 import { icons } from './sync-egui-lucide-icons.mjs';
 
 const app = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const linux = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/icons.rs'), 'utf8');
+const linux = readFileSync(resolve(app, '../linux/egui/src/ui/frontend/icons.rs'), 'utf8');
 const tauri = readFileSync(resolve(app, 'src/components/Icon.tsx'), 'utf8');
-const nav = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/layout.rs'), 'utf8');
-const settings = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/settings.rs'), 'utf8');
+const nav = readFileSync(resolve(app, '../linux/egui/src/ui/frontend/layout.rs'), 'utf8');
+const settings = readFileSync(resolve(app, '../linux/egui/src/ui/frontend/settings.rs'), 'utf8');
 const tauriSettings = readFileSync(
   resolve(app, 'src/features/settings/shell/navigation.ts'),
   'utf8',
