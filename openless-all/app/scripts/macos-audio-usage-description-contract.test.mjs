@@ -10,7 +10,7 @@ if (process.platform !== 'darwin') {
 }
 
 const scriptsDir = fileURLToPath(new URL('.', import.meta.url));
-const checker = join(scriptsDir, 'check-macos-audio-usage-description.sh');
+const checker = join(scriptsDir, '../../macos/scripts/check-macos-audio-usage-description.sh');
 const fixtureDir = mkdtempSync(join(tmpdir(), 'openless-audio-usage-'));
 
 function plist(value) {

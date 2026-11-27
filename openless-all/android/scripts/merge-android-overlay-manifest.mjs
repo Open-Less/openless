@@ -1,0 +1,271 @@
+#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+
+const targetPath = fileURLToPath(
+  new URL('../../app/src-tauri/gen/android/app/src/main/AndroidManifest.xml', import.meta.url),
+);
+
+const PERMISSIONS = [
+  'android.permission.SYSTEM_ALERT_WINDOW',
+  'android.permission.FOREGROUND_SERVICE',
+  'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+  'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+  'android.permission.POST_NOTIFICATIONS',
+  // The keyboard's status dot shows pure-local raw output while offline.
+  'android.permission.ACCESS_NETWORK_STATE',
+];
+
+const APPLICATION_SNIPPET = `
+        <application android:name=".OpenLessApplication">
+        </application>
+`;
+
+const SERVICE_SNIPPETS = [
+  `<service
+            android:name=".OpenLessOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />`,
+  `<service
+            android:name=".OpenLessRuntimeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the IME runtime and user-initiated ChatGPT authorization callback available while the user is in another app." />
+        </service>`,
+  `<service
+            android:name=".OpenLessImeService"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/openless_ime_method" />
+        </service>`,
+  `<service
+            android:name=".OpenLessAccessibilityService"
+            android:process=":accessibility"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/openless_accessibility_config" />
+        </service>`,
+  `<receiver
+            android:name=".OpenLessVocabularyReceiver"
+            android:exported="false" />`,
+  `<receiver
+            android:name=".OpenLessAccessibilityCommandReceiver"
+            android:process=":accessibility"
+            android:exported="false" />`,
+  `<activity
+            android:name=".OverlayPermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />`,
+  `<activity
+            android:name=".MicrophonePermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />`,
+  `<activity
+            android:name=".OpenLessBackendWarmupActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.openless" />`, // launcher intent-filter attached by moveLauncherIntentFilterToWarmupActivity()
+  // IME long-press Logo → native keyboard settings. Must be declared or
+  // startActivity(OpenLessKeyboardSettingsActivity) fails with ActivityNotFound.
+  `<activity
+            android:name=".OpenLessKeyboardSettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.openless" />`,
+  `<activity
+            android:name=".OpenLessLocalMigrationActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.openless" />`,
+];
+
+function printHelp() {
+  console.log(`Usage: node ../android/scripts/merge-android-overlay-manifest.mjs [options]
+
+Merge overlay / accessibility declarations into generated AndroidManifest.xml.
+
+Options:
+  --dry-run   Print planned changes without writing
+  --help      Show this help text
+`);
+}
+
+function parseArgs(argv) {
+  let dryRun = false;
+  for (const arg of argv) {
+    if (arg === '--help' || arg === '-h') {
+      printHelp();
+      process.exit(0);
+    }
+    if (arg === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+  return { dryRun };
+}
+
+function permissionExists(manifestXml, permissionName) {
+  const escaped = permissionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`<uses-permission[^>]*android:name="${escaped}"[^>]*\\/?>`).test(manifestXml);
+}
+
+function mergePermissions(manifestXml) {
+  let content = manifestXml;
+  let changed = false;
+  for (const name of PERMISSIONS) {
+    if (permissionExists(content, name)) {
+      continue;
+    }
+    const line = `    <uses-permission android:name="${name}" />`;
+    const applicationIdx = content.indexOf('<application');
+    if (applicationIdx === -1) {
+      throw new Error('Target manifest is missing <application>');
+    }
+    content = `${content.slice(0, applicationIdx)}${line}\n${content.slice(applicationIdx)}`;
+    changed = true;
+  }
+  return { content, changed };
+}
+
+function ensureApplicationName(manifestXml) {
+  if (/android:name="\.OpenLessApplication"/.test(manifestXml)) {
+    return { content: manifestXml, changed: false };
+  }
+  const updated = manifestXml.replace(
+    /<application(\s|>)/,
+    '<application android:name=".OpenLessApplication"$1',
+  );
+  return { content: updated, changed: updated !== manifestXml };
+}
+
+function snippetExists(manifestXml, marker) {
+  return manifestXml.includes(marker);
+}
+
+function mergeApplicationChildren(manifestXml) {
+  let content = manifestXml;
+  let changed = false;
+  const closingIdx = content.indexOf('</application>');
+  if (closingIdx === -1) {
+    throw new Error('Target manifest is missing </application>');
+  }
+
+  for (const snippet of SERVICE_SNIPPETS) {
+    const marker = snippet.match(/android:name="([^"]+)"/)?.[1];
+    if (!marker || snippetExists(content, marker)) {
+      continue;
+    }
+    content = `${content.slice(0, closingIdx)}        ${snippet}\n${content.slice(closingIdx)}`;
+    changed = true;
+  }
+
+  return { content, changed };
+}
+
+function updateRuntimeServicePurpose(manifestXml) {
+  const content = manifestXml.replace(
+    /<service\b[^>]*android:name="\.OpenLessRuntimeService"[\s\S]*?<\/service>/g,
+    (block) =>
+      block.replace(
+        'android:value="ime_runtime"',
+        'android:value="Keeps the IME runtime and user-initiated ChatGPT authorization callback available while the user is in another app."',
+      ),
+  );
+  return { content, changed: content !== manifestXml };
+}
+
+/** Move only the launcher filter, including repair of previously generated manifests. */
+function moveLauncherIntentFilterToWarmupActivity(manifestXml) {
+  const activities = /<activity\b([^>]*?)(?:\/>|>([\s\S]*?)<\/activity>)/g;
+  const filters = /<intent-filter\b[^>]*>[\s\S]*?<\/intent-filter>/g;
+  const isLauncher = (filter) =>
+    filter.includes('"android.intent.action.MAIN"') &&
+    filter.includes('"android.intent.category.LAUNCHER"');
+  const hosts = new Set([
+    '.MainActivity',
+    '.OpenLessBackendWarmupActivity',
+    '.MicrophonePermissionActivity',
+  ]);
+  const nameOf = (attrs) => attrs.match(/android:name="([^"]+)"/)?.[1];
+  let launcher;
+  for (const [, attrs, body = ''] of manifestXml.matchAll(activities)) {
+    if (hosts.has(nameOf(attrs)))
+      launcher ??= [...body.matchAll(filters)].map(([filter]) => filter).find(isLauncher);
+  }
+  if (!launcher) return { content: manifestXml, changed: false };
+  const content = manifestXml.replace(activities, (original, attrs, body = '') => {
+    const name = nameOf(attrs);
+    if (!hosts.has(name)) return original;
+    const remaining = body.replace(filters, (filter) => (isLauncher(filter) ? '' : filter)).trim();
+    if (name === '.OpenLessBackendWarmupActivity') {
+      attrs = attrs.replace(/android:exported="[^"]*"/, 'android:exported="true"').trimEnd();
+      return `<activity${attrs}>${remaining}${launcher}</activity>`;
+    }
+    if (remaining === body.trim()) return original;
+    return `<activity${attrs.trimEnd()}>${remaining}</activity>`;
+  });
+  return { content, changed: content !== manifestXml };
+}
+
+function main() {
+  const { dryRun } = parseArgs(process.argv.slice(2));
+
+  if (!existsSync(targetPath)) {
+    throw new Error(
+      `Generated Android manifest not found: ${targetPath}\nRun "npm run tauri -- android init --ci" first.`,
+    );
+  }
+
+  let content = readFileSync(targetPath, 'utf8');
+  let changed = false;
+
+  for (const step of [
+    mergePermissions,
+    ensureApplicationName,
+    mergeApplicationChildren,
+    updateRuntimeServicePurpose,
+    moveLauncherIntentFilterToWarmupActivity,
+  ]) {
+    const result = step(content);
+    content = result.content;
+    changed = changed || result.changed;
+  }
+
+  if (!changed) {
+    console.log(`Overlay manifest entries already present in ${targetPath}; skipping merge.`);
+    return;
+  }
+
+  if (dryRun) {
+    console.log(`[dry-run] Would merge overlay manifest entries into ${targetPath}`);
+    return;
+  }
+
+  writeFileSync(targetPath, content, 'utf8');
+  console.log(`Merged overlay / accessibility entries into ${targetPath}`);
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+}

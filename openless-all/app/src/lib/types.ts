@@ -12,7 +12,7 @@ import type {
   AndroidOverlayLeftSwipeAction,
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
-} from '../../android/frontend/lib/androidTypes';
+} from '../../../android/frontend/lib/androidTypes';
 
 export type {
   AndroidAccessibilityStatus,

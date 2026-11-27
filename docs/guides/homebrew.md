@@ -4,7 +4,7 @@
 
 ~~~sh
 brew tap Open-Less/openless https://github.com/Open-Less/openless
-node openless-all/app/scripts/install-homebrew-openless-reminder.mjs
+node openless-all/macos/scripts/install-homebrew-openless-reminder.mjs
 ~~~
 
 打开新终端后，`brew update`、`brew update-reset` 或 `brew upgrade` 成功时会检查 OpenLess。发现新版会在终端显示，同一个版本只发送一次系统通知。提醒不会自动安装应用。

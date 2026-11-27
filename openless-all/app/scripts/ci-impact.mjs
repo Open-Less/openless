@@ -57,7 +57,8 @@ const PLATFORM_ROOTS = {
   macos: ['openless', 'openless-native-capsule'],
   windows: ['openless', 'openless-native-capsule'],
   android: ['openless'],
-  // The Linux reusable workflow also owns Harmony Rust unit tests.
+  // Preserve the Linux validation graph's Harmony host coverage while Linux
+  // automated build/release workflows remain paused.
   linux: ['openless-linux-egui', 'openless-harmony-host'],
   harmony: ['openless-harmony-host'],
   ios: ['openless-core'],
@@ -238,6 +239,8 @@ const androidTooling = (file) =>
 
 /** Browser-rendered surface: sources, styles, the bundle entry and its specs. */
 const motionSurface = (file) =>
+  file.startsWith('openless-all/android/frontend/') ||
+  file.startsWith('openless-all/app/ask-window/') ||
   /^openless-all\/app\/(src\/|public\/|e2e\/|assets\/)/.test(file) ||
   /^openless-all\/app\/(index\.html|package\.json|package-lock\.json|vite\.config\.[^/]+|tailwind\.[^/]+|postcss\.[^/]+|tsconfig[^/]*\.json)$/.test(
     file,
@@ -252,11 +255,25 @@ const iosProject = (file) => file.startsWith('openless-all/ios/');
  * shared resource whose native consumers cannot be proven by one package.
  */
 function classify(file, context) {
+  // Generated index refreshes cannot reach product code; other AOCI paths
+  // remain unclassified so configuration and new tooling still fail open.
+  if (file === '.aoci/baseline.json' || file === 'aoci.code.txt') return new Set();
   if (prose(file)) return new Set();
   if (contractSuite(file)) return ALL;
   if (workflowOrTooling(file)) return ALL;
   if (iosProject(file)) return new Set(['ios', 'ios-device']);
   if (nativeResource(file)) return ALL;
+  // Harmony packaging and verification read versionCode from this revision.
+  if (file === 'openless-all/linux/egui/package-revision') return new Set(['linux', 'harmony']);
+  if (file.startsWith('openless-all/app/mobile-ime/')) return new Set(['android', 'harmony']);
+  if (file.startsWith('openless-all/windows/') || file.startsWith('openless-all/macos/'))
+    return ALL;
+  if (
+    file.startsWith('openless-all/linux/fcitx5-plugin/') ||
+    file.startsWith('openless-all/linux/scripts/')
+  )
+    return new Set(['linux']);
+  if (file.startsWith('openless-all/android/') && !motionSurface(file)) return new Set(['android']);
   if (androidTooling(file)) return new Set(['frontend', 'macos', 'windows', 'harmony', 'android']);
 
   const tags = new Set();
@@ -281,8 +298,8 @@ function classify(file, context) {
   // Files outside every package still have to be evaluated by the shells that
   // embed them (assets, fixtures, icons).
   if (tags.size === 0) {
-    if (file.startsWith('openless-all/app/harmony/')) return new Set(['harmony']);
-    if (file.startsWith('openless-all/app/linux-egui/')) return new Set(['linux']);
+    if (file.startsWith('openless-all/harmony/')) return new Set(['harmony']);
+    if (file.startsWith('openless-all/linux/egui/')) return new Set(['linux']);
     return ALL;
   }
   return tags;

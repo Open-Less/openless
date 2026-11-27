@@ -10,8 +10,8 @@ import {
   parseAndroidAbis,
   toGithubMatrixInclude,
   entryForAbi,
-} from './android-abi-matrix.mjs';
-import { collectSplitApks } from './collect-android-split-apks.mjs';
+} from '../../android/scripts/android-abi-matrix.mjs';
+import { collectSplitApks } from '../../android/scripts/collect-android-split-apks.mjs';
 
 const scriptDir = fileURLToPath(new URL('.', import.meta.url));
 const workflowPath = fileURLToPath(
@@ -44,7 +44,7 @@ assert.equal(toGithubMatrixInclude(ANDROID_ABI_MATRIX)[0].rust_target, 'aarch64-
 
 const cli = spawnSync(
   process.execPath,
-  [join(scriptDir, 'android-abi-matrix.mjs'), 'parse', 'aarch64'],
+  [join(scriptDir, '../../android/scripts/android-abi-matrix.mjs'), 'parse', 'aarch64'],
   { encoding: 'utf8' },
 );
 assert.equal(cli.status, 0);

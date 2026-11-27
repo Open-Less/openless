@@ -16,7 +16,7 @@ import yaml from 'js-yaml';
 import { mergeSignatures, signatureFromIndex } from './merge-release-signatures.mjs';
 const audit = spawnSync(
   process.execPath,
-  [new URL('./audit-harmony-ipc.mjs', import.meta.url).pathname, '--check'],
+  [new URL('../../harmony/scripts/audit-harmony-ipc.mjs', import.meta.url).pathname, '--check'],
   { encoding: 'utf8' },
 );
 assert.equal(audit.status, 0, audit.stdout + audit.stderr);

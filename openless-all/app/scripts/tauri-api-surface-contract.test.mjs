@@ -5,7 +5,7 @@ const config = JSON.parse(
   await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
 );
 const lifecycleE2e = await readFile(
-  new URL('./windows-openless-lifecycle-e2e.py', import.meta.url),
+  new URL('../../windows/scripts/windows-openless-lifecycle-e2e.py', import.meta.url),
   'utf8',
 );
 const miscCommands = await readFile(

@@ -13,9 +13,9 @@ import vm from 'node:vm';
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workflow = readFileSync(join(appRoot, '../../.github/workflows/release-harmony.yml'), 'utf8');
-const packaging = readFileSync(join(appRoot, 'scripts/package-harmony-hap.sh'), 'utf8');
-const signing = readFileSync(join(appRoot, 'scripts/sign-harmony-hap.py'), 'utf8');
-const upload = readFileSync(join(appRoot, 'scripts/upload-appgallery.mjs'), 'utf8');
+const packaging = readFileSync(join(appRoot, '../harmony/scripts/package-harmony-hap.sh'), 'utf8');
+const signing = readFileSync(join(appRoot, '../harmony/scripts/sign-harmony-hap.py'), 'utf8');
+const upload = readFileSync(join(appRoot, '../harmony/scripts/upload-appgallery.mjs'), 'utf8');
 const releasing = readFileSync(join(appRoot, '../../RELEASING.md'), 'utf8');
 const tauriRelease = readFileSync(
   join(appRoot, '../../.github/workflows/release-tauri.yml'),
@@ -60,7 +60,7 @@ assert.match(workflow, /run: npm ci/);
   assert.ok(ohosTargets(workflow).length > 0, 'release-harmony.yml must install the OHOS target');
   assert.deepEqual(ohosTargets(workflow), ohosTargets(ciWorkflow));
 }
-const prepare = readFileSync(join(appRoot, 'scripts/prepare-harmony-sdk.sh'), 'utf8');
+const prepare = readFileSync(join(appRoot, '../harmony/scripts/prepare-harmony-sdk.sh'), 'utf8');
 assert.match(prepare, /DEFAULT_URL=https:\/\//);
 assert.match(prepare, /DEFAULT_SHA256=[0-9a-f]{64}/);
 assert.match(prepare, /checksum mismatch/);
@@ -91,9 +91,12 @@ assert.ok(!releaseAttach.includes('-signed.hap'), 'the Release must not carry th
 assert.match(releaseAttach, /OpenLess_harmony_arm64\.hap/);
 assert.match(packaging, /OpenLess_harmony_arm64-signed\.hap/);
 assert.match(packaging, /OPENLESS_HARMONY_CHANNEL/);
-assert.match(readFileSync(join(appRoot, 'scripts/sign-harmony-hap.py'), 'utf8'), /--prefix/);
 assert.match(
-  readFileSync(join(appRoot, 'scripts/verify-harmony-hap.sh'), 'utf8'),
+  readFileSync(join(appRoot, '../harmony/scripts/sign-harmony-hap.py'), 'utf8'),
+  /--prefix/,
+);
+assert.match(
+  readFileSync(join(appRoot, '../harmony/scripts/verify-harmony-hap.sh'), 'utf8'),
   /--allow-unsigned/,
 );
 
@@ -118,7 +121,7 @@ assert.doesNotMatch(
 );
 
 // Packaging and signing are separate, testable scripts.
-assert.ok(existsSync(join(appRoot, 'scripts/package-harmony-hap.sh')));
+assert.ok(existsSync(join(appRoot, '../harmony/scripts/package-harmony-hap.sh')));
 assert.match(packaging, /sign-harmony-hap\.py/);
 assert.match(packaging, /--prefix "\$SIGN_PREFIX"/);
 assert.match(
@@ -141,14 +144,18 @@ assert.match(upload, /--skip-if-unconfigured/);
 assert.match(workflow, /upload-appgallery\.mjs/);
 // The upload step must stay a literal `run: |` block. As a folded `>-` scalar its
 // leading explanatory comment joined the command line, so bash saw
-// `# ... node scripts/upload-appgallery.mjs \` and then `--channel` on its own
+// `# ... node ../harmony/scripts/upload-appgallery.mjs \` and then `--channel` on its own
 // line: `command not found` (127) - the first time the step ever executed.
 assert.doesNotMatch(
   workflow,
   /run:\s*>-[ ]*\n\s*#/,
   'a folded run scalar must not start with a comment; it comments out the command',
 );
-assert.match(workflow, /node scripts\/upload-appgallery\.mjs \\/);
+assert.match(
+  workflow,
+  /if \[ -f \.\.\/harmony\/scripts\/upload-appgallery\.mjs \]; then\n\s+upload_script=\.\.\/harmony\/scripts\/upload-appgallery\.mjs\n\s*elif \[ -f scripts\/upload-appgallery\.mjs \]; then\n\s+upload_script=scripts\/upload-appgallery\.mjs\n\s*else\n\s+echo "::error::Missing source input:[^\n]+\n\s+exit 1\n\s*fi\n\s+node "\$upload_script" \\/,
+  'upload must execute the guarded source-tree script in the literal run block',
+);
 
 // Both destinations are wired.
 assert.match(workflow, /gh release upload/);
@@ -209,8 +216,8 @@ assert.match(
   'release-harmony.yml must run check-harmony-signing.sh before building',
 );
 assert.ok(
-  existsSync(join(appRoot, 'scripts/check-harmony-signing.sh')),
-  'scripts/check-harmony-signing.sh must exist',
+  existsSync(join(appRoot, '../harmony/scripts/check-harmony-signing.sh')),
+  '../harmony/scripts/check-harmony-signing.sh must exist',
 );
 
 // Secret names carry the channel first (`HARMONY_RELEASE_CERT_BASE64`), so the

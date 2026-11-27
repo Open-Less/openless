@@ -3,11 +3,16 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-const root = mkdtempSync(join(tmpdir(), 'openless-overlay-manifest-'));
+const sandbox = mkdtempSync(join(tmpdir(), 'openless-overlay-manifest-'));
+const root = join(sandbox, 'app');
+mkdirSync(root, { recursive: true });
 try {
-  mkdirSync(join(root, 'scripts'));
-  const script = join(root, 'scripts/merge-android-overlay-manifest.mjs');
-  copyFileSync(new URL('./merge-android-overlay-manifest.mjs', import.meta.url), script);
+  mkdirSync(join(root, '../android/scripts'), { recursive: true });
+  const script = join(root, '../android/scripts/merge-android-overlay-manifest.mjs');
+  copyFileSync(
+    new URL('../../android/scripts/merge-android-overlay-manifest.mjs', import.meta.url),
+    script,
+  );
   const directory = join(root, 'src-tauri/gen/android/app/src/main');
   mkdirSync(directory, { recursive: true });
   const manifest = join(directory, 'AndroidManifest.xml');
@@ -43,6 +48,6 @@ print(json.dumps([a.get(ns+'name') for a in root.findall('./application/activity
     assert.deepEqual(JSON.parse(parsed.stdout), ['.OpenLessBackendWarmupActivity']);
   }
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  rmSync(sandbox, { recursive: true, force: true });
 }
 console.log('overlay manifest merge tests passed');

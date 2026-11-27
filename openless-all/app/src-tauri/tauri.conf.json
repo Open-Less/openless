@@ -27,7 +27,10 @@
         "shadow": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
-        "trafficLightPosition": { "x": 16, "y": 26 },
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 26
+        },
         "visible": false,
         "acceptFirstMouse": true
       },
@@ -84,8 +87,8 @@
     ],
     "macOS": {
       "minimumSystemVersion": "14.0",
-      "infoPlist": "Info.plist",
-      "entitlements": "Entitlements.plist"
+      "infoPlist": "../../macos/Info.plist",
+      "entitlements": "../../macos/Entitlements.plist"
     },
     "android": {
       "minSdkVersion": 26
@@ -93,10 +96,10 @@
     "windows": {
       "nsis": {
         "installMode": "perMachine",
-        "installerHooks": "nsis/openless-ime-hooks.nsh"
+        "installerHooks": "../../windows/nsis/openless-ime-hooks.nsh"
       },
       "wix": {
-        "fragmentPaths": ["wix/openless-ime.wxs"],
+        "fragmentPaths": ["../../windows/wix/openless-ime.wxs"],
         "componentRefs": ["OpenLessImeDllX64Component", "OpenLessImeDllX86Component"]
       }
     }

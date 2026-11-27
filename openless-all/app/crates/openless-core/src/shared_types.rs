@@ -435,6 +435,9 @@ pub struct UserPreferences {
     /// Authoritative mode established by a V2 client; absent on untouched legacy settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capsule_display_mode_v2: Option<CapsuleDisplayMode>,
+    /// None means never chosen on this device; Some(1) is an explicit reset to the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation_shift_tap_count: Option<std::num::NonZeroU8>,
     #[serde(default = "default_true")]
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -598,8 +601,9 @@ pub struct UserPreferences {
     /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
     #[serde(default = "default_qa_companion_key")]
     pub qa_companion_key: String,
-    #[serde(default)]
-    pub qa_shortcut_behavior: QaShortcutBehavior,
+    /// Kept in the device profile for compatibility with older Ask builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_shortcut_behavior: Option<QaShortcutBehavior>,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -973,6 +977,11 @@ pub struct UserPreferences {
 }
 
 impl UserPreferences {
+    pub fn translation_shift_tap_count(&self) -> u8 {
+        self.translation_shift_tap_count
+            .map_or(1, std::num::NonZeroU8::get)
+    }
+
     pub fn less_computer_available(&self) -> bool {
         self.testing_features_enabled && self.coding_agent_enabled
     }
@@ -1065,6 +1074,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     capsule_display_mode: CapsuleDisplayMode,
     capsule_display_mode_v2: Option<CapsuleDisplayMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation_shift_tap_count: Option<std::num::NonZeroU8>,
     #[serde(default = "default_true")]
     capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -1147,8 +1158,8 @@ struct UserPreferencesWire {
     qa_hotkey: Option<ShortcutBinding>,
     #[serde(default = "default_qa_companion_key")]
     qa_companion_key: String,
-    #[serde(default)]
-    qa_shortcut_behavior: QaShortcutBehavior,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    qa_shortcut_behavior: Option<QaShortcutBehavior>,
     #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
@@ -1374,6 +1385,7 @@ impl Default for UserPreferencesWire {
             capsule_style: prefs.capsule_style,
             capsule_display_mode: prefs.capsule_display_mode,
             capsule_display_mode_v2: prefs.capsule_display_mode_v2,
+            translation_shift_tap_count: prefs.translation_shift_tap_count,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
@@ -1604,6 +1616,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_display_mode_v2: wire
                 .capsule_display_mode_v2
                 .or_else(|| wire.capsule_display_mode.extended_sync_mode()),
+            translation_shift_tap_count: wire.translation_shift_tap_count,
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
@@ -1652,7 +1665,11 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
-            qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
+            qa_hotkey: if cfg!(target_os = "linux") {
+                wire.qa_hotkey
+            } else {
+                None
+            }, // retired desktop follow-up shortcut
             qa_companion_key: wire.qa_companion_key,
             qa_shortcut_behavior: wire.qa_shortcut_behavior,
             quick_note_hotkey: wire.quick_note_hotkey,
@@ -1880,7 +1897,11 @@ fn salvage_without_incomplete_legacy_hotkey(
 }
 
 fn default_qa_hotkey() -> Option<ShortcutBinding> {
-    if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
+    if cfg!(target_os = "linux") {
+        Some(ShortcutBinding::default_qa())
+    } else {
+        None
+    }
 }
 
 /// Initial action of the recording shortcut plus the Ask companion key.
@@ -1893,7 +1914,9 @@ pub enum QaShortcutBehavior {
     Draft,
 }
 
-fn default_qa_companion_key() -> String { "Space".into() }
+fn default_qa_companion_key() -> String {
+    "Space".into()
+}
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
     #[cfg(target_os = "windows")]
@@ -2022,6 +2045,7 @@ impl Default for UserPreferences {
             capsule_style: CapsuleStyle::Classic,
             capsule_display_mode: CapsuleDisplayMode::CursorScreen,
             capsule_display_mode_v2: None,
+            translation_shift_tap_count: None,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
@@ -2063,7 +2087,7 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
-            qa_shortcut_behavior: QaShortcutBehavior::default(),
+            qa_shortcut_behavior: None,
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
@@ -3161,10 +3185,14 @@ mod tests {
         value["qaHotkey"] = serde_json::json!({"primary":";", "modifiers":["cmd","shift"]});
         let migrated: UserPreferences = serde_json::from_value(value).unwrap();
         assert_eq!(migrated.qa_companion_key, "Space");
-        if !cfg!(target_os = "linux") { assert!(migrated.qa_hotkey.is_none()); }
+        if !cfg!(target_os = "linux") {
+            assert!(migrated.qa_hotkey.is_none());
+        }
         for key in ["F9", ""] {
-            let mut prefs = migrated.clone(); prefs.qa_companion_key = key.into();
-            let restored: UserPreferences = serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+            let mut prefs = migrated.clone();
+            prefs.qa_companion_key = key.into();
+            let restored: UserPreferences =
+                serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
             assert_eq!(restored.qa_companion_key, key);
         }
     }
@@ -3546,9 +3574,13 @@ mod tests {
     fn capsule_style_pref_defaults_to_openless_and_migrates_typeless() {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(prefs.capsule_style, CapsuleStyle::Classic);
-        let legacy: UserPreferences = serde_json::from_str(r#"{"capsuleStyle":"typeless"}"#).unwrap();
+        let legacy: UserPreferences =
+            serde_json::from_str(r#"{"capsuleStyle":"typeless"}"#).unwrap();
         assert_eq!(legacy.capsule_style, CapsuleStyle::Classic);
-        assert_eq!(serde_json::to_value(legacy).unwrap()["capsuleStyle"], "classic");
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap()["capsuleStyle"],
+            "classic"
+        );
 
         for (style, wire_name) in [
             (CapsuleStyle::Siri, "siri"),

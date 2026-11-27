@@ -826,13 +826,14 @@ fn intent_repair_preserves_exact_upstream_prefix_with_one_final_suffix_and_insta
 #[test]
 fn intent_repair_upgrades_known_releases_and_keeps_local_identity() {
     use crate::style_packs::{
-        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, released_intent_v1_2_pack, StylePackKind,
+        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, released_intent_v1_2_pack, released_intent_v1_3_pack, StylePackKind,
         BUILTIN_INTENT_ID,
     };
     for release in [
         original_intent_pack(),
         released_intent_v1_1_pack(),
         released_intent_v1_2_pack(),
+        released_intent_v1_3_pack(),
         builtin_intent_pack(),
     ] {
         for alias in [false, true] {
@@ -906,12 +907,13 @@ fn intent_repair_upgrades_known_releases_and_keeps_local_identity() {
 #[test]
 fn intent_repair_never_overwrites_edited_or_unproven_releases() {
     use crate::style_packs::{
-        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, released_intent_v1_2_pack, StylePackKind,
+        builtin_intent_pack, original_intent_pack, released_intent_v1_1_pack, released_intent_v1_2_pack, released_intent_v1_3_pack, StylePackKind,
     };
     for release in [
         original_intent_pack(),
         released_intent_v1_1_pack(),
         released_intent_v1_2_pack(),
+        released_intent_v1_3_pack(),
         builtin_intent_pack(),
     ] {
         for alias in [false, true] {
@@ -964,14 +966,14 @@ fn intent_repair_never_overwrites_edited_or_unproven_releases() {
 fn shared_intent_installs_for_independent_stores_and_keeps_one_final_revision_tail() {
     use crate::style_packs::{builtin_intent_pack, DICTATION_REVISION_RULES};
     let expected = builtin_intent_pack();
-    assert_eq!(expected.version, "1.3.0");
+    assert_eq!(expected.version, "1.4.0");
     assert_eq!(expected.prompt, expected.selection_prompt);
     let body = include_str!("builtin_styles/intent-reconstruction-shared-v1.md").trim_end();
     assert_eq!(expected.prompt, format!("{body}\n\n{DICTATION_REVISION_RULES}"));
     assert_eq!(expected.prompt.matches(DICTATION_REVISION_RULES).count(), 1);
     assert!(body.contains("<raw_transcript>") && body.contains("<selected_text>"));
-    assert!(body.contains("同一个整体问题中分别表达目标"));
-    assert!(body.contains("使用自然正文，不强行凑五层或字母分项"));
+    assert!(body.contains("内部确认最终意思"));
+    assert!(body.contains("不强制五层，不留空标题"));
     for _ in 0..2 {
         let root = TestDir::new("shared-intent-new-user");
         let store = StylePackStore::at_data_dir(root.path()).unwrap();

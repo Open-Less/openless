@@ -147,7 +147,7 @@ jobs:
             raw="${INPUT_ABIS:-aarch64}"
             fast="${INPUT_FAST_PROFILE:-false}"
           fi
-          matrix="$(node openless-all/app/scripts/android-abi-matrix.mjs parse "$raw")"
+          matrix="$(node openless-all/android/scripts/android-abi-matrix.mjs parse "$raw")"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           abi_list="$(node -e 'const m=JSON.parse(process.argv[1]); process.stdout.write(m.map(x=>x.abi).join(","))' "$matrix")"
           gradle_list="$(node -e 'const m=JSON.parse(process.argv[1]); process.stdout.write(m.map(x=>x.gradle_abi).join(","))' "$matrix")"
@@ -296,27 +296,27 @@ jobs:
 
       - name: Copy Android scaffolding (Kotlin + XML)
         working-directory: openless-all/app
-        run: node scripts/copy-android-scaffolding.mjs
+        run: node ../android/scripts/copy-android-scaffolding.mjs
 
       - name: Merge APK v1 manifest permissions
         working-directory: openless-all/app
-        run: node scripts/merge-android-v1-manifest.mjs
+        run: node ../android/scripts/merge-android-v1-manifest.mjs
 
       - name: Merge overlay / accessibility manifest
         working-directory: openless-all/app
-        run: node scripts/merge-android-overlay-manifest.mjs
+        run: node ../android/scripts/merge-android-overlay-manifest.mjs
 
       - name: Merge Shizuku manifest
         working-directory: openless-all/app
-        run: node scripts/merge-android-shizuku-manifest.mjs
+        run: node ../android/scripts/merge-android-shizuku-manifest.mjs
 
       - name: Patch Shizuku Gradle dependencies
         working-directory: openless-all/app
-        run: node scripts/patch-android-shizuku-deps.mjs
+        run: node ../android/scripts/patch-android-shizuku-deps.mjs
 
       - name: Merge updater / install manifest
         working-directory: openless-all/app
-        run: node scripts/merge-android-updater-manifest.mjs
+        run: node ../android/scripts/merge-android-updater-manifest.mjs
 
       - name: Configure Android release signing
         if: needs.plan.outputs.mode == 'release' || needs.plan.outputs.signing == 'signed-debug'
@@ -328,7 +328,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           # signed_debug: also wire debug buildType to the release keystore
           OPENLESS_SIGN_DEBUG: ${{ needs.plan.outputs.signing == 'signed-debug' && 'true' || 'false' }}
-        run: node scripts/configure-android-release-signing.mjs
+        run: node ../android/scripts/configure-android-release-signing.mjs
 
       - name: Prime Gradle wrapper
         timeout-minutes: 10
@@ -390,7 +390,7 @@ jobs:
           OPENLESS_APK_MODE: ${{ needs.plan.outputs.mode }}
           OPENLESS_APK_LABEL: ${{ needs.plan.outputs.label }}
           OPENLESS_EXPECTED_GRADLE_ABIS: ${{ matrix.gradle_abi }}
-        run: node scripts/collect-android-split-apks.mjs
+        run: node ../android/scripts/collect-android-split-apks.mjs
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v4
@@ -516,7 +516,7 @@ jobs:
           set -euo pipefail
           out_dir="${{ steps.stage.outputs.out_dir }}"
           version="$(node -p "require('./package.json').version")"
-          node scripts/sign-android-apks.mjs \
+          node ../android/scripts/sign-android-apks.mjs \
             "$out_dir/OpenLess_${version}_arm64-v8a.apk" \
             "$out_dir/OpenLess_${version}_armeabi-v7a.apk" \
             "$out_dir/OpenLess_${version}_x86.apk" \

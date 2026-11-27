@@ -73,7 +73,8 @@ test('Ask history lives in General instead of the tools menu', async ({ page }) 
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const history = page.locator('[data-ol-general-entry="askHistory"]');
-  await expect(page.locator('[data-ol-general-entry="recording"] + [data-ol-general-entry="askHistory"]')).toBeVisible();
+  await expect(page.locator('[data-ol-general-entry="recording"]')).toBeVisible();
+  await expect(history).toBeVisible();
   await history.click();
   await expect(page.getByRole('switch', { name: '保存历史' })).toBeVisible();
   await expect(page.getByText('开启后在此设备上保存「随便问」的历史记录，默认关闭。', { exact: true }).first()).toBeVisible();

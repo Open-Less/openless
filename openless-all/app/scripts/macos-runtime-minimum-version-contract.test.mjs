@@ -18,7 +18,7 @@ if (major < 14 || (major === 14 && minor < 0)) {
 
 console.log(`macOS runtime minimum-system-version contract passed: ${minimumSystemVersion}`);
 
-const plist = await readFile(new URL('../src-tauri/Info.plist', import.meta.url), 'utf8');
+const plist = await readFile(new URL('../../macos/Info.plist', import.meta.url), 'utf8');
 const tap = await readFile(
   new URL('../src-tauri/src/playback_reference_macos.m', import.meta.url),
   'utf8',

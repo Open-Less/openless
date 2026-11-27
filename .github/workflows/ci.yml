@@ -16,6 +16,7 @@ on:
     branches: [main, beta]
   pull_request:
     branches: [main, beta]
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       live_acceptance:
@@ -225,20 +226,21 @@ jobs:
           retention-days: 7
 
   ui-motion-browsers:
-    name: UI motion / ${{ matrix.browser }}
+    name: UI motion / ${{ matrix.browser }} (${{ matrix.shard }}/2)
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         browser: [chromium, webkit]
+        shard: [1, 2]
     needs: [changes]
-    # One worker per browser keeps timing-sensitive tests isolated; the two
-    # engines run on separate runners instead of serialising ~15 minutes.
+    # One worker per VM keeps timing-sensitive tests isolated; each engine's
+    # two shards run on independent runners.
     if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     # A hung Chromium/WebKit process must not hold the runner after the step cap.
     # Includes cold browser setup and leaves time to upload a failed trace.
-    timeout-minutes: 40
+    timeout-minutes: 50
     defaults:
       run:
         working-directory: openless-all/app
@@ -266,7 +268,7 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           # Browser revisions follow Playwright, not unrelated npm lock changes.
-          # Cache only this engine; the other matrix leg owns its own download.
+          # Cache only this engine; its shards share the same browser revision.
           key: playwright-v2-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ matrix.browser }}-${{ steps.playwright_version.outputs.version }}
       - name: Install Playwright system dependencies
         # Browser libraries are about 114MB. Eight minutes dies while a trickling
@@ -287,19 +289,19 @@ jobs:
         timeout-minutes: 10
         run: npx playwright install "${{ matrix.browser }}"
       - name: Save Playwright browsers on beta builds
-        if: steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        if: matrix.shard == 1 && steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
       - name: Run UI motion checks
-        timeout-minutes: 20
-        run: npm run test:ui-motion -- --project=${{ matrix.browser }}
+        timeout-minutes: 30
+        run: npm run test:ui-motion -- --project=${{ matrix.browser }} --shard=${{ matrix.shard }}/2
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           retention-days: 7
-          name: ui-motion-failure-${{ matrix.browser }}
+          name: ui-motion-failure-${{ matrix.browser }}-shard-${{ matrix.shard }}
           path: |
             openless-all/app/test-results/
             openless-all/app/playwright-report/
@@ -307,7 +309,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-acceptance-${{ matrix.browser }}
+          name: ui-acceptance-${{ matrix.browser }}-shard-${{ matrix.shard }}
           path: openless-all/app/test-results/**/acceptance-*.png
           retention-days: 7
           if-no-files-found: ignore
@@ -432,7 +434,7 @@ jobs:
       # prebuilt download of its own.
       - name: Prepare sherpa-onnx Android libraries
         timeout-minutes: 10
-        run: echo "SHERPA_ONNX_LIB_DIR=$(node scripts/sherpa-onnx-android.mjs)" >> "$GITHUB_ENV"
+        run: echo "SHERPA_ONNX_LIB_DIR=$(node ../android/scripts/sherpa-onnx-android.mjs)" >> "$GITHUB_ENV"
 
       - name: Check Tauri backend (Android target)
         timeout-minutes: 25
@@ -454,7 +456,7 @@ jobs:
           cargo check --locked --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
 
       - name: Copy Android production and test scaffolding
-        run: node scripts/copy-android-scaffolding.mjs
+        run: node ../android/scripts/copy-android-scaffolding.mjs
 
       - name: Restore Android Rime instrumentation dependencies
         id: rime_cache
@@ -478,10 +480,10 @@ jobs:
           key: ${{ steps.rime_cache.outputs.cache-primary-key }}
 
       - name: Merge Shizuku manifest
-        run: node scripts/merge-android-shizuku-manifest.mjs
+        run: node ../android/scripts/merge-android-shizuku-manifest.mjs
 
       - name: Patch Shizuku Gradle dependencies
-        run: node scripts/patch-android-shizuku-deps.mjs
+        run: node ../android/scripts/patch-android-shizuku-deps.mjs
 
       - name: Run JVM credential tests and compile instrumentation tests
         timeout-minutes: 15
@@ -496,7 +498,7 @@ jobs:
           --no-daemon
 
       - name: Check Android emulator cleanup
-        run: bash scripts/android-emulator-cleanup.test.sh
+        run: bash ../android/scripts/android-emulator-cleanup.test.sh
 
       - name: Enable KVM for Android instrumentation tests
         run: |
@@ -703,8 +705,7 @@ jobs:
         # The report is committed so the ArkTS coverage is reviewable; a stale
         # report hides commands that the Harmony host does not implement yet.
         run: |
-          node scripts/audit-harmony-ipc.mjs
-          git diff --exit-code harmony/ipc-audit.json
+          node ../harmony/scripts/audit-harmony-ipc.mjs --check
       - name: Harmony ArkTS contracts
         run: |
           node scripts/harmony-entry-startup.test.mjs
@@ -740,16 +741,65 @@ jobs:
           OPENLESS_HARMONY_CHANNEL: none
         run: |
           set -euo pipefail
-          bash scripts/prepare-harmony-sdk.sh
-          bash scripts/package-harmony-hap.sh
+          bash ../harmony/scripts/prepare-harmony-sdk.sh
+          bash ../harmony/scripts/package-harmony-hap.sh
           # AppGallery needs a numeric versionName, so the packaging script keeps
           # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
           version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
-          version_code=$(cat linux-egui/package-revision)
-          bash scripts/verify-harmony-hap.sh \
+          version_code=$(cat ../linux/egui/package-revision)
+          bash ../harmony/scripts/verify-harmony-hap.sh \
             target/harmony-packages/OpenLess_harmony_arm64.hap \
             "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
             "$version_name" "$version_code" --allow-unsigned
+
+  # Linux automation stays paused by default; this label enables validation only.
+  linux-validation:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: ./.github/actions/setup-linux-dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+          key: linux-validation
+          save-if: false
+      - name: Validate locked workspace metadata
+        run: |
+          cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path Cargo.toml >/dev/null
+          cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path ../linux/egui/Cargo.toml >/dev/null
+      - name: Test, lint and build the Linux host
+        run: |
+          cargo test --locked -p openless-linux-egui
+          cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings
+          cargo build --locked --release -p openless-linux-egui
+      - name: Build and test the Fcitx5 plugin
+        run: |
+          cmake -S ../linux/fcitx5-plugin -B ../linux/fcitx5-plugin/build
+          cmake --build ../linux/fcitx5-plugin/build -j
+          ctest --test-dir ../linux/fcitx5-plugin/build --output-on-failure
+      - name: Package and verify locally
+        run: |
+          set -euo pipefail
+          APP_VERSION=$(node -p "require('./package.json').version")
+          REVISION=$(cat ../linux/egui/package-revision)
+          export OPENLESS_LINUX_VERSION="${APP_VERSION%%+*}-${REVISION}"
+          bash ../linux/scripts/package-linux-egui.sh
+          bash ../linux/scripts/verify-linux-egui-packages.sh
 
   native-capsule:
     # The capsule crates compile into the desktop shells. They get their own macOS + Windows
@@ -877,7 +927,7 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 15
         shell: pwsh
-        run: ./scripts/prepare-windows-sherpa.ps1
+        run: ./../windows/scripts/prepare-windows-sherpa.ps1
 
       - name: Install frontend dependencies
         timeout-minutes: 10
@@ -886,13 +936,13 @@ jobs:
       - name: Check Windows prerequisites
         if: matrix.preflight
         shell: pwsh
-        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
+        run: ./../windows/scripts/windows-preflight.ps1 -Toolchain msvc
 
       - name: Check PowerShell scripts
         if: matrix.preflight
         shell: pwsh
         run: |
-          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1", "./scripts/prepare-windows-sherpa.ps1")) {
+          foreach ($script in @("./../windows/scripts/windows-preflight.ps1", "./../windows/scripts/windows-build-gnu.ps1", "./../windows/scripts/windows-runtime-smoke.ps1", "./../windows/scripts/prepare-windows-sherpa.ps1")) {
             $errors = $null
             [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
             if ($errors) {
@@ -990,24 +1040,24 @@ jobs:
         timeout-minutes: 10
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
-        run: python scripts/test-windows-hang-diagnostics.py
+        run: python ../windows/scripts/test-windows-hang-diagnostics.py
 
       - name: Run owner-thread target ownership tests
         timeout-minutes: 10
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
-        run: python scripts/test-windows-runtime-target.py
+        run: python ../windows/scripts/test-windows-runtime-target.py
 
       - name: Run real Windows runtime ownership lifecycle
         if: runner.os == 'Windows'
         timeout-minutes: 15
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/target
-        run: python scripts/test-windows-runtime-target.py --runtime
+        run: python ../windows/scripts/test-windows-runtime-target.py --runtime
 
       - name: Run Windows symbol-pair format tests
         timeout-minutes: 10
-        run: python scripts/windows-symbol-pair.test.py
+        run: python ../windows/scripts/windows-symbol-pair.test.py
 
       - name: Run Rust-only backend unit tests (Windows)
         # The standalone test crate does not link the full Tauri app lib; it verifies the public
@@ -1044,7 +1094,7 @@ jobs:
       - name: Compile the TSF IME (x64, Release)
         if: runner.os == 'Windows'
         timeout-minutes: 20
-        working-directory: openless-all/app/windows-ime
+        working-directory: openless-all/windows/ime
         run: msbuild OpenLessIme.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal
 
       - name: Verify version sync across all 5 files
@@ -1179,7 +1229,7 @@ jobs:
       - name: Prepare Windows Sherpa static libraries
         timeout-minutes: 15
         shell: pwsh
-        run: ./scripts/prepare-windows-sherpa.ps1
+        run: ./../windows/scripts/prepare-windows-sherpa.ps1
       - run: npm ci
         timeout-minutes: 10
       - run: npm run build

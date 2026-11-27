@@ -18,7 +18,6 @@
 //! enablement plus a `lang` param; initially fixed to Mandarin Chinese (`cn`).
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -29,14 +28,14 @@ use md5::{Digest as Md5Digest, Md5};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::Value;
 use sha1::Sha1;
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
+use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 
+use super::stream_send::{send_ws_message_with_timeout, PacedSendClock, SharedWriter};
 use super::{AudioConsumer, RawTranscript};
 use crate::ports::{TextStreamChunk, TextStreamSink};
 
@@ -46,6 +45,7 @@ pub const DEFAULT_ENDPOINT: &str = "wss://rtasr.xfyun.cn/v1/ws";
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 1_280;
 /// 16 kHz / 16-bit / mono = 32000 bytes/sec -> 32 bytes/ms.
 const BYTES_PER_MS: u64 = 32;
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 /// Cap on the WebSocket handshake (TCP + TLS + HTTP upgrade) so a poor network cannot
 /// hang the hotkey thread.
@@ -58,9 +58,10 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// enablement and a corresponding `lang` param.
 const DEFAULT_LANG: &str = "cn";
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
-type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
+enum SendItem {
+    Audio(Vec<u8>),
+    End(oneshot::Sender<Result<(), XfyunASRError>>),
+}
 
 #[derive(Clone, Debug)]
 pub struct XfyunCredentials {
@@ -100,11 +101,20 @@ pub enum XfyunASRError {
 #[derive(Default)]
 struct SyncState {
     pending_audio: Vec<u8>,
-    bytes_sent: u64,
+    bytes_received: u64,
+    bytes_written: u64,
     started: bool,
+    ending: bool,
+    end_sent: bool,
     finished: bool,
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, XfyunASRError>>>,
+    /// FIFO send queue shared across audio frames and the final end sentinel.
+    send_tx: Option<mpsc::UnboundedSender<SendItem>>,
+    /// First send worker error, preserved so send_last_frame fails reliably instead
+    /// of sending an out-of-order end marker after an incomplete stream.
+    send_error: Option<XfyunASRError>,
+    cancel_tx: Option<watch::Sender<bool>>,
     /// seg_id -> final (type=0) segment text. A later result for the same seg_id
     /// overwrites the previous one.
     final_segments: BTreeMap<i64, String>,
@@ -116,6 +126,8 @@ struct SyncState {
 
 pub struct XfyunStreamingASR {
     credentials: XfyunCredentials,
+    endpoint: String,
+    frame_send_timeout: Duration,
     task_spawner: Arc<dyn TaskSpawner>,
     state: ParkingMutex<SyncState>,
     writer: SharedWriter,
@@ -123,14 +135,6 @@ pub struct XfyunStreamingASR {
     /// Handshake result channel: the receive loop sends Ok on `action=started` and Err
     /// on error. `open_session` awaits it to fail fast on auth rejection.
     handshake_tx: ParkingMutex<Option<oneshot::Sender<Result<(), XfyunASRError>>>>,
-    /// Audio send queue: consume_pcm_chunk enqueues, a single worker sends serially to
-    /// preserve ordering.
-    audio_tx: ParkingMutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
-    /// Total audio frames queued plus in flight in the worker. send_last_frame must
-    /// wait for this to reach zero before sending `{"end": true}`, otherwise the end
-    /// frame arrives first and the server drops the tail audio as data after "end".
-    pending_sends: Arc<AtomicUsize>,
-    send_done: Arc<Notify>,
     partial_sink: ParkingMutex<Option<Arc<dyn TextStreamSink>>>,
 }
 
@@ -145,16 +149,37 @@ impl XfyunStreamingASR {
     ) -> Self {
         Self {
             credentials,
+            endpoint: DEFAULT_ENDPOINT.to_string(),
+            frame_send_timeout: FRAME_SEND_TIMEOUT,
             task_spawner,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
             final_rx: ParkingMutex::new(None),
             handshake_tx: ParkingMutex::new(None),
-            audio_tx: ParkingMutex::new(None),
-            pending_sends: Arc::new(AtomicUsize::new(0)),
-            send_done: Arc::new(Notify::new()),
             partial_sink: ParkingMutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_frame_send_timeout(mut self, timeout: Duration) -> Self {
+        self.frame_send_timeout = timeout;
+        self
+    }
+
+    pub fn audio_coverage(&self) -> (u64, u64) {
+        let st = self.state.lock();
+        (st.bytes_written, st.bytes_received)
+    }
+
+    pub fn is_stream_complete(&self) -> bool {
+        let st = self.state.lock();
+        st.send_error.is_none() && st.end_sent && st.bytes_written == st.bytes_received
     }
 
     pub fn set_partial_sink(&self, sink: Arc<dyn TextStreamSink>) {
@@ -164,7 +189,7 @@ impl XfyunStreamingASR {
     /// Builds the WebSocket URL with auth params:
     /// `wss://rtasr.xfyun.cn/v1/ws?appid=..&ts=..&signa=..&lang=cn`.
     pub fn connect_url(&self) -> String {
-        connect_url(&self.credentials)
+        connect_url_at(&self.endpoint, &self.credentials)
     }
 
     pub async fn open_session(self: &Arc<Self>) -> Result<(), XfyunASRError> {
@@ -189,31 +214,101 @@ impl XfyunStreamingASR {
         *self.writer.lock().await = Some(write);
 
         let (final_tx, final_rx) = oneshot::channel();
-        let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendItem>();
         let (handshake_tx, handshake_rx) = oneshot::channel();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
         {
             let mut st = self.state.lock();
             *st = SyncState::default();
             st.start = Some(Instant::now());
             st.final_tx = Some(final_tx);
+            st.send_tx = Some(send_tx);
+            st.cancel_tx = Some(cancel_tx);
         }
         *self.final_rx.lock() = Some(final_rx);
-        *self.audio_tx.lock() = Some(audio_tx);
         *self.handshake_tx.lock() = Some(handshake_tx);
-        self.pending_sends.store(0, Ordering::SeqCst);
 
-        // Audio worker: FIFO recv + serial send_binary, preserving chunk order.
+        // Send worker: drains audio chunks in strict FIFO order with realtime pacing
+        // before processing the end sentinel, so `{"end": true}` never overtakes audio.
         let writer_for_worker = Arc::clone(&self.writer);
-        let pending_for_worker = Arc::clone(&self.pending_sends);
-        let notify_for_worker = Arc::clone(&self.send_done);
+        let weak_self_for_worker = Arc::downgrade(self);
+        let frame_send_timeout = self.frame_send_timeout;
         let task_spawner = Arc::clone(&self.task_spawner);
         task_spawner.spawn(Box::pin(async move {
-            while let Some(chunk) = audio_rx.recv().await {
-                if let Err(e) = send_binary(&writer_for_worker, chunk).await {
-                    log::error!("[xfyun-asr] audio frame send failed: {e}");
-                }
-                if pending_for_worker.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    notify_for_worker.notify_waiters();
+            let mut clock = PacedSendClock::new();
+            loop {
+                let item = tokio::select! {
+                    maybe_item = send_rx.recv() => match maybe_item {
+                        Some(item) => item,
+                        None => break,
+                    },
+                    changed = cancel_rx.changed() => {
+                        if changed.is_err() || *cancel_rx.borrow_and_update() {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+
+                match item {
+                    SendItem::Audio(chunk) => {
+                        let Some(scheduled_start) = clock.wait_slot(&mut cancel_rx).await else {
+                            break;
+                        };
+                        let chunk_len = chunk.len();
+                        if let Err(ws_err) = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Binary(chunk.into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        {
+                            let err = XfyunASRError::ConnectionFailed(
+                                ws_err.into_message("websocket not open"),
+                            );
+                            log::error!("[xfyun-asr] audio frame send failed: {err}");
+                            if let Some(this) = weak_self_for_worker.upgrade() {
+                                this.record_send_failure(err);
+                            }
+                            // Stop immediately on failure so SendItem::End is never written
+                            // over an incomplete audio stream.
+                            break;
+                        }
+                        if let Some(this) = weak_self_for_worker.upgrade() {
+                            this.state.lock().bytes_written += chunk_len as u64;
+                        }
+                        clock.mark_sent(scheduled_start, chunk_len, BYTES_PER_MS, 1);
+                    }
+                    SendItem::End(ack_tx) => {
+                        let result = send_ws_message_with_timeout(
+                            &writer_for_worker,
+                            Message::Binary(br#"{"end": true}"#.to_vec().into()),
+                            frame_send_timeout,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        .map_err(|ws_err| {
+                            XfyunASRError::ConnectionFailed(
+                                ws_err.into_message("websocket not open"),
+                            )
+                        });
+                        match &result {
+                            Ok(()) => {
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.state.lock().end_sent = true;
+                                }
+                            }
+                            Err(err) => {
+                                log::error!("[xfyun-asr] end frame send failed: {err}");
+                                if let Some(this) = weak_self_for_worker.upgrade() {
+                                    this.record_send_failure(err.clone());
+                                }
+                            }
+                        }
+                        let _ = ack_tx.send(result);
+                        break;
+                    }
                 }
             }
         }));
@@ -277,58 +372,42 @@ impl XfyunStreamingASR {
     }
 
     pub async fn send_last_frame(&self) -> Result<(), XfyunASRError> {
-        // Wait for all in-flight audio frames, then send `{"end": true}` (800ms cap
-        // avoids waiting forever on an extreme network).
-        let drain_deadline = Instant::now() + Duration::from_millis(800);
-        while self.pending_sends.load(Ordering::SeqCst) > 0 {
-            let remaining = drain_deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                log::warn!(
-                    "[xfyun-asr] send_last_frame: pending {} 帧未发送完，超时强制继续",
-                    self.pending_sends.load(Ordering::SeqCst)
-                );
-                break;
-            }
-            let _ = tokio::time::timeout(remaining, self.send_done.notified()).await;
-        }
-
-        // Flush the tail audio shorter than one chunk.
-        let leftover = {
+        let (end_tx, end_rx) = oneshot::channel();
+        {
             let mut st = self.state.lock();
-            if st.pending_audio.is_empty() {
-                None
-            } else {
-                Some(std::mem::take(&mut st.pending_audio))
+            if let Some(ref error) = st.send_error {
+                return Err(error.clone());
             }
-        };
-        if let Some(buf) = leftover {
-            let len = buf.len() as u64;
-            self.state.lock().bytes_sent += len;
-            let Some(tx) = self.audio_tx.lock().as_ref().cloned() else {
+            let Some(tx) = st.send_tx.take() else {
                 return Err(XfyunASRError::ConnectionFailed("websocket not open".into()));
             };
-            self.pending_sends.fetch_add(1, Ordering::SeqCst);
-            if tx.send(buf).is_err() {
-                self.pending_sends.fetch_sub(1, Ordering::SeqCst);
+            st.ending = true;
+            if !st.pending_audio.is_empty() {
+                let leftover = std::mem::take(&mut st.pending_audio);
+                if tx.send(SendItem::Audio(leftover)).is_err() {
+                    return Err(st.send_error.clone().unwrap_or_else(|| {
+                        XfyunASRError::ConnectionFailed("audio send queue closed".into())
+                    }));
+                }
+            }
+            if tx.send(SendItem::End(end_tx)).is_err() {
+                return Err(st.send_error.clone().unwrap_or_else(|| {
+                    XfyunASRError::ConnectionFailed("audio send queue closed".into())
+                }));
             }
         }
 
-        // Wait for the tail audio to be sent too, then send the end marker (contents
-        // per the docs; must be a binary message).
-        let drain_deadline = Instant::now() + Duration::from_millis(800);
-        while self.pending_sends.load(Ordering::SeqCst) > 0 {
-            let remaining = drain_deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                log::warn!(
-                    "[xfyun-asr] send_last_frame: tail {} 帧未发送完，超时强制结束",
-                    self.pending_sends.load(Ordering::SeqCst)
-                );
-                break;
+        match end_rx.await {
+            Ok(result) => result,
+            Err(_) => {
+                let error = self.state.lock().send_error.clone().unwrap_or_else(|| {
+                    XfyunASRError::ConnectionFailed(
+                        "audio send worker stopped before end frame".into(),
+                    )
+                });
+                Err(error)
             }
-            let _ = tokio::time::timeout(remaining, self.send_done.notified()).await;
         }
-
-        send_binary(&self.writer, br#"{"end": true}"#.to_vec()).await
     }
 
     pub async fn await_final_result(&self) -> Result<RawTranscript, XfyunASRError> {
@@ -359,20 +438,18 @@ impl XfyunStreamingASR {
     }
 
     pub fn cancel(&self) {
-        self.state.lock().pending_audio.clear();
+        {
+            let mut st = self.state.lock();
+            st.pending_audio.clear();
+            st.send_tx = None;
+            if let Some(tx) = st.cancel_tx.as_ref() {
+                let _ = tx.send(true);
+            }
+        }
         // Release the handshake channel: if open_session is still waiting for started,
         // it immediately receives Err and returns.
         *self.handshake_tx.lock() = None;
-        // Closing the audio queue -> worker.recv() returns None -> exits, no longer
-        // holding the writer.
-        *self.audio_tx.lock() = None;
-        let writer = Arc::clone(&self.writer);
-        self.task_spawner.spawn(Box::pin(async move {
-            let mut guard = writer.lock().await;
-            if let Some(mut ws) = guard.take() {
-                let _ = ws.close().await;
-            }
-        }));
+        self.close_writer();
         self.signal_error(XfyunASRError::NoFinalResult);
     }
 
@@ -505,45 +582,92 @@ impl XfyunStreamingASR {
     /// otherwise error — consistent with the Volcengine / Bailian policy of "not
     /// losing recognized text when the server disconnects before final".
     fn finish_with_partial_or_error(&self, error: XfyunASRError) {
-        let has_partial = {
-            let st = self.state.lock();
-            !st.last_result_text.trim().is_empty() || !st.partial_segments.is_empty()
-        };
-        if has_partial {
-            self.finish_success();
-        } else {
-            self.finish_error(error);
-        }
+        self.finish_with_partial_or_error_inner(error, false);
     }
 
-    fn finish_success(&self) {
-        let (tx, text, duration_ms) = {
-            let mut st = self.state.lock();
-            if st.finished {
-                return;
-            }
-            st.finished = true;
-            st.pending_audio.clear();
-            let text = if st.final_segments.is_empty() {
-                st.last_result_text.clone()
-            } else {
-                let segments: Vec<String> = st.final_segments.values().cloned().collect();
-                super::mimo::join_transcript_chunks(&segments)
-            };
-            let duration_ms = if st.bytes_sent > 0 {
-                st.bytes_sent / BYTES_PER_MS
-            } else {
-                st.start
-                    .map(|start| start.elapsed().as_millis() as u64)
-                    .unwrap_or_default()
-            };
-            (st.final_tx.take(), text, duration_ms)
-        };
-        *self.audio_tx.lock() = None;
-        if let Some(tx) = tx {
-            let _ = tx.send(Ok(RawTranscript { text, duration_ms }));
+    fn finish_with_partial_or_error_inner(&self, error: XfyunASRError, is_send_failure: bool) {
+        enum Outcome {
+            AlreadyFinished,
+            Partial {
+                tx: Option<oneshot::Sender<Result<RawTranscript, XfyunASRError>>>,
+                text: String,
+                duration_ms: u64,
+            },
+            Error {
+                tx: Option<oneshot::Sender<Result<RawTranscript, XfyunASRError>>>,
+                error: XfyunASRError,
+            },
         }
-        self.close_writer();
+        // Resolve state, send_error, finished flag, and final_tx in one critical section so
+        // concurrent cancel() cannot intercept final_tx ahead of partial salvage.
+        let outcome = {
+            let mut st = self.state.lock();
+            if is_send_failure && st.send_error.is_none() {
+                st.send_error = Some(error.clone());
+            }
+            if st.finished {
+                st.send_tx = None;
+                if is_send_failure {
+                    st.pending_audio.clear();
+                }
+                Outcome::AlreadyFinished
+            } else {
+                st.finished = true;
+                st.pending_audio.clear();
+                st.send_tx = None;
+                if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                    let _ = cancel_tx.send(true);
+                }
+                let has_partial =
+                    !st.last_result_text.trim().is_empty() || !st.partial_segments.is_empty();
+                let tx = st.final_tx.take();
+                if has_partial {
+                    let text = if st.final_segments.is_empty() {
+                        st.last_result_text.clone()
+                    } else {
+                        let segments: Vec<String> = st.final_segments.values().cloned().collect();
+                        super::mimo::join_transcript_chunks(&segments)
+                    };
+                    let audio_bytes = st.bytes_written.max(st.bytes_received);
+                    let duration_ms = if audio_bytes > 0 {
+                        audio_bytes / BYTES_PER_MS
+                    } else {
+                        st.start
+                            .map(|start| start.elapsed().as_millis() as u64)
+                            .unwrap_or_default()
+                    };
+                    Outcome::Partial {
+                        tx,
+                        text,
+                        duration_ms,
+                    }
+                } else {
+                    Outcome::Error { tx, error }
+                }
+            }
+        };
+        match outcome {
+            Outcome::AlreadyFinished => {}
+            Outcome::Partial {
+                tx,
+                text,
+                duration_ms,
+            } => {
+                if let Some(tx) = tx {
+                    let _ = tx.send(Ok(RawTranscript { text, duration_ms }));
+                }
+                self.close_writer();
+            }
+            Outcome::Error { tx, error } => {
+                if let Some(handshake_tx) = self.handshake_tx.lock().take() {
+                    let _ = handshake_tx.send(Err(error.clone()));
+                }
+                if let Some(tx) = tx {
+                    let _ = tx.send(Err(error));
+                }
+                self.close_writer();
+            }
+        }
     }
 
     fn signal_error(&self, error: XfyunASRError) {
@@ -553,12 +677,19 @@ impl XfyunStreamingASR {
                 return;
             }
             st.finished = true;
+            st.send_tx = None;
+            if let Some(cancel_tx) = st.cancel_tx.as_ref() {
+                let _ = cancel_tx.send(true);
+            }
             st.final_tx.take()
         };
-        *self.audio_tx.lock() = None;
         if let Some(tx) = tx {
             let _ = tx.send(Err(error));
         }
+    }
+
+    fn record_send_failure(&self, error: XfyunASRError) {
+        self.finish_with_partial_or_error_inner(error, true);
     }
 
     fn finish_error(&self, error: XfyunASRError) {
@@ -587,34 +718,25 @@ impl XfyunStreamingASR {
 
 impl AudioConsumer for XfyunStreamingASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
-        let chunks: Vec<Vec<u8>> = {
-            let mut st = self.state.lock();
-            if !st.started || st.finished {
-                return;
-            }
-            st.pending_audio.extend_from_slice(pcm);
-            let mut out = Vec::new();
-            while st.pending_audio.len() >= TARGET_AUDIO_CHUNK_BYTES {
-                let chunk: Vec<u8> = st.pending_audio.drain(..TARGET_AUDIO_CHUNK_BYTES).collect();
-                st.bytes_sent += chunk.len() as u64;
-                out.push(chunk);
-            }
-            out
-        };
-        if chunks.is_empty() {
+        let mut st = self.state.lock();
+        if !st.started || st.ending {
             return;
         }
-        let Some(tx) = self.audio_tx.lock().as_ref().cloned() else {
+        st.bytes_received = st.bytes_received.saturating_add(pcm.len() as u64);
+        if st.finished || st.send_error.is_some() {
+            return;
+        }
+        let Some(tx) = st.send_tx.clone() else {
             return;
         };
+        st.pending_audio.extend_from_slice(pcm);
+        let mut chunks = Vec::new();
+        while st.pending_audio.len() >= TARGET_AUDIO_CHUNK_BYTES {
+            let chunk: Vec<u8> = st.pending_audio.drain(..TARGET_AUDIO_CHUNK_BYTES).collect();
+            chunks.push(chunk);
+        }
         for chunk in chunks {
-            // pending_sends must be incremented before enqueueing: otherwise the worker
-            // could recv + send + decrement first, underflowing the usize counter.
-            self.pending_sends.fetch_add(1, Ordering::SeqCst);
-            if tx.send(chunk).is_err() {
-                if self.pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    self.send_done.notify_waiters();
-                }
+            if tx.send(SendItem::Audio(chunk)).is_err() {
                 log::warn!("[xfyun-asr] audio queue closed; dropping subsequent frames");
                 return;
             }
@@ -622,28 +744,21 @@ impl AudioConsumer for XfyunStreamingASR {
     }
 }
 
-async fn send_binary(writer: &SharedWriter, data: Vec<u8>) -> Result<(), XfyunASRError> {
-    let mut guard = writer.lock().await;
-    let Some(ws) = guard.as_mut() else {
-        return Err(XfyunASRError::ConnectionFailed(
-            "websocket not open".to_string(),
-        ));
-    };
-    ws.send(Message::Binary(data.into()))
-        .await
-        .map_err(|e| XfyunASRError::ConnectionFailed(e.to_string()))
-}
-
-fn connect_url(credentials: &XfyunCredentials) -> String {
+fn connect_url_at(endpoint: &str, credentials: &XfyunCredentials) -> String {
     let ts = chrono::Utc::now().timestamp().to_string();
     let signa = compute_signa(&credentials.app_id, &credentials.api_key, &ts);
-    let mut url = url::Url::parse(DEFAULT_ENDPOINT).expect("static endpoint parses");
+    let mut url = url::Url::parse(endpoint).expect("endpoint parses");
     url.query_pairs_mut()
         .append_pair("appid", credentials.app_id.trim())
         .append_pair("ts", &ts)
         .append_pair("signa", &signa)
         .append_pair("lang", DEFAULT_LANG);
     url.to_string()
+}
+
+#[cfg(test)]
+fn connect_url(credentials: &XfyunCredentials) -> String {
+    connect_url_at(DEFAULT_ENDPOINT, credentials)
 }
 
 /// `signa = Base64(HmacSHA1(MD5(appid + ts), apiKey))`, matching the Xfyun Open
@@ -934,5 +1049,393 @@ mod tests {
         // Already taken: repeated calls neither panic nor notify again.
         asr.finish_error(XfyunASRError::ConnectionFailed("again".into()));
         assert!(asr.handshake_tx.lock().is_none());
+    }
+
+    async fn spawn_loopback_ws<F, Fut>(handler: F) -> (String, tokio::task::JoinHandle<()>)
+    where
+        F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut
+            + Send
+            + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let addr = listener.local_addr().expect("local addr");
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept client");
+            let ws = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept ws handshake");
+            handler(ws).await;
+        });
+        (format!("ws://{addr}"), handle)
+    }
+
+    fn loopback_asr(endpoint: String) -> Arc<XfyunStreamingASR> {
+        Arc::new(
+            XfyunStreamingASR::new(XfyunCredentials {
+                app_id: "test-app".into(),
+                api_key: "test-key".into(),
+            })
+            .with_endpoint(endpoint),
+        )
+    }
+
+    fn xfyun_result_json(text: &str, is_final: bool) -> String {
+        let data = serde_json::json!({
+            "seg_id": 0,
+            "cn": {
+                "st": {
+                    "type": if is_final { "0" } else { "1" },
+                    "rt": [{"ws": [{"cw": [{"w": text}]}]}]
+                }
+            }
+        });
+        serde_json::json!({
+            "action": "result",
+            "code": "0",
+            "data": data.to_string()
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn buffered_audio_is_paced_and_precedes_end_frame() {
+        let frames = Arc::new(ParkingMutex::new(Vec::<(Instant, Vec<u8>)>::new()));
+        let frames_srv = Arc::clone(&frames);
+        let (endpoint, server_handle) = spawn_loopback_ws(move |mut ws| async move {
+            ws.send(Message::Text(r#"{"action":"started","code":"0"}"#.into()))
+                .await
+                .unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Binary(data) = msg {
+                    let bytes = data.to_vec();
+                    let is_end = bytes == br#"{"end": true}"#;
+                    frames_srv.lock().push((Instant::now(), bytes));
+                    if is_end {
+                        ws.send(Message::Text(xfyun_result_json("测试完成", true).into()))
+                            .await
+                            .unwrap();
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+
+        let asr = loopback_asr(endpoint);
+        asr.open_session().await.expect("open session");
+
+        let mut payload = vec![0x11u8; TARGET_AUDIO_CHUNK_BYTES * 5 + 400];
+        for (idx, byte) in payload.iter_mut().enumerate() {
+            *byte = (idx % 251) as u8;
+        }
+        asr.consume_pcm_chunk(&payload);
+        asr.send_last_frame().await.expect("send_last_frame");
+
+        let transcript = asr.await_final_result().await.expect("final transcript");
+        assert_eq!(transcript.text, "测试完成");
+        server_handle.await.expect("server join");
+
+        let recorded = frames.lock();
+        assert_eq!(recorded.len(), 7, "5 chunks + 1 leftover + 1 end marker");
+        for i in 0..5 {
+            assert_eq!(recorded[i].1.len(), TARGET_AUDIO_CHUNK_BYTES);
+        }
+        assert_eq!(recorded[5].1.len(), 400);
+        assert_eq!(recorded[6].1.as_slice(), br#"{"end": true}"#);
+
+        let total_pacing_elapsed = recorded[5].0.saturating_duration_since(recorded[0].0);
+        assert!(
+            total_pacing_elapsed >= Duration::from_millis(140),
+            "expected ~200 ms pacing across 6 audio frames, got {total_pacing_elapsed:?}"
+        );
+        for i in 0..4 {
+            let delta = recorded[i + 1].0.saturating_duration_since(recorded[i].0);
+            assert!(
+                delta >= Duration::from_millis(25),
+                "expected ~40 ms pacing between frame {i} and {}, got {delta:?}",
+                i + 1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn end_frame_waits_for_delayed_send_worker_instead_of_overtaking_audio() {
+        let frames = Arc::new(ParkingMutex::new(Vec::<Vec<u8>>::new()));
+        let frames_srv = Arc::clone(&frames);
+        let (endpoint, server_handle) = spawn_loopback_ws(move |mut ws| async move {
+            ws.send(Message::Text(r#"{"action":"started","code":"0"}"#.into()))
+                .await
+                .unwrap();
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Binary(data) = msg {
+                    let bytes = data.to_vec();
+                    let is_end = bytes == br#"{"end": true}"#;
+                    frames_srv.lock().push(bytes);
+                    if is_end {
+                        ws.send(Message::Text(xfyun_result_json("长缓冲完成", true).into()))
+                            .await
+                            .unwrap();
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+
+        let asr = loopback_asr(endpoint);
+        asr.open_session().await.expect("open session");
+
+        // 25 full chunks + 320 B tail spans ~1,000 ms of realtime pacing (> old 800 ms cap).
+        let payload = vec![0x22u8; TARGET_AUDIO_CHUNK_BYTES * 25 + 320];
+        asr.consume_pcm_chunk(&payload);
+        asr.send_last_frame().await.expect("send_last_frame");
+
+        let transcript = asr.await_final_result().await.expect("final transcript");
+        assert_eq!(transcript.text, "长缓冲完成");
+        server_handle.await.expect("server join");
+
+        let recorded = frames.lock();
+        assert_eq!(recorded.len(), 27, "25 chunks + leftover + end marker");
+        assert_eq!(recorded.last().unwrap().as_slice(), br#"{"end": true}"#);
+        let audio_bytes: usize = recorded[..26].iter().map(Vec::len).sum();
+        assert_eq!(audio_bytes, payload.len());
+    }
+
+    #[tokio::test]
+    async fn audio_frame_send_failure_stops_worker_and_fails_send_last_frame_without_end() {
+        let frames = Arc::new(ParkingMutex::new(Vec::<Vec<u8>>::new()));
+        let frame0_seen = Arc::new(tokio::sync::Notify::new());
+        let shutdown_srv = Arc::new(tokio::sync::Notify::new());
+
+        let frames_srv = Arc::clone(&frames);
+        let frame0_seen_srv = Arc::clone(&frame0_seen);
+        let shutdown_srv_task = Arc::clone(&shutdown_srv);
+
+        let (endpoint, server_handle) = spawn_loopback_ws(move |mut ws| async move {
+            ws.send(Message::Text(r#"{"action":"started","code":"0"}"#.into()))
+                .await
+                .unwrap();
+            loop {
+                tokio::select! {
+                    msg = ws.next() => match msg {
+                        Some(Ok(Message::Binary(data))) => {
+                            let bytes = data.to_vec();
+                            frames_srv.lock().push(bytes);
+                            frame0_seen_srv.notify_waiters();
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    },
+                    _ = shutdown_srv_task.notified() => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+
+        let asr = Arc::new(
+            XfyunStreamingASR::new(XfyunCredentials {
+                app_id: "test-app".into(),
+                api_key: "test-key".into(),
+            })
+            .with_endpoint(endpoint)
+            .with_frame_send_timeout(Duration::from_millis(60)),
+        );
+        asr.open_session().await.expect("open session");
+
+        asr.consume_pcm_chunk(&vec![0x33u8; TARGET_AUDIO_CHUNK_BYTES]);
+        tokio::time::timeout(Duration::from_secs(2), frame0_seen.notified())
+            .await
+            .expect("frame 0 arrives");
+
+        // Case A: fail during send_last_frame without partial text -> both send_last_frame and
+        // await_final_result error, and `{"end": true}` is never transmitted even after lock release.
+        let writer_guard = asr.writer.lock().await;
+        asr.consume_pcm_chunk(&vec![0x44u8; TARGET_AUDIO_CHUNK_BYTES + 256]);
+        let send_err = asr
+            .send_last_frame()
+            .await
+            .expect_err("stalled frame must fail send_last_frame");
+        assert!(matches!(send_err, XfyunASRError::ConnectionFailed(_)));
+        drop(writer_guard);
+
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(asr.await_final_result().await.is_err());
+        {
+            let recorded = frames.lock();
+            assert_eq!(recorded.len(), 1);
+            assert!(
+                recorded.iter().all(|f| f.as_slice() != br#"{"end": true}"#),
+                "end marker must not be sent after audio frame failure"
+            );
+        }
+        shutdown_srv.notify_waiters();
+        server_handle.await.expect("server join");
+
+        // Case B: when interim text already arrived before frame write failure, send_last_frame
+        // still returns Err (so long recordings replay) while await_final_result salvages partial.
+        let frames_b = Arc::new(ParkingMutex::new(Vec::<Vec<u8>>::new()));
+        let frame0_b = Arc::new(tokio::sync::Notify::new());
+        let shutdown_b = Arc::new(tokio::sync::Notify::new());
+        let frames_b_srv = Arc::clone(&frames_b);
+        let frame0_b_srv = Arc::clone(&frame0_b);
+        let shutdown_b_srv = Arc::clone(&shutdown_b);
+
+        let (endpoint_b, server_handle_b) = spawn_loopback_ws(move |mut ws| async move {
+            ws.send(Message::Text(r#"{"action":"started","code":"0"}"#.into()))
+                .await
+                .unwrap();
+            loop {
+                tokio::select! {
+                    msg = ws.next() => match msg {
+                        Some(Ok(Message::Binary(data))) => {
+                            frames_b_srv.lock().push(data.to_vec());
+                            ws.send(Message::Text(xfyun_result_json("部分文本", false).into()))
+                                .await
+                                .unwrap();
+                            frame0_b_srv.notify_waiters();
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    },
+                    _ = shutdown_b_srv.notified() => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+
+        let asr_b = Arc::new(
+            XfyunStreamingASR::new(XfyunCredentials {
+                app_id: "test-app".into(),
+                api_key: "test-key".into(),
+            })
+            .with_endpoint(endpoint_b)
+            .with_frame_send_timeout(Duration::from_millis(60)),
+        );
+        struct PartialSignalSink {
+            notify: Arc<tokio::sync::Notify>,
+            texts: ParkingMutex<Vec<String>>,
+        }
+        impl TextStreamSink for PartialSignalSink {
+            fn publish(&self, chunk: TextStreamChunk) -> Result<(), crate::BackendError> {
+                self.texts.lock().push(chunk.text);
+                self.notify.notify_waiters();
+                Ok(())
+            }
+        }
+        let partial_seen = Arc::new(tokio::sync::Notify::new());
+        let sink_b = Arc::new(PartialSignalSink {
+            notify: Arc::clone(&partial_seen),
+            texts: ParkingMutex::new(Vec::new()),
+        });
+        asr_b.set_partial_sink(sink_b.clone());
+        asr_b.open_session().await.expect("open session B");
+
+        asr_b.consume_pcm_chunk(&vec![0x55u8; TARGET_AUDIO_CHUNK_BYTES]);
+        tokio::time::timeout(Duration::from_secs(2), frame0_b.notified())
+            .await
+            .expect("frame 0 B arrives");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if sink_b.texts.lock().last().map(String::as_str) == Some("部分文本") {
+                    break;
+                }
+                partial_seen.notified().await;
+            }
+        })
+        .await
+        .expect("partial snapshot recorded");
+
+        let writer_guard_b = asr_b.writer.lock().await;
+        asr_b.consume_pcm_chunk(&vec![0x66u8; TARGET_AUDIO_CHUNK_BYTES]);
+        assert!(asr_b.send_last_frame().await.is_err());
+        drop(writer_guard_b);
+
+        let salvaged = asr_b
+            .await_final_result()
+            .await
+            .expect("short session fallback salvages partial");
+        assert_eq!(salvaged.text, "部分文本");
+        assert!(frames_b
+            .lock()
+            .iter()
+            .all(|f| f.as_slice() != br#"{"end": true}"#));
+        shutdown_b.notify_waiters();
+        server_handle_b.await.expect("server join B");
+    }
+
+    #[tokio::test]
+    async fn cancel_wakes_paced_send_worker_promptly() {
+        let frames = Arc::new(ParkingMutex::new(Vec::<Vec<u8>>::new()));
+        let frame0_seen = Arc::new(tokio::sync::Notify::new());
+        let shutdown_srv = Arc::new(tokio::sync::Notify::new());
+        let frames_srv = Arc::clone(&frames);
+        let frame0_seen_srv = Arc::clone(&frame0_seen);
+        let shutdown_srv_task = Arc::clone(&shutdown_srv);
+
+        let (endpoint, server_handle) = spawn_loopback_ws(move |mut ws| async move {
+            ws.send(Message::Text(r#"{"action":"started","code":"0"}"#.into()))
+                .await
+                .unwrap();
+            loop {
+                tokio::select! {
+                    msg = ws.next() => match msg {
+                        Some(Ok(Message::Binary(data))) => {
+                            frames_srv.lock().push(data.to_vec());
+                            frame0_seen_srv.notify_waiters();
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    },
+                    _ = shutdown_srv_task.notified() => {
+                        let _ = ws.close(None).await;
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+
+        let asr = loopback_asr(endpoint);
+        asr.open_session().await.expect("open session");
+
+        // 100 chunks = ~4,000 ms of paced audio queued; cancel must interrupt pacing promptly.
+        asr.consume_pcm_chunk(&vec![0x77u8; TARGET_AUDIO_CHUNK_BYTES * 100]);
+        tokio::time::timeout(Duration::from_secs(2), frame0_seen.notified())
+            .await
+            .expect("frame 0 arrives");
+
+        let started_cancel = Instant::now();
+        asr.cancel();
+        let res = tokio::time::timeout(Duration::from_millis(250), asr.await_final_result())
+            .await
+            .expect("cancel resolves await_final_result promptly");
+        assert!(matches!(res, Err(XfyunASRError::NoFinalResult)));
+        assert!(started_cancel.elapsed() < Duration::from_millis(250));
+        assert!(asr.send_last_frame().await.is_err());
+
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let received_count = frames.lock().len();
+        assert!(
+            received_count <= 5,
+            "expected worker to stop promptly after cancel, received {received_count} frames"
+        );
+        assert!(frames
+            .lock()
+            .iter()
+            .all(|f| f.as_slice() != br#"{"end": true}"#));
+
+        shutdown_srv.notify_waiters();
+        server_handle.await.expect("server join");
     }
 }

@@ -435,7 +435,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut bytes = [0; 8192];
-            socket.read(&mut bytes).await.unwrap();
+            assert!(socket.read(&mut bytes).await.unwrap() > 0);
             // The client must close its pending response when the source times out.
             assert_eq!(socket.read(&mut bytes).await.unwrap(), 0);
         });

@@ -1,7 +1,8 @@
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-const read = (path) => readFileSync(new URL('../' + path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const read = (path) =>
+  readFileSync(new URL('../' + path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const commands = read('src-tauri/src/commands/siwc.rs');
 assert(/app\s*\.shell\(\)\s*\.open\(launch\.authorization_url\(\),\s*None\)/.test(commands));
 assert(commands.includes('siwc_authorization_lease(true)'));
@@ -10,7 +11,7 @@ assert.equal((commands.match(/ensure_main_window/g) || []).length, 3);
 const registry = read('src-tauri/src/lib.rs');
 for (const name of ['siwc_status', 'siwc_models', 'siwc_action'])
   assert.equal((registry.match(new RegExp('commands::' + name + ',', 'g')) || []).length, 2);
-const runtime = read('android/kotlin/OpenLessRuntimeService.kt');
+const runtime = read('../android/kotlin/OpenLessRuntimeService.kt');
 for (const method of ['acquireAuthorization', 'releaseAuthorization'])
   assert(new RegExp('@androidx.annotation.Keep\\s+@JvmStatic fun ' + method).test(runtime));
 // IME teardown now uses the same current-demand reconciliation as JNI releases;
@@ -21,11 +22,11 @@ assert(runtime.includes('if (!runtimeRequestedLocked())'));
 assert(runtime.includes('mainHandler.post'));
 assert(runtime.includes('synchronized(demandLock)'));
 assert(
-  read('android/kotlin/OpenLessImeService.kt').includes(
+  read('../android/kotlin/OpenLessImeService.kt').includes(
     'OpenLessRuntimeService.setImeRequested(this, false)',
   ),
 );
-const assets = read('harmony/rust/src/siwc.rs');
+const assets = read('../harmony/rust/src/siwc.rs');
 assert(assets.includes('OH_Asset_Update'));
 assert(assets.includes('blob(VERSION, previous)'));
 assert(assets.includes('number(SYNC, 0)'));
@@ -40,7 +41,7 @@ console.log(
 );
 
 // Exercise the actual manifest merger on an existing generated service, without disk writes.
-const mergeSource = read('scripts/merge-android-overlay-manifest.mjs')
+const mergeSource = read('../android/scripts/merge-android-overlay-manifest.mjs')
   .replace(/^#!.*\n/, '')
   .replace(/^import .*;\n/gm, '')
   .replaceAll('import.meta.url', JSON.stringify('file:///fixture/merge.mjs'));

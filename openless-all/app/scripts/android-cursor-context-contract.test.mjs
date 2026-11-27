@@ -18,9 +18,9 @@ function braceBody(source, signature) {
   assert.fail(`missing closing brace: ${signature}`);
 }
 
-const ime = read('../android/kotlin/OpenLessImeService.kt');
-const policy = read('../android/kotlin/ImePrivacyPolicy.kt');
-const accessibility = read('../android/kotlin/OpenLessAccessibilityService.kt');
+const ime = read('../../android/kotlin/OpenLessImeService.kt');
+const policy = read('../../android/kotlin/ImePrivacyPolicy.kt');
+const accessibility = read('../../android/kotlin/OpenLessAccessibilityService.kt');
 const bridge = read('../src-tauri/src/android/native_bridge.rs');
 const dictationContext = read('../crates/openless-core/src/dictation_context.rs');
 const types = read('../crates/openless-core/src/types.rs');

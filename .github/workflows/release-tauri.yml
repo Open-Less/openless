@@ -206,7 +206,18 @@ jobs:
       - name: Configure macOS build environment
         if: startsWith(matrix.platform, 'macos')
         working-directory: openless-all/app
-        run: bash scripts/macos-build-env.sh
+        run: |
+          set -euo pipefail
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../macos/scripts/macos-build-env.sh ]; then
+            environment_script=../macos/scripts/macos-build-env.sh
+          elif [ -f scripts/macos-build-env.sh ]; then
+            environment_script=scripts/macos-build-env.sh
+          else
+            echo "::error::Missing source input: ../macos/scripts/macos-build-env.sh or scripts/macos-build-env.sh" >&2
+            exit 1
+          fi
+          bash "$environment_script"
 
       - name: Cache Cargo
         if: matrix.platform == 'windows-latest'
@@ -239,7 +250,16 @@ jobs:
         if: matrix.platform == 'windows-latest'
         working-directory: 'openless-all/app'
         shell: pwsh
-        run: ./scripts/prepare-windows-sherpa.ps1
+        run: |
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if (Test-Path -LiteralPath '../windows/scripts/prepare-windows-sherpa.ps1' -PathType Leaf) {
+            $prepareScript = '../windows/scripts/prepare-windows-sherpa.ps1'
+          } elseif (Test-Path -LiteralPath 'scripts/prepare-windows-sherpa.ps1' -PathType Leaf) {
+            $prepareScript = 'scripts/prepare-windows-sherpa.ps1'
+          } else {
+            throw "Missing source input: ../windows/scripts/prepare-windows-sherpa.ps1 or scripts/prepare-windows-sherpa.ps1"
+          }
+          & $prepareScript
 
       - name: Install npm deps
         timeout-minutes: 15
@@ -343,7 +363,18 @@ jobs:
           INSTALL: '0'        # CI must not install to /Applications or reset TCC
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bash scripts/build-mac.sh
+        run: |
+          set -euo pipefail
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../macos/scripts/build-mac.sh ]; then
+            build_script=../macos/scripts/build-mac.sh
+          elif [ -f scripts/build-mac.sh ]; then
+            build_script=scripts/build-mac.sh
+          else
+            echo "::error::Missing source input: ../macos/scripts/build-mac.sh or scripts/build-mac.sh" >&2
+            exit 1
+          fi
+          bash "$build_script"
 
       - name: Upload macOS Cargo timings
         if: always() && startsWith(matrix.platform, 'macos')
@@ -363,6 +394,14 @@ jobs:
         shell: pwsh
         working-directory: 'openless-all/app'
         run: |
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if (Test-Path -LiteralPath '../windows/scripts/windows-ime-build.ps1' -PathType Leaf) {
+            $imeBuildScript = '../windows/scripts/windows-ime-build.ps1'
+          } elseif (Test-Path -LiteralPath 'scripts/windows-ime-build.ps1' -PathType Leaf) {
+            $imeBuildScript = 'scripts/windows-ime-build.ps1'
+          } else {
+            throw "Missing source input: ../windows/scripts/windows-ime-build.ps1 or scripts/windows-ime-build.ps1"
+          }
           $appRoot = (Resolve-Path .).Path
           foreach ($t in @(
             @{ Platform = 'x64';   Folder = 'x64'; EnvName = 'OPENLESS_IME_DLL_X64' },
@@ -370,7 +409,7 @@ jobs:
           )) {
             $out = Join-Path $appRoot "src-tauri\target\windows-ime-msvc\$($t.Folder)\Release"
             $obj = Join-Path $appRoot "src-tauri\target\windows-ime-msvc\obj\$($t.Folder)\Release"
-            ./scripts/windows-ime-build.ps1 -Configuration Release -Platform $t.Platform -OutputDirectory $out -IntermediateDirectory $obj
+            & $imeBuildScript -Configuration Release -Platform $t.Platform -OutputDirectory $out -IntermediateDirectory $obj
             if ($LASTEXITCODE -ne 0) {
               throw "OpenLessIme $($t.Platform) build failed with exit $LASTEXITCODE"
             }
@@ -381,16 +420,6 @@ jobs:
             "$($t.EnvName)=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             Write-Host "[ok] built $dll (exported $($t.EnvName))"
 
-            # bundle.resources references src-tauri/openless-ime-payload/{x64,x86}/OpenLessIme.dll
-            # (the repo commits 0-byte placeholders so mac local builds can also resolve).
-            # Overwrite the placeholders with the real dlls so NSIS / MSI install real files;
-            # the NSIS hook's regsvr32 also registers the 64/32-bit COM classes under
-            # HKLM\Software\Classes\CLSID on both the KEY_WOW64_64KEY / KEY_WOW64_32KEY
-            # views (both are checked by windows_ime_profile.rs).
-            $payloadDir = Join-Path $appRoot "src-tauri\openless-ime-payload\$($t.Folder)"
-            New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
-            Copy-Item -Force -Path $dll -Destination (Join-Path $payloadDir 'OpenLessIme.dll')
-            Write-Host "[ok] copied real $($t.Folder) dll into bundle.resources payload path"
           }
 
       # ── Windows tauri build: keep the bash shell, because PowerShell invoking external
@@ -561,7 +590,7 @@ jobs:
         run: |
           # Fetch only the pinned script: a sparse checkout still visits unrelated
           # gitlinks during auth cleanup, including optional vendor runtimes.
-          $scriptPath = 'openless-all/app/scripts/windows-ime-install-smoke.ps1'
+          $scriptPath = 'openless-all/windows/scripts/windows-ime-install-smoke.ps1'
           $encoded = gh api "repos/$env:GITHUB_REPOSITORY/contents/$scriptPath" --method GET -f "ref=$env:TOOLING_SHA" --jq '.content'
           if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch pinned installer smoke tooling.' }
           $bytes = [Convert]::FromBase64String(($encoded -join ''))
@@ -580,7 +609,7 @@ jobs:
           # after the NSIS install/uninstall has loaded the TSF DLLs. /norestart
           # suppresses an OS reboot, not Restart Manager application shutdown.
           # Keep both real installer/registry checks; restore the machine policy.
-          $smokeScript = Join-Path $env:GITHUB_WORKSPACE 'release-tooling\openless-all\app\scripts\windows-ime-install-smoke.ps1'
+          $smokeScript = Join-Path $env:GITHUB_WORKSPACE 'release-tooling\openless-all\windows\scripts\windows-ime-install-smoke.ps1'
           $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer'
           $policyName = 'DisableAutomaticApplicationShutdown'
           $previous = (Get-ItemProperty -LiteralPath $policy -Name $policyName -ErrorAction SilentlyContinue).$policyName
@@ -728,9 +757,27 @@ jobs:
           version=$(node -p "require('./package.json').version")
           node scripts/desktop-version-contract.test.mjs "$version"
           codesign -dv --verbose=4 "$app" 2> "$evidence/signature.txt"
-          swift scripts/macos-artifact-acceptance.swift "$app" "$version" "$evidence" || status=$?
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../macos/scripts/macos-artifact-acceptance.swift ]; then
+            acceptance_script=../macos/scripts/macos-artifact-acceptance.swift
+          elif [ -f scripts/macos-artifact-acceptance.swift ]; then
+            acceptance_script=scripts/macos-artifact-acceptance.swift
+          else
+            echo "::error::Missing source input: ../macos/scripts/macos-artifact-acceptance.swift or scripts/macos-artifact-acceptance.swift" >&2
+            exit 1
+          fi
+          swift "$acceptance_script" "$app" "$version" "$evidence" || status=$?
           if [[ $status -eq 0 ]]; then
-            python3 scripts/macos-initialized-style-acceptance.py "$evidence" || status=$?
+            # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+            if [ -f ../macos/scripts/macos-initialized-style-acceptance.py ]; then
+              style_script=../macos/scripts/macos-initialized-style-acceptance.py
+            elif [ -f scripts/macos-initialized-style-acceptance.py ]; then
+              style_script=scripts/macos-initialized-style-acceptance.py
+            else
+              echo "::error::Missing source input: ../macos/scripts/macos-initialized-style-acceptance.py or scripts/macos-initialized-style-acceptance.py" >&2
+              exit 1
+            fi
+            python3 "$style_script" "$evidence" || status=$?
           fi
           {
             echo '### Packaged macOS app launch smoke'
@@ -766,7 +813,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TOOLING_SHA: ${{ github.workflow_sha }}
         run: |
-          $scriptPath = 'openless-all/app/scripts/windows-symbol-pair.py'
+          $scriptPath = 'openless-all/windows/scripts/windows-symbol-pair.py'
           $encoded = gh api "repos/$env:GITHUB_REPOSITORY/contents/$scriptPath" --method GET -f "ref=$env:TOOLING_SHA" --jq '.content'
           if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch immutable symbol verification tooling' }
           $bytes = [Convert]::FromBase64String(($encoded -join ''))
@@ -780,7 +827,7 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          python -I release-tooling/openless-all/app/scripts/windows-symbol-pair.py `
+          python -I release-tooling/openless-all/windows/scripts/windows-symbol-pair.py `
             openless-all/app/src-tauri/target/release/openless.exe `
             openless-all/app/src-tauri/target/release/openless.pdb `
             openless-all/app/src-tauri/target/release/bundle/provenance/openless-symbol-pair.json `
@@ -843,7 +890,7 @@ jobs:
           [[ "$(uname -m)" == arm64 ]]
           lipo "$app/Contents/MacOS/openless" -verify_arch arm64
           codesign --verify --deep --strict "$app"
-          swift openless-all/app/scripts/macos-artifact-acceptance.swift "$app" '2.0.3-Beta.2+build.noask.20261123' "$evidence"
+          swift openless-all/macos/scripts/macos-artifact-acceptance.swift "$app" '2.0.3-Beta.2+build.noask.20261123' "$evidence"
       - name: Upload bounded acceptance evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -880,7 +927,7 @@ jobs:
         run: |
           $evidence = Join-Path $env:RUNNER_TEMP 'beta2-acceptance'
           $installer = Get-Content -Raw (Join-Path $evidence 'payload-path.txt')
-          & openless-all/app/scripts/windows-artifact-acceptance.ps1 -InstallerPath $installer -EvidenceDirectory $evidence
+          & openless-all/windows/scripts/windows-artifact-acceptance.ps1 -InstallerPath $installer -EvidenceDirectory $evidence
           if ($LASTEXITCODE -ne 0) { throw 'Final Windows artifact acceptance incomplete.' }
       - name: Upload bounded acceptance evidence
         if: ${{ !cancelled() }}
