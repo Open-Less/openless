@@ -211,6 +211,17 @@ pub(crate) fn fn_is_held() -> bool {
         .is_some_and(|runtime| runtime.native.lock().modifiers & FN != 0)
 }
 
+/// Physical recording controller, including the ordinary dictation route
+/// handled by Ask before the legacy monitor can update its own latch.
+#[cfg(target_os = "macos")]
+pub(crate) fn held_recording_key() -> Option<u16> {
+    let runtime = RUNTIME.get()?;
+    runtime.desktop.upgrade()?;
+    let native = runtime.native.lock();
+    let (key, _) = native.paired_primary?;
+    (native.modifiers & native_modifier(key) != 0).then_some(key)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn can_buffer_space() -> bool {
     RUNTIME.get().is_some_and(|runtime| {

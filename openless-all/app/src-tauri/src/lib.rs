@@ -249,6 +249,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_dictation_translation_target,
             commands::select_dictation_translation_target,
             commands::set_capsule_language_menu,
+            #[cfg(not(mobile))]
+            commands::set_capsule_style_menu,
             commands::get_settings,
             commands::get_settings_snapshot,
             commands::get_voice_activation_state,
@@ -356,6 +358,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::list_vocab_presets,
             commands::save_vocab_presets,
             commands::start_dictation,
+            commands::get_dictation_style_target,
+            commands::update_dictation_style,
             commands::stop_dictation,
             commands::cancel_dictation,
             commands::start_voice_edit_session,
@@ -456,6 +460,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
             commands::set_translation_hotkey,
+            commands::set_skip_auto_style_hotkey,
             commands::set_switch_style_hotkey,
             commands::set_open_app_hotkey,
             commands::set_quick_note_hotkey,
@@ -1169,6 +1174,7 @@ fn run_desktop() {
                 coordinator.stop_coding_agent_hotkey_listener();
                 coordinator.stop_combo_hotkey_listener();
                 coordinator.stop_translation_hotkey_listener();
+                coordinator.stop_skip_auto_style_hotkey_listener();
                 coordinator.stop_switch_style_hotkey_listener();
                 coordinator.stop_open_app_hotkey_listener();
                 coordinator.stop_quick_note_hotkey_listener();

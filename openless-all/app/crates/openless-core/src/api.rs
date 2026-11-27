@@ -22,6 +22,7 @@ use crate::dictation_context::{
     DictationAudioSource, DictationContext, DictationOutputTarget, DictationProviderInvocations,
     DictationStartOptions, DictationStopOptions,
 };
+use crate::dictation_context::DictationStyleSelection;
 use crate::domains::{LessComputerRunRequest, LessComputerRunResult};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{
@@ -73,6 +74,19 @@ pub struct DictationTranslationTarget {
     pub session_id: SessionId,
     pub target_language: String,
     pub working_languages: Vec<String>,
+    pub mutable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationStyleTarget {
+    pub session_id: SessionId,
+    pub selection: DictationStyleSelection,
+    pub skip_auto_style: bool,
+    pub style_pack_id: Option<String>,
+    pub style_pack_name: Option<String>,
+    pub polish_style_pack_id: Option<String>,
+    pub available_styles: Vec<StylePack>,
     pub mutable: bool,
 }
 
@@ -1817,6 +1831,10 @@ struct MutableState {
     /// are still being captured. The accepted request is applied before finish
     /// by every stop entry; no Host latch survives into the next session.
     dictation_translation_requested: Option<bool>,
+    dictation_style_selection: Option<DictationStyleSelection>,
+    /// Style intent not yet included in the snapshot handed to engine.start.
+    /// The current selection above also exists for an unchanged initial choice.
+    dictation_style_needs_update: bool,
     dictation_destination_changed: bool,
     credentials: CredentialsStatus,
     transcripts: HashMap<SessionId, crate::types::TranscriptAccumulator>,
@@ -3659,6 +3677,8 @@ impl OpenLessBackend {
                 dictation_context: None,
                 dictation_start_output_target: None,
                 dictation_translation_requested: None,
+                dictation_style_selection: None,
+                dictation_style_needs_update: false,
                 dictation_destination_changed: false,
                 credentials: CredentialsStatus::default(),
                 transcripts: HashMap::new(),
@@ -4482,8 +4502,7 @@ impl OpenLessBackend {
             .expect("pending audio capture lock poisoned")
             .insert(PendingAudioCaptureKey::VoiceActivation(generation), capture);
         let mut reservation = match self.reserve_dictation_session(
-            true,
-            DictationOutputTarget::ForegroundApp,
+            &DictationStartOptions::default(),
             Some(PendingAudioCaptureKey::VoiceActivation(generation)),
         ) {
             Ok(reservation) => reservation,
@@ -5713,6 +5732,8 @@ impl OpenLessBackend {
                 state.running = false;
                 state.dictation = DictationStateSnapshot::default();
                 state.dictation_context = None;
+                state.dictation_style_selection = None;
+                state.dictation_style_needs_update = false;
                 state.dictation_start_output_target = None;
                 state.silence_monitor = None;
                 state.transcripts.clear();
@@ -6221,8 +6242,7 @@ impl OpenLessBackend {
                 let intent = hotkey.after_modifier_grace(press_id, self.snapshot().dictation.phase);
                 let reservation = if matches!(intent, HotkeyIntent::Start { .. }) {
                     Some(self.reserve_dictation_session(
-                        options.start.insert_text,
-                        options.start.output_target,
+                        &options.start,
                         Some(PendingAudioCaptureKey::Hotkey(press_id)),
                     ))
                 } else {
@@ -6246,8 +6266,7 @@ impl OpenLessBackend {
                             .expect("hotkey interpreter lock poisoned");
                         hotkey.start_is_current(press_id).then(|| {
                             self.reserve_dictation_session(
-                                options.start.insert_text,
-                                options.start.output_target,
+                                &options.start,
                                 Some(PendingAudioCaptureKey::Hotkey(press_id)),
                             )
                         })
@@ -6481,6 +6500,80 @@ impl OpenLessBackend {
                 && state.dictation.phase == DictationPhase::Recording
                 && context.polish.translation_active,
         })
+    }
+
+    /// Returns start-time styles, including installed packs. No picker choice
+    /// mutates global preferences or the original insertion target.
+    pub fn dictation_style_target(&self) -> Option<DictationStyleTarget> {
+        let state = self.state.read().expect("backend state lock poisoned");
+        Self::style_target(&state)
+    }
+
+    fn style_target(state: &MutableState) -> Option<DictationStyleTarget> {
+        let context = state.dictation_context.as_ref();
+        let selection = state.dictation_style_selection.clone()
+            .or_else(|| context.map(|c| c.style_choices.selection.clone())).unwrap_or_default();
+        Some(DictationStyleTarget {
+            session_id: state.dictation.session_id?,
+            skip_auto_style: selection != DictationStyleSelection::Automatic,
+            selection,
+            style_pack_id: context.map(|c| c.polish.style_pack_id.clone()),
+            style_pack_name: context.map(|c| c.polish.style_pack_name.clone()),
+            polish_style_pack_id: context.map(|c| c.style_choices.polish.id.clone()),
+            available_styles: context.map(|c| c.style_choices.available.clone()).unwrap_or_default(),
+            mutable: state.running && context.is_some() && matches!(state.dictation.phase,
+                DictationPhase::Starting | DictationPhase::Recording),
+        })
+    }
+
+    pub fn update_dictation_style(
+        &self,
+        session_id: SessionId,
+        selection: DictationStyleSelection,
+    ) -> Result<DictationStyleTarget, BackendError> {
+        self.change_dictation_style(session_id, Some(selection))
+    }
+
+    pub fn toggle_dictation_style_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<DictationStyleTarget, BackendError> {
+        self.change_dictation_style(session_id, None)
+    }
+
+    fn change_dictation_style(
+        &self,
+        session_id: SessionId,
+        selection: Option<DictationStyleSelection>,
+    ) -> Result<DictationStyleTarget, BackendError> {
+        let mut state = self.state.write().expect("backend state lock poisoned");
+        ensure_running(&state)?;
+        if state.dictation.session_id != Some(session_id)
+            || !matches!(state.dictation.phase, DictationPhase::Starting | DictationPhase::Recording) {
+            return Err(BackendError::new(BackendErrorCode::InvalidState,
+                "style picker belongs to a recording that has ended"));
+        }
+        let previous = state.dictation_style_selection.clone()
+            .or_else(|| state.dictation_context.as_ref().map(|c| c.style_choices.selection.clone()))
+            .unwrap_or_default();
+        let selection = selection.unwrap_or_else(|| if previous == DictationStyleSelection::Automatic {
+            DictationStyleSelection::SkipAuto
+        } else { DictationStyleSelection::Automatic });
+        if let Some(context) = state.dictation_context.as_ref() {
+            let updated = Arc::new(context.with_style_selection(selection.clone())?);
+            state.dictation.style_pack_id = Some(updated.polish.style_pack_id.clone());
+            state.dictation.style_pack_name = Some(updated.polish.style_pack_name.clone());
+            state.dictation_context = Some(updated);
+        } else if matches!(&selection, DictationStyleSelection::StylePack { .. }) {
+            return Err(BackendError::new(BackendErrorCode::InvalidState, "recording style list is not ready"));
+        }
+        state.dictation.skip_auto_style = selection != DictationStyleSelection::Automatic;
+        state.dictation_style_selection = Some(selection);
+        state.dictation_style_needs_update = true;
+        let result = Self::style_target(&state).expect("checked active session");
+        self.events.publish(Some(session_id),
+            BackendEventKind::DictationStateChanged(state.dictation.clone()));
+        Ok(result)
     }
 
     /// Explicitly retarget this recording and remember the choice. Ordinary settings
@@ -8615,23 +8708,16 @@ impl OpenLessBackend {
 
     fn reserve_dictation_session(
         &self,
-        insert_text: bool,
-        output_target: DictationOutputTarget,
+        options: &DictationStartOptions,
         capture_key: Option<PendingAudioCaptureKey>,
     ) -> Result<DictationReservation, BackendError> {
-        self.reserve_dictation_session_with_id(
-            SessionId::new(),
-            insert_text,
-            output_target,
-            capture_key,
-        )
+        self.reserve_dictation_session_with_id(SessionId::new(), options, capture_key)
     }
 
     fn reserve_dictation_session_with_id(
         &self,
         session_id: SessionId,
-        insert_text: bool,
-        output_target: DictationOutputTarget,
+        options: &DictationStartOptions,
         capture_key: Option<PendingAudioCaptureKey>,
     ) -> Result<DictationReservation, BackendError> {
         {
@@ -8651,7 +8737,7 @@ impl OpenLessBackend {
         let starting_resources = self.voice_sessions.hold_resources(session_id)?;
         // Freeze the destination and its matching host-context reader before context/credential
         // awaits or feedback can change foreground focus. No native preparation happens yet.
-        let (inserter, host_context) = if insert_text {
+        let (inserter, host_context) = if options.insert_text {
             match self
                 .deps
                 .text_inserter
@@ -8682,12 +8768,21 @@ impl OpenLessBackend {
             state.dictation = DictationStateSnapshot {
                 phase: DictationPhase::Starting,
                 session_id: Some(session_id),
+                skip_auto_style: options.skip_auto_style,
                 ..DictationStateSnapshot::default()
             };
-            state.dictation_start_output_target = Some(output_target);
+            state.dictation_start_output_target = Some(options.output_target);
             state.dictation_translation_requested = None;
+            // Publish the actual initial choice with Starting, before host or
+            // credential capture can suspend and a style gesture can overtake it.
+            state.dictation_style_selection = Some(if options.skip_auto_style {
+                DictationStyleSelection::SkipAuto
+            } else {
+                DictationStyleSelection::Automatic
+            });
+            state.dictation_style_needs_update = false;
             state.dictation_destination_changed = false;
-            if output_target == DictationOutputTarget::ForegroundApp {
+            if options.output_target == DictationOutputTarget::ForegroundApp {
                 self.main_dictation_trace.begin(session_id);
             }
             self.events.publish(
@@ -8718,8 +8813,7 @@ impl OpenLessBackend {
         &self,
         options: DictationStartOptions,
     ) -> Result<SessionId, BackendError> {
-        let reservation =
-            self.reserve_dictation_session(options.insert_text, options.output_target, None)?;
+        let reservation = self.reserve_dictation_session(&options, None)?;
         self.start_reserved_dictation(reservation, options).await
     }
 
@@ -8737,7 +8831,7 @@ impl OpenLessBackend {
             ..Default::default()
         };
         let reservation =
-            self.reserve_dictation_session_with_id(session_id, false, options.output_target, None)?;
+            self.reserve_dictation_session_with_id(session_id, &options, None)?;
         if !is_current() {
             let _ = self.cancel_dictation(Some(session_id)).await;
             return Err(VoiceCaptureLifecycle::cancelled_error());
@@ -8829,6 +8923,14 @@ impl OpenLessBackend {
                 Some(requested) => Arc::new(context.with_translation_requested(requested)),
                 None => context,
             };
+            // An unchanged initial choice already belongs to the captured context;
+            // keep its prompt additions and fallback state intact.
+            let context = match state.dictation_style_selection.clone() {
+                Some(selection) if selection != context.style_choices.selection => {
+                    Arc::new(context.with_style_selection(selection)?)
+                }
+                _ => context,
+            };
             state.silence_monitor = context.recording.silence_after_ms.map(|silence_ms| {
                 let started_at = std::time::Instant::now();
                 SilenceMonitor {
@@ -8853,7 +8955,15 @@ impl OpenLessBackend {
             };
             let context = Arc::new(context.with_capture_generation(capture_generation));
             state.dictation.translation_active = context.polish.translation_active;
+            state.dictation.skip_auto_style = context.style_choices.selection != DictationStyleSelection::Automatic;
+            state.dictation.style_pack_id = Some(context.polish.style_pack_id.clone());
+            state.dictation.style_pack_name = Some(context.polish.style_pack_name.clone());
             state.dictation_context = Some(Arc::clone(&context));
+            // This exact local snapshot will be passed to engine.start, even if
+            // insertion preparation or engine startup suspends. Consume only the
+            // changes it includes, under the same lock as style requests; later
+            // changes must survive through startup and be synchronized at stop.
+            state.dictation_style_needs_update = false;
             state.dictation_start_output_target = None;
             context
         };
@@ -9215,6 +9325,7 @@ impl OpenLessBackend {
                         };
                         let context_changed =
                             std::mem::take(&mut state.dictation_destination_changed)
+                                | std::mem::take(&mut state.dictation_style_needs_update)
                                 || state.dictation_translation_requested.take().is_some()
                                 || state.dictation_context.as_ref().is_some_and(|previous| {
                                     previous.polish.translation_active
@@ -9351,6 +9462,8 @@ impl OpenLessBackend {
                 },
             );
             state.dictation_context = None;
+            state.dictation_style_selection = None;
+            state.dictation_style_needs_update = false;
             state.dictation_start_output_target = None;
             state.silence_monitor = None;
             hotkey.submitted();
@@ -10037,6 +10150,8 @@ impl OpenLessBackend {
         }
         state.dictation = DictationStateSnapshot::default();
         state.dictation_context = None;
+        state.dictation_style_selection = None;
+        state.dictation_style_needs_update = false;
         state.dictation_start_output_target = None;
         state.silence_monitor = None;
         state.transcripts.remove(&session_id);
@@ -10373,6 +10488,8 @@ impl OpenLessBackend {
             );
             state.dictation = DictationStateSnapshot::default();
             state.dictation_context = None;
+            state.dictation_style_selection = None;
+            state.dictation_style_needs_update = false;
             state.dictation_start_output_target = None;
             state.silence_monitor = None;
             state.transcripts.remove(&active);
@@ -10476,9 +10593,9 @@ impl OpenLessBackend {
             assigned_ids.clear();
         }
         let active_id = explicit_style.unwrap_or(&preferences.active_style_pack_id);
-        let style_pack = self
-            .style_packs
-            .get_for_dictation(assigned_ids.iter().map(String::as_str), active_id)?;
+        let (style_pack, polish_style, available_styles) = self.style_packs.capture_dictation_styles(
+            assigned_ids.iter().map(String::as_str), active_id, &preferences.active_style_pack_id,
+        )?;
         let mut captured_options = options.clone();
         if !preferences.cursor_context_enabled {
             // This switch controls document text, including text supplied by
@@ -10553,6 +10670,12 @@ impl OpenLessBackend {
             recent_history,
             options,
         );
+        context.style_choices.automatic = style_pack;
+        context.style_choices.polish = polish_style;
+        context.style_choices.available = available_styles;
+        if options.skip_auto_style {
+            context = context.with_style_selection(DictationStyleSelection::SkipAuto)?;
+        }
         if foreground_output {
             context.polish.input_scene_prefix = Some(input_scene_prefix);
         }
@@ -10940,7 +11063,10 @@ mod tests {
             assert!(backend.snapshot().dictation.session_id.is_none());
             assert_eq!(discarded.load(Ordering::SeqCst), 1);
             let next = backend
-                .reserve_dictation_session(false, DictationOutputTarget::ForegroundApp, None)
+                .reserve_dictation_session(
+                    &DictationStartOptions { insert_text: false, ..Default::default() },
+                    None,
+                )
                 .unwrap();
             backend.reset_dictation_session(next.session_id);
         }
@@ -16508,7 +16634,10 @@ mod tests {
         insert_text: bool,
     ) -> SessionId {
         let reservation = backend
-            .reserve_dictation_session(insert_text, DictationOutputTarget::ForegroundApp, None)
+            .reserve_dictation_session(
+                &DictationStartOptions { insert_text, ..Default::default() },
+                None,
+            )
             .unwrap();
         let id = reservation.session_id;
         *backend.voice_activation_session.lock().unwrap() =
@@ -20748,7 +20877,7 @@ mod tests {
                         ..Default::default()
                     };
                     let reservation = backend
-                        .reserve_dictation_session(false, options.output_target, None)
+                        .reserve_dictation_session(&options, None)
                         .unwrap();
                     let session_id = reservation.session_id;
                     let mut stopping = Some(Box::pin(backend.stop_dictation()));

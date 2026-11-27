@@ -371,8 +371,8 @@ pub trait DictationEngine: Send + Sync + 'static {
     }
 
     /// Replace the immutable session snapshot before finalization when a host
-    /// action (currently Android's finish-and-translate gesture) is only known
-    /// at stop time. Implementations that retain the context must override this
+    /// action (translation, destination or output-style selection) changes the
+    /// final polish intent. Implementations that retain the context must override this
     /// method; settings are never re-read here.
     fn update_context(
         &self,
