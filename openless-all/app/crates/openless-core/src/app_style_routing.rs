@@ -115,16 +115,17 @@ pub(crate) fn input_scene_prefix(
     guidance: Option<&str>,
     location: Option<&str>,
 ) -> String {
+    let recognized = app.and_then(crate::input_scene::recognize);
     let known = |value: Option<&str>| {
         value
             .filter(|text| !text.trim().is_empty())
             .unwrap_or("未知")
             .to_owned()
     };
-    let name = known(app.map(|app| app.name.as_str()));
+    let name = known(recognized.map(|rule| rule.name).or_else(|| app.map(|app| app.name.as_str())));
     let id = known(app.map(|app| app.id.as_str()));
-    let category = known(category);
-    let purpose = known(purpose);
+    let category = known(category.or_else(|| recognized.map(|rule| rule.category.label())));
+    let purpose = known(purpose.filter(|value| !value.trim().is_empty()).or_else(|| recognized.map(|rule| rule.purpose)));
     let location = location
         .filter(|text| !text.trim().is_empty())
         .unwrap_or("应用内输入，无法正确确定");
@@ -132,7 +133,9 @@ pub(crate) fn input_scene_prefix(
         .filter(|text| !text.trim().is_empty())
         .map(|text| format!("分类用途参考：{text}。"))
         .unwrap_or_default();
-    format!("当前应用：{name}\n应用标识：{id}\n应用分类：{category}\n应用主要用途：{purpose}\n当前输入位置：{location}\n本次输入场景：在上述目标应用内输入。{reference}具体输入用途以本次语音为准，仅按已知信息理解术语与对象，按用户所选风格组织内容；不据此增加开发任务、技术方案或回答问题。\n请结合上述信息理解用户的输入场景，再按照后续提供的用户风格要求处理本次语音内容。保持用户的原意，不自行增加需求或推断无法确定的信息。")
+    let policy = recognized.and_then(|rule| rule.output_policy.guidance())
+        .map(|guidance| format!("\n{guidance}")).unwrap_or_default();
+    format!("当前应用：{name}\n应用标识：{id}\n应用分类：{category}\n应用主要用途：{purpose}\n当前输入位置：{location}\n本次输入场景：在上述目标应用内输入。{reference}具体输入用途以本次语音为准，仅按已知信息理解术语与对象，按用户所选风格组织内容；不据此增加开发任务、技术方案或回答问题。\n请结合上述信息理解用户的输入场景，再按照后续提供的用户风格要求处理本次语音内容。保持用户的原意，不自行增加需求或推断无法确定的信息。{policy}")
 }
 
 pub(crate) struct AppStyleStore {
@@ -387,6 +390,21 @@ impl RoutingState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_agent_scene_reaches_the_real_routing_prefix_without_changing_style() {
+        let store = AppStyleStore::in_memory();
+        for bundle in ["com.todesktop.230313mzl4w4u92", "com.stablyai.orca"] {
+            let app = InputApp::macos(bundle, Some("untrusted display name")).unwrap();
+            let (assigned, prefix) = store.selection(&app, None);
+            assert!(assigned.is_empty());
+            assert!(prefix.contains("本次输入将交给编程 Agent"));
+            assert!(prefix.contains("用户所选风格"));
+            assert!(!prefix.contains("untrusted display name"));
+        }
+        let unknown = InputApp::macos("example.unknown", Some("Cursor")).unwrap();
+        assert!(!store.selection(&unknown, None).1.contains("本次输入将交给编程 Agent"));
+    }
 
     #[test]
     fn scene_unknowns_do_not_infer_purpose_or_location() {

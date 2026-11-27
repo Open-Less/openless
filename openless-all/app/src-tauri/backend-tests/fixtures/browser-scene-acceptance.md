@@ -3,7 +3,8 @@
 This fixture contains synthetic data only. It does not access the network, collect
 entered values, submit a form or print page content. Run these steps against the
 exact integrated Dev SHA after P4's native target contract is connected; the
-independent P5 modules alone do not establish feature acceptance.
+candidate is based on the unreviewed P4 candidate, and does not establish
+feature acceptance.
 
 1. Serve this directory on loopback with `python3 -B -m http.server 8765 --bind 127.0.0.1`.
    Open `http://127.0.0.1:8765/browser-scene.html` in one supported browser.
@@ -13,6 +14,11 @@ independent P5 modules alone do not establish feature acceptance.
    Verify the outgoing context is attributed to the original browser and is
    `webAskAnything`; only the original page location and authorized original
    selection can appear. `UNRELATED_BACKGROUND_MARKER` must not appear.
+   This candidate sends no webpage selection/title at all. Page sharing requires
+   one native AXTabGroup, its single AXSelectedChildren identity, and one original
+   WebArea in the bound window's native structure. It stops at WebAreas/tab groups,
+   never enumerates tab contents, and requires all page/tab observers to register.
+   Missing/ambiguous structures must return unavailable, even with permission.
 3. Focus the page's fake address field. Verify `webInput`, including when its
    ancestor is a web toolbar. It must never become `addressBar`.
 4. Focus the real native address bar. Chrome/Edge English or Simplified Chinese
@@ -43,3 +49,22 @@ independent P5 modules alone do not establish feature acceptance.
 Keep assertions/field names and pass/fail metadata as evidence. Do not copy user
 pages, native handles, control tokens, raw URLs, field values or page text to logs.
 Stop the loopback server after the acceptance session.
+
+Cloud/controlled-host targets (not run locally):
+
+```text
+cargo test --locked -p openless-core frozen_scene_reaches_the_request_and_preserves_the_explicit_style_and_privacy_switch
+cargo test --locked -p openless-core shipped_agent_scene_reaches_the_real_routing_prefix_without_changing_style
+cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test browser_scene
+cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test ask_native
+```
+
+The Tauri host test
+`real_browser_scene_uses_the_frozen_input_and_rejects_sensitive_or_native_chrome_page_reads`
+is ignored by default. On a controlled macOS host, set
+`OPENLESS_BROWSER_FIXTURE_PID` and `OPENLESS_BROWSER_SCENE_CASE` to `web-ask`,
+`fake-address`, `protected`, or `address-bar` with that exact fixture control
+already focused, then run only that host test with `--ignored`. It uses the
+production original-target owner/P4 reader/page+tab verifier; it is not covered
+by the standalone backend test's native module compilation. Record failures as
+unsupported/failed device evidence, never expose the actual page in the logs.

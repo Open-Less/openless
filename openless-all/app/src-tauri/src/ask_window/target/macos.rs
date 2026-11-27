@@ -3,7 +3,7 @@ use crate::host_document::{evaluate_gate, macos::*, GateInputs};
 use block2::RcBlock;
 use core_foundation::{
     array::CFArray,
-    base::{CFRange, CFType, TCFType},
+    base::{CFEqual, CFRange, CFType, TCFType},
     boolean::CFBoolean,
     number::CFNumber,
     runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource},
@@ -75,6 +75,7 @@ pub(super) struct Platform {
     token: Retained<AnyObject>,
     watch: Option<FocusWatch>,
     epoch: Arc<AtomicU64>,
+    read_epoch: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -84,6 +85,8 @@ pub(super) struct Identity {
     ax_app: CFType,
     window: CFType,
     element: CFType,
+    frozen: Option<crate::selection::SelectionInsertionTarget>,
+    read_revision: u64,
 }
 
 struct FocusWatch {
@@ -97,6 +100,7 @@ struct FocusWatch {
 struct FocusContext {
     pid: i32,
     epoch: Arc<AtomicU64>,
+    read_epoch: Arc<AtomicU64>,
 }
 
 unsafe extern "C" fn focus_changed(
@@ -106,20 +110,23 @@ unsafe extern "C" fn focus_changed(
     context: *mut c_void,
 ) {
     let context = &*context.cast::<FocusContext>();
+    // Reads reject background focus changes too. This is separate from the
+    // existing writer/recovery epoch, whose semantics remain unchanged.
+    crate::browser_scene::observation::transition(&context.read_epoch);
     if frontmost().is_some_and(|app| pid(&app) == context.pid) {
         context.epoch.fetch_add(1, Ordering::AcqRel);
     }
 }
 
 impl FocusWatch {
-    fn new(pid: i32, epoch: Arc<AtomicU64>) -> Option<Self> {
+    fn new(pid: i32, epoch: Arc<AtomicU64>, read_epoch: Arc<AtomicU64>) -> Option<Self> {
         unsafe {
             let app = ax(AXUIElementCreateApplication(pid), pid)?;
             let mut observer = ptr::null_mut();
             if AXObserverCreate(pid, focus_changed, &mut observer) != 0 || observer.is_null() {
                 return None;
             }
-            let mut context = Box::new(FocusContext { pid, epoch });
+            let mut context = Box::new(FocusContext { pid, epoch, read_epoch });
             let observer = CFType::wrap_under_create_rule(observer.cast());
             for name in FOCUS_NOTIFICATIONS {
                 let name = CFString::new(name);
@@ -182,6 +189,8 @@ impl Platform {
             let center: Retained<AnyObject> =
                 Retained::retain(msg_send![workspace()?, notificationCenter])?;
             let external_epoch = epoch.clone();
+            let read_epoch = Arc::new(AtomicU64::new(0));
+            let external_reads = read_epoch.clone();
             let block = RcBlock::new(move |notification: *mut AnyObject| {
                 let info: *mut AnyObject = msg_send![notification, userInfo];
                 let app: *mut AnyObject = msg_send![info, objectForKey: NSWorkspaceApplicationKey];
@@ -190,6 +199,7 @@ impl Platform {
                     .is_none_or(|app| pid(app) as u32 != std::process::id())
                 {
                     external_epoch.fetch_add(1, Ordering::AcqRel);
+                    crate::browser_scene::observation::transition(&external_reads);
                 }
             });
             let token = Retained::retain(msg_send![
@@ -201,6 +211,7 @@ impl Platform {
                 token,
                 watch: None,
                 epoch,
+                read_epoch,
             })
         })
     }
@@ -246,12 +257,13 @@ impl Platform {
                 return None;
             }
             if self.watch.is_none() {
-                self.watch = FocusWatch::new(expected_pid, self.epoch.clone());
+                self.watch = FocusWatch::new(expected_pid, self.epoch.clone(), self.read_epoch.clone());
             }
             let ax_app = match self.watch.as_ref() {
                 Some(watch) => watch.app.clone(),
                 None => ax(AXUIElementCreateApplication(expected_pid), expected_pid)?,
             };
+            let read_revision = self.read_epoch.load(Ordering::Acquire);
             let window = element_attr(&ax_app, "AXFocusedWindow", expected_pid)?;
             let element = element_attr(&ax_app, "AXFocusedUIElement", expected_pid)?;
             Some(Identity {
@@ -260,6 +272,8 @@ impl Platform {
                 ax_app,
                 window,
                 element,
+                frozen: None,
+                read_revision,
             })
         })
     }
@@ -353,6 +367,72 @@ impl Platform {
             }
         })
     }
+
+    pub(super) fn read_revision(&self) -> u64 {
+        self.read_epoch.load(Ordering::Acquire)
+    }
+
+    /// Called only for an explicitly authorized external invocation, never by
+    /// passive focus polling or by later browser reads. The existing Ask
+    /// identity must match the P4 original before any page enrichment occurs.
+    pub(super) fn freeze_original(&self, identity: &mut Identity) {
+        let eligible_browser = crate::selection::bundle_id_for_pid(identity.pid)
+            .and_then(|bundle| openless_core::app_style_routing::InputApp::macos(&bundle, None))
+            .as_ref().and_then(openless_core::input_scene::recognize)
+            .and_then(|rule| rule.browser)
+            .is_some_and(|browser| browser != openless_core::input_scene::BrowserFamily::ChatGptEmbedded);
+        if !eligible_browser { return; }
+        let frozen = crate::selection::capture_selection_insertion_target();
+        identity.frozen = crate::host_document::macos::with_frozen_target_read(&frozen, |lease| {
+            let (control, window) = unsafe { lease.ax_objects() };
+            if unsafe { CFEqual(control.cast(), identity.element.as_CFTypeRef()) } == 0
+                || unsafe { CFEqual(window.cast(), identity.window.as_CFTypeRef()) } == 0
+                || lease.process_id() != identity.pid
+                || self.read_revision() != identity.read_revision
+            { return Err("browserOriginalTargetChanged".to_string()); }
+            Ok(())
+        }).ok().map(|_| frozen);
+    }
+
+    pub(super) fn browser_capture(
+        &mut self, identity: &Identity, grant: openless_core::browser_scene::SceneAuthorization,
+        current: &dyn Fn() -> bool,
+    ) -> Option<(crate::browser_scene::macos::Enrichment, crate::browser_scene::macos::PageWatch)> {
+        let target = identity.frozen.as_ref()?;
+        let revision = identity.read_revision;
+        if !current() || self.watch.as_ref()?.pid != identity.pid || self.read_revision() != revision
+            || self.foreground() != Foreground::External(identity.pid)
+        { return None; }
+        let first = crate::browser_scene::read_frozen(target, grant, || current() && self.read_revision() == revision)?;
+        let watch = crate::browser_scene::macos::PageWatch::new(
+            identity.pid, &first, self.read_epoch.clone(),
+        )?;
+        self.poll();
+        let snapshot = crate::browser_scene::read_frozen(target, grant, || current() && self.read_revision() == revision)?;
+        self.poll();
+        (current() && self.read_revision() == revision && first.page_is_current(&snapshot)).then_some((snapshot, watch))
+    }
+
+    pub(super) fn browser_is_current(
+        &self, identity: &Identity, snapshot: &crate::browser_scene::macos::Enrichment,
+        grant: openless_core::browser_scene::SceneAuthorization,
+        current: &dyn Fn() -> bool,
+    ) -> bool {
+        if !current() || self.watch.as_ref().is_none_or(|watch| watch.pid != identity.pid)
+            || self.read_revision() != identity.read_revision || secure_input() || !unsafe { AXIsProcessTrusted() }
+        { return false; }
+        let valid = match self.foreground() {
+            // The intentional Ask activation never becomes the input target.
+            // Only the already-bound page URL is revalidated; no background
+            // input/value, siblings or other tabs are read.
+            Foreground::Own => snapshot.original_page_is_current(),
+            Foreground::External(pid) if pid == identity.pid => identity.frozen.as_ref()
+                .and_then(|target| crate::browser_scene::read_frozen(target, grant, || current() && self.read_revision() == identity.read_revision))
+                .is_some_and(|now| snapshot.page_is_current(&now)),
+            _ => false,
+        };
+        current() && valid
+    }
 }
 
 impl Drop for Platform {
@@ -364,6 +444,11 @@ impl Drop for Platform {
 }
 
 impl Identity {
+    pub(super) fn read_revision(&self) -> u64 { self.read_revision }
+    pub(super) fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
+        crate::selection::input_app_for_target(self.frozen.as_ref()?)
+    }
+
     pub(super) fn pid(&self) -> u32 {
         self.pid as u32
     }

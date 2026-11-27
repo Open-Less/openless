@@ -67,6 +67,12 @@ pub trait HostContextAdapter: Send + Sync {
     fn input_location(&self) -> Option<String> {
         None
     }
+    /// Optional blocking-host implementation. The result is trusted semantic
+    /// vocabulary only; URL/title/page text require a separate per-turn grant.
+    fn capture_input_location(&self) -> BoxFuture<'static, Option<String>> {
+        let location = self.input_location();
+        Box::pin(async move { location })
+    }
     /// Capture foreground application metadata for attribution and input policy.
     /// `include_cursor=false` forbids reading document/AX text, not querying the
     /// application identity. Hosts must honor this before any document access.

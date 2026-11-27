@@ -33,6 +33,8 @@ pub struct AppMetadata {
     display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scene: Option<crate::input_scene::ApplicationScene>,
 }
 
 impl AppMetadata {
@@ -47,9 +49,15 @@ impl AppMetadata {
             (!value.trim().is_empty()).then_some(value)
         }
         let app_id = app_id.and_then(bounded);
+        let scene = app_id.as_deref()
+            .and_then(|id| crate::app_style_routing::InputApp::macos(id, None))
+            .as_ref()
+            .and_then(crate::input_scene::recognize)
+            .map(crate::input_scene::ApplicationRule::scene);
         Some(Self {
             display_name: bounded(display_name).or_else(|| app_id.clone())?,
             app_id,
+            scene,
         })
     }
 }
@@ -176,6 +184,9 @@ pub struct TurnContext {
 /// Called at model dispatch, not during input entry. Refresh before another
 /// dispatch if Ask authorization could have changed; don't cache these facts.
 pub trait ContextProvider: Send + Sync {
+    /// Bind invocation-scoped authorization to the actual admitted turn. Hosts
+    /// must discard a previous turn's private references on the next call.
+    fn begin_turn(&self, _key: crate::ask::AskTurnKey) {}
     fn context_for_turn(&self, conversation_id: Uuid) -> TurnContext;
 }
 

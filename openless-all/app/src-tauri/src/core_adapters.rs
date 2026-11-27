@@ -5911,6 +5911,17 @@ impl TauriHostContextAdapter {
 }
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
+    #[cfg(target_os = "macos")]
+    fn capture_input_location(&self) -> BoxFuture<'static, Option<String>> {
+        let target = self.target.clone();
+        Box::pin(async move {
+            let target = target?;
+            tauri::async_runtime::spawn_blocking(move || {
+                crate::browser_scene::input_kind(&target)?.location().map(str::to_owned)
+            }).await.ok().flatten()
+        })
+    }
+
     #[cfg(not(mobile))]
     fn target_identity(&self) -> Option<openless_core::host_document::target::HostTargetIdentity> {
         crate::selection::target_identity(self.target.as_ref()?)

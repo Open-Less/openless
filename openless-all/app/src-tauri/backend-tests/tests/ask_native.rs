@@ -3,6 +3,10 @@
 
 #[path = "../../src/ask_window/context.rs"]
 mod context;
+#[path = "../../src/ask_window/browser_context.rs"]
+mod browser_context;
+#[path = "../../src/browser_scene/observation.rs"]
+mod observation;
 #[path = "../../src/ask_window/voice_types.rs"]
 mod voice_types;
 #[path = "../../src/ask_window/wire.rs"]
@@ -14,6 +18,184 @@ use openless_core::assistant_api::{
     AssistantContextProvider, AssistantContextQuery as Query, AssistantContextResult as Result,
 };
 use uuid::Uuid;
+use openless_core::ask_context::ContextProvider;
+use openless_core::browser_scene::{AuthorizedBrowserReference, BrowserInputKind, SceneAuthorization};
+use std::sync::{Arc, atomic::{AtomicU64, AtomicUsize, Ordering}};
+
+struct ControlledBrowser {
+    revision: Arc<AtomicU64>,
+    captured_revision: u64,
+    reads: Arc<AtomicUsize>,
+    wait: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+}
+
+impl browser_context::BrowserReader for ControlledBrowser {
+    fn read(
+        &self, key: AskTurnKey, grant: SceneAuthorization,
+        cancellation: AskCancellation,
+    ) -> futures_util::future::BoxFuture<'_, Result> {
+        Box::pin(async move {
+            if let Some((ready, release)) = &self.wait {
+                ready.notify_one();
+                release.notified().await;
+            }
+            if cancellation.is_cancelled() {
+                return Result::Unavailable { reason: "browserReferenceExpired".into() };
+            }
+            let mut reference = AuthorizedBrowserReference::new(
+                key, grant, self.revision.clone(), "Chrome",
+                "https://example.test/task?private=synthetic#reference",
+                BrowserInputKind::WebAskAnything, None,
+            ).unwrap();
+            browser_context::consume(&mut reference, key, grant, |revision| {
+                if revision.load(Ordering::Acquire) != self.captured_revision { return false; }
+                self.reads.fetch_add(1, Ordering::AcqRel);
+                !cancellation.is_cancelled()
+            })
+        })
+    }
+}
+
+fn browser_permissions(provider: &context::DesktopContext) {
+    provider.set_authorization(ContextAuthorization { app_metadata: true, usage: false });
+    provider.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+}
+
+fn browser_source(provider: &context::DesktopContext, key: AskTurnKey) -> (Arc<AtomicU64>, Arc<AtomicUsize>) {
+    let revision = Arc::new(AtomicU64::new(8));
+    let reads = Arc::new(AtomicUsize::new(0));
+    provider.bind_browser_reference(key.conversation_id, provider.browser_authorization(), Arc::new(ControlledBrowser {
+        revision: revision.clone(), captured_revision: 8, reads: reads.clone(), wait: None,
+    }));
+    (revision, reads)
+}
+
+#[tokio::test]
+async fn browser_reference_uses_the_actual_turn_and_original_invocation_once() {
+    let provider = context::DesktopContext::default();
+    let key = key();
+    provider.open_conversation(key.conversation_id);
+    browser_permissions(&provider);
+    let (_, reads) = browser_source(&provider, key);
+    provider.begin_turn(key);
+    let Result::Available { data, source, .. } = provider
+        .read(key, Query::BrowserTab, AskCancellation::default()).await.unwrap()
+    else { panic!("original authorized reference unavailable") };
+    assert_eq!(source, "originalInputAccessibility");
+    assert_eq!(data["reference"]["inputKind"], "webAskAnything");
+    assert_eq!(data["reference"]["location"], "https://example.test/task");
+    assert_eq!(data["referenceType"], "untrustedForegroundBrowserData");
+    assert!(data["reference"].get("title").is_none());
+    assert!(data["reference"].get("pid").is_none());
+    assert_eq!(reads.load(Ordering::Acquire), 1);
+    assert!(matches!(provider.read(key, Query::BrowserTab, AskCancellation::default()).await.unwrap(), Result::Unavailable { .. }));
+}
+
+#[tokio::test]
+async fn same_window_tab_away_and_back_cannot_revive_a_same_looking_reference() {
+        let provider = context::DesktopContext::default();
+        let key = key();
+        provider.open_conversation(key.conversation_id);
+        browser_permissions(&provider);
+        let (revision, reads) = browser_source(&provider, key);
+        provider.begin_turn(key);
+        observation::transition(&revision); // A -> B
+        observation::transition(&revision); // B -> A, same current snapshot
+        assert!(matches!(provider.read(key, Query::BrowserTab, AskCancellation::default()).await.unwrap(), Result::Unavailable { .. }));
+        assert_eq!(reads.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn a_failed_native_tab_subscription_keeps_the_formal_context_port_unavailable_after_regrant() {
+    let provider = context::DesktopContext::default();
+    let key = key();
+    provider.open_conversation(key.conversation_id);
+    browser_permissions(&provider);
+    let certificate = observation::establish(|subject, event| {
+        !(subject == observation::Subject::TabGroup && event == "AXSelectedChildrenChanged")
+    });
+    // The same transaction gates PageWatch construction in production.
+    if certificate.is_some() { browser_source(&provider, key); }
+    provider.begin_turn(key);
+    assert!(matches!(provider.read(key, Query::BrowserTab, AskCancellation::default()).await.unwrap(), Result::Unavailable { .. }));
+    provider.set_read_permissions(context::ReadPermissions::default());
+    browser_permissions(&provider);
+    let next = AskTurnKey { turn_id: Uuid::new_v4(), ..key };
+    provider.begin_turn(next);
+    assert!(matches!(provider.read(next, Query::BrowserTab, AskCancellation::default()).await.unwrap(), Result::Unavailable { .. }));
+}
+
+#[tokio::test]
+async fn ungranted_sources_and_later_turns_never_read_a_page() {
+    let provider = context::DesktopContext::default();
+    let key = key();
+    provider.open_conversation(key.conversation_id);
+    let (_, reads) = browser_source(&provider, key);
+    provider.begin_turn(key);
+    assert!(matches!(provider.read(key, Query::BrowserTab, AskCancellation::default()).await.unwrap(), Result::Denied));
+    browser_permissions(&provider);
+    assert!(matches!(provider.read(key, Query::BrowserTab, AskCancellation::default()).await.unwrap(), Result::Unavailable { .. }));
+    assert_eq!(reads.load(Ordering::Acquire), 0);
+    let (_, reads) = browser_source(&provider, key);
+    provider.begin_turn(key);
+    let next = AskTurnKey { turn_id: Uuid::new_v4(), ..key };
+    provider.begin_turn(next);
+    assert!(matches!(provider.read(next, Query::BrowserTab, AskCancellation::default()).await.unwrap(), Result::Unavailable { .. }));
+    assert_eq!(reads.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn revoke_and_regrant_while_the_native_owner_is_queued_discards_before_reading() {
+    let provider = context::DesktopContext::default();
+    let key = key();
+    provider.open_conversation(key.conversation_id);
+    browser_permissions(&provider);
+    let ready = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let reads = Arc::new(AtomicUsize::new(0));
+    provider.bind_browser_reference(key.conversation_id, provider.browser_authorization(), Arc::new(ControlledBrowser {
+        revision: Arc::new(AtomicU64::new(8)), captured_revision: 8, reads: reads.clone(),
+        wait: Some((ready.clone(), release.clone())),
+    }));
+    provider.begin_turn(key);
+    let (result, ()) = tokio::join!(
+        provider.read(key, Query::BrowserTab, AskCancellation::default()),
+        async {
+            ready.notified().await;
+            provider.set_read_permissions(context::ReadPermissions::default());
+            browser_permissions(&provider);
+            release.notify_one();
+        }
+    );
+    assert!(matches!(result.unwrap(), Result::Denied));
+    assert_eq!(reads.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn another_turn_while_the_owner_is_queued_cannot_receive_the_old_page() {
+    let provider = context::DesktopContext::default();
+    let key = key();
+    provider.open_conversation(key.conversation_id);
+    browser_permissions(&provider);
+    let ready = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let reads = Arc::new(AtomicUsize::new(0));
+    provider.bind_browser_reference(key.conversation_id, provider.browser_authorization(), Arc::new(ControlledBrowser {
+        revision: Arc::new(AtomicU64::new(8)), captured_revision: 8, reads: reads.clone(),
+        wait: Some((ready.clone(), release.clone())),
+    }));
+    provider.begin_turn(key);
+    let (result, ()) = tokio::join!(
+        provider.read(key, Query::BrowserTab, AskCancellation::default()),
+        async {
+            ready.notified().await;
+            provider.begin_turn(AskTurnKey { turn_id: Uuid::new_v4(), ..key });
+            release.notify_one();
+        }
+    );
+    assert!(matches!(result.unwrap(), Result::Unavailable { .. }));
+    assert_eq!(reads.load(Ordering::Acquire), 0);
+}
 
 fn key() -> AskTurnKey {
     AskTurnKey {
@@ -224,38 +406,4 @@ fn asynchronous_transcription_cannot_cross_composer_identity_or_text_revision() 
         }
         assert!(!original.matches(&changed));
     }
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-#[ignore = "requires the controlled public Releases page in a supported browser and Accessibility permission"]
-async fn reads_the_controlled_browser_tab_through_the_production_context_port() {
-    let pid: u32 = std::env::var("OPENLESS_BROWSER_FIXTURE_PID")
-        .expect("controlled browser process ID")
-        .parse()
-        .unwrap();
-    let bundle =
-        std::env::var("OPENLESS_BROWSER_FIXTURE_BUNDLE").expect("controlled browser bundle ID");
-    let provider = context::DesktopContext::default();
-    let key = key();
-    provider.open_conversation(key.conversation_id);
-    provider.set_read_permissions(context::ReadPermissions {
-        browser_tab: true,
-        voice_history: false,
-    });
-    provider.bind_browser_source(key.conversation_id, pid, &bundle);
-    let result = provider
-        .read(key, Query::BrowserTab, AskCancellation::default())
-        .await
-        .unwrap();
-    let Result::Available { data, source, .. } = result else {
-        panic!("controlled browser tab unavailable: {result:?}");
-    };
-    assert_eq!(
-        data["url"],
-        "https://github.com/Open-Less/openless/releases"
-    );
-    assert_eq!(source, "browserAccessibility");
-    assert!(!data["title"].as_str().unwrap_or_default().is_empty());
-    assert!(data.get("pid").is_none());
 }

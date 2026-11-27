@@ -10624,9 +10624,11 @@ impl OpenLessBackend {
             .as_deref()
             .filter(|id| !id.trim().is_empty());
         // Capture target metadata before any asynchronous host or credential access.
-        let input_location = (foreground_output && preferences.cursor_context_enabled)
-            .then(|| host_context.input_location())
-            .flatten();
+        let input_location = if foreground_output && preferences.cursor_context_enabled {
+            host_context.capture_input_location().await
+        } else {
+            None
+        };
         let (mut assigned_ids, input_scene_prefix) = input_app
             .as_ref()
             .map(|app| self.app_styles.selection(app, input_location.as_deref()))
@@ -15436,6 +15438,63 @@ mod tests {
             1,
             "only the explicitly enabled capture may read a document"
         );
+    }
+
+    #[tokio::test]
+    async fn frozen_scene_reaches_the_request_and_preserves_the_explicit_style_and_privacy_switch() {
+        struct SceneHost {
+            app: crate::app_style_routing::InputApp,
+            kind: Option<crate::browser_scene::BrowserInputKind>,
+            reads: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl HostContextAdapter for SceneHost {
+            fn input_app(&self) -> Option<crate::app_style_routing::InputApp> { Some(self.app.clone()) }
+            fn capture_input_location(&self) -> BoxFuture<'static, Option<String>> {
+                self.reads.fetch_add(1, Ordering::AcqRel);
+                let location = self.kind.and_then(|kind| kind.location()).map(str::to_owned);
+                Box::pin(async move { location })
+            }
+            fn capture(&self, _: bool) -> BoxFuture<'static, Result<HostContextCapture, BackendError>> {
+                Box::pin(async { Ok(HostContextCapture::default()) })
+            }
+        }
+        let (backend, _) = backend();
+        let mut preferences = backend.get_preferences();
+        preferences.cursor_context_enabled = true;
+        backend.set_preferences(preferences.clone()).unwrap();
+        let options = DictationStartOptions {
+            style_pack_id: Some(preferences.active_style_pack_id.clone()),
+            ..Default::default()
+        };
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for bundle in ["com.todesktop.230313mzl4w4u92", "com.stablyai.orca", "example.unknown"] {
+            let host = SceneHost {
+                app: crate::app_style_routing::InputApp::macos(bundle, Some("Cursor")).unwrap(),
+                kind: None, reads: reads.clone(),
+            };
+            let context = backend.capture_dictation_context_with_host(
+                &options, DictationContextPurpose::Dictation, &host,
+            ).await.unwrap();
+            assert_eq!(context.polish.style_pack_id, preferences.active_style_pack_id);
+            let (system, _) = context.effective_polish_prompts("Fictional rename task");
+            assert_eq!(system.contains("本次输入将交给编程 Agent"), bundle != "example.unknown");
+        }
+        let host = SceneHost {
+            app: crate::app_style_routing::InputApp::macos("com.google.Chrome", Some("Chrome")).unwrap(),
+            kind: Some(crate::browser_scene::BrowserInputKind::WebAskAnything), reads: reads.clone(),
+        };
+        let context = backend.capture_dictation_context_with_host(
+            &options, DictationContextPurpose::Dictation, &host,
+        ).await.unwrap();
+        assert!(context.effective_polish_prompts("Fictional task").0.contains("网页 Ask anything 输入框"));
+        let before = reads.load(Ordering::Acquire);
+        preferences.cursor_context_enabled = false;
+        backend.set_preferences(preferences).unwrap();
+        let context = backend.capture_dictation_context_with_host(
+            &options, DictationContextPurpose::Dictation, &host,
+        ).await.unwrap();
+        assert_eq!(reads.load(Ordering::Acquire), before);
+        assert!(!context.effective_polish_prompts("Fictional task").0.contains("网页 Ask anything 输入框"));
     }
 
     #[tokio::test]

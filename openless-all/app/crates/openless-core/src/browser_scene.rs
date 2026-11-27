@@ -15,6 +15,19 @@ pub enum BrowserInputKind {
     Protected,
 }
 
+impl BrowserInputKind {
+    /// Shipped semantics only; never a page-controlled label or permission.
+    pub fn location(self) -> Option<&'static str> {
+        match self {
+            Self::AddressBar => Some("浏览器原生地址栏"),
+            Self::WebAskAnything => Some("网页 Ask anything 输入框"),
+            Self::WebInput => Some("网页输入框"),
+            Self::BrowserChromeInput => Some("浏览器工具栏输入，具体用途未知"),
+            Self::Unknown | Self::Protected => None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ControlFacts<'a> {
     pub role: &'a str,

@@ -6,6 +6,8 @@ mod browser_context;
 #[cfg(target_os = "macos")]
 #[path = "../../src/browser_scene/macos.rs"]
 mod native_scene;
+#[path = "../../src/browser_scene/observation.rs"]
+mod observation;
 
 use openless_core::{
     ask::AskTurnKey,

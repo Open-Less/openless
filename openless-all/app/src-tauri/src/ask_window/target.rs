@@ -55,6 +55,7 @@ impl CapturedTarget {
 pub(crate) struct ContextAccess {
     pub(crate) app_metadata: bool,
     pub(crate) surrounding_text: bool,
+    pub(crate) browser_metadata: bool,
 }
 
 #[derive(Clone)]
@@ -95,6 +96,21 @@ type Claim = Box<dyn FnOnce() -> bool + Send>;
 type Eligible = Arc<dyn Fn() -> bool + Send + Sync>;
 
 enum Request {
+    #[cfg(target_os = "macos")]
+    BrowserBind {
+        scope: u64,
+        grant: openless_core::browser_scene::SceneAuthorization,
+        eligible: Eligible,
+        reply: oneshot::Sender<Arc<()>>,
+    },
+    #[cfg(target_os = "macos")]
+    BrowserRead {
+        ticket: Arc<()>,
+        key: openless_core::ask::AskTurnKey,
+        grant: openless_core::browser_scene::SceneAuthorization,
+        cancellation: openless_core::ask::AskCancellation,
+        reply: oneshot::Sender<openless_core::assistant_api::AssistantContextResult>,
+    },
     Capture {
         expected_pid: Option<u32>,
         scope: Option<u64>,
@@ -115,6 +131,18 @@ enum Request {
 }
 
 impl TargetTracker {
+    #[cfg(target_os = "macos")]
+    pub(crate) async fn browser_source(
+        self: &Arc<Self>, scope: u64, grant: openless_core::browser_scene::SceneAuthorization,
+        eligible: Eligible,
+    ) -> Option<Arc<dyn super::browser_context::BrowserReader>> {
+        if !grant.app_metadata || !grant.browser_metadata { return None; }
+        let (reply, result) = oneshot::channel();
+        if !self.send(Request::BrowserBind { scope, grant, eligible, reply }) { return None; }
+        let ticket = tokio::time::timeout(CAPTURE_TIMEOUT, result).await.ok()?.ok()?;
+        Some(Arc::new(BrowserReader { tracker: self.clone(), ticket }))
+    }
+
     pub(crate) fn new() -> Self {
         Self::default()
     }
@@ -289,6 +317,48 @@ struct CapturedScope {
     identity: native::Identity,
 }
 
+#[cfg(target_os = "macos")]
+struct BrowserReader {
+    tracker: Arc<TargetTracker>,
+    ticket: Arc<()>,
+}
+
+#[cfg(target_os = "macos")]
+impl super::browser_context::BrowserReader for BrowserReader {
+    fn read(
+        &self, key: openless_core::ask::AskTurnKey,
+        grant: openless_core::browser_scene::SceneAuthorization,
+        cancellation: openless_core::ask::AskCancellation,
+    ) -> futures_util::future::BoxFuture<'_, openless_core::assistant_api::AssistantContextResult> {
+        Box::pin(async move {
+            let (reply, result) = oneshot::channel();
+            if self.tracker.send(Request::BrowserRead {
+                ticket: self.ticket.clone(), key, grant, cancellation: cancellation.clone(), reply,
+            }) {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {},
+                    response = tokio::time::timeout(CAPTURE_TIMEOUT, result) => {
+                        if let Ok(Ok(response)) = response { return response; }
+                    },
+                }
+            }
+            openless_core::assistant_api::AssistantContextResult::Unavailable { reason: "browserReferenceExpired".into() }
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct BrowserLease {
+    ticket: Weak<()>,
+    identity: native::Identity,
+    snapshot: crate::browser_scene::macos::Enrichment,
+    _watch: crate::browser_scene::macos::PageWatch,
+    scope: u64,
+    grant: openless_core::browser_scene::SceneAuthorization,
+    at: Instant,
+}
+
 fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64) {
     let epoch = Arc::new(AtomicU64::new(0));
     let Some(mut platform) = native::Platform::new(epoch.clone()) else {
@@ -297,6 +367,8 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
     let mut latest = Latest::new(Instant::now());
     let mut targets: Vec<TargetLease> = Vec::new();
     let mut captured_scope: Option<CapturedScope> = None;
+    #[cfg(target_os = "macos")]
+    let mut browser: Option<BrowserLease> = None;
     while active.load(Ordering::Acquire) {
         let request = match receiver.recv_timeout(OBSERVER_TICK) {
             Ok(request) => Some(request),
@@ -310,6 +382,73 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
             lease.strong_count() != 0 && at.elapsed() <= TARGET_FRESHNESS
         });
         platform.poll();
+        #[cfg(target_os = "macos")]
+        {
+            if browser.as_ref().is_some_and(|lease| {
+                lease.ticket.strong_count() == 0 || lease.scope != scope.load(Ordering::Acquire)
+                    || lease.identity.read_revision() != platform.read_revision()
+                    || lease.at.elapsed() > TARGET_FRESHNESS
+            }) { browser = None; }
+            if let Some(Request::BrowserBind { scope: requested, grant, eligible, reply }) = request {
+                browser = None;
+                if grant.app_metadata && grant.browser_metadata && !reply.is_closed() && eligible()
+                    && requested == scope.load(Ordering::Acquire)
+                {
+                    if let Some(original) = captured_scope.as_ref().filter(|original| {
+                        original.id == requested && original.at.elapsed() <= TARGET_FRESHNESS
+                    }) {
+                        if let Some((snapshot, watch)) = platform.browser_capture(&original.identity, grant, &|| {
+                            active.load(Ordering::Acquire) && eligible() && !reply.is_closed()
+                                && requested == scope.load(Ordering::Acquire)
+                        }) {
+                            let ticket = Arc::new(());
+                            browser = Some(BrowserLease {
+                                ticket: Arc::downgrade(&ticket), identity: original.identity.clone(),
+                                snapshot, _watch: watch, scope: requested, grant, at: original.at,
+                            });
+                            let _ = reply.send(ticket);
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(Request::BrowserRead { ticket, key, grant, cancellation, reply }) = request {
+                use openless_core::browser_scene::AuthorizedBrowserReference;
+                let mut result = openless_core::assistant_api::AssistantContextResult::Unavailable { reason: "browserReferenceExpired".into() };
+                let matches = browser.as_ref().is_some_and(|lease| lease.ticket.as_ptr() == Arc::as_ptr(&ticket));
+                if let Some(lease) = if matches { browser.take() } else { None } {
+                    let current = || active.load(Ordering::Acquire) && !reply.is_closed()
+                        && !cancellation.is_cancelled() && lease.scope == scope.load(Ordering::Acquire)
+                        && lease.at.elapsed() <= TARGET_FRESHNESS;
+                    if grant == lease.grant && current()
+                        && platform.browser_is_current(&lease.identity, &lease.snapshot, grant, &current)
+                    {
+                        let app = lease.identity.input_app();
+                        if let Some((app, location)) = app.as_ref()
+                            .and_then(openless_core::input_scene::recognize)
+                            .zip(lease.snapshot.location.as_deref())
+                        {
+                            if let Some(mut reference) = AuthorizedBrowserReference::new(
+                                key, grant, &lease.identity, app.name, location, lease.snapshot.input_kind, None,
+                            ) {
+                                platform.poll();
+                                result = super::browser_context::consume(&mut reference, key, grant, |identity| {
+                                    current() && platform.browser_is_current(identity, &lease.snapshot, grant, &current)
+                                });
+                                platform.poll();
+                                if !current()
+                                    || platform.read_revision() != lease.identity.read_revision()
+                                {
+                                    result = openless_core::assistant_api::AssistantContextResult::Unavailable { reason: "browserReferenceExpired".into() };
+                                }
+                            }
+                        }
+                    }
+                }
+                let _ = reply.send(result);
+                continue;
+            }
+        }
         if captured_scope.as_ref().is_some_and(|item| {
             item.id != scope.load(Ordering::Acquire) || item.at.elapsed() > TARGET_FRESHNESS
         }) {
@@ -402,15 +541,21 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
             let bound = if front == Foreground::Own && requested.is_some() {
                 bound.or_else(|| retained.map(|old| &old.identity))
             } else { bound };
-            if let Some(identity) = bound {
+            if let Some(identity) = bound.cloned() {
+                #[cfg(target_os = "macos")]
+                let mut identity = identity;
+                #[cfg(target_os = "macos")]
+                if expected_pid.is_some() && context.browser_metadata {
+                    platform.freeze_original(&mut identity);
+                }
                 #[cfg(target_os = "macos")]
                 let read = if front == Foreground::Own && requested.is_some() {
-                    platform.capture_retained(identity)
+                    platform.capture_retained(&identity)
                 } else {
-                    platform.capture(identity)
+                    platform.capture(&identity)
                 };
                 #[cfg(not(target_os = "macos"))]
-                let read = platform.capture(identity);
+                let read = platform.capture(&identity);
                 platform.poll();
                 if active.load(Ordering::Acquire) && !reply.is_closed() && stable(&platform)
                     && requested.is_none_or(|id| id == scope.load(Ordering::Acquire))
@@ -428,7 +573,7 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                                     app.name.as_deref().unwrap_or_default(), app.bundle_id.as_deref(),
                                 ));
                         }
-                        captured = lease_capture(&mut targets, identity, selection, baseline, requested);
+                        captured = lease_capture(&mut targets, &identity, selection, baseline, requested);
                         captured.context = writing_context;
                     }
                     if let (Some(_), Some(id)) = (expected_pid, requested) {

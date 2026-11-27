@@ -1,5 +1,6 @@
 pub(crate) mod attachment_files;
 pub(crate) mod capture;
+pub(crate) mod browser_context;
 pub(crate) mod chat;
 pub(crate) mod context;
 pub(crate) mod entry_settings;

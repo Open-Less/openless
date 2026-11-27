@@ -4,6 +4,8 @@
 
 #[path = "../../src/ask_window/context.rs"]
 mod context;
+#[path = "../../src/ask_window/browser_context.rs"]
+mod browser_context;
 #[path = "../../src/ask_window/session.rs"]
 mod session;
 

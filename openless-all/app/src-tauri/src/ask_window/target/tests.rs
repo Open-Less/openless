@@ -3,6 +3,35 @@ use std::cell::Cell;
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[ignore = "requires a foreground controlled browser-scene.html fixture and Accessibility permission"]
+async fn real_browser_scene_uses_the_frozen_input_and_rejects_sensitive_or_native_chrome_page_reads() {
+    use openless_core::{ask::AskTurnKey, assistant_api::AssistantContextResult, browser_scene::SceneAuthorization};
+    let pid: u32 = std::env::var("OPENLESS_BROWSER_FIXTURE_PID").expect("controlled browser PID").parse().unwrap();
+    let case = std::env::var("OPENLESS_BROWSER_SCENE_CASE").expect("web-ask, fake-address, protected, or address-bar");
+    assert_eq!(crate::selection::current_front_app_pid(), Some(pid as i32));
+    let tracker = Arc::new(TargetTracker::new());
+    tracker.start().unwrap();
+    let _captured = tracker.capture_before_focus(Some(pid), 71, ContextAccess { browser_metadata: true, ..Default::default() }).await;
+    let grant = SceneAuthorization { app_metadata: true, browser_metadata: true, selected_text: false, epoch: 1 };
+    let source = tracker.browser_source(71, grant, Arc::new(|| true)).await;
+    if matches!(case.as_str(), "protected" | "address-bar") {
+        assert!(source.is_none(), "sensitive/native chrome controls cannot provide page data");
+    } else {
+        let expected = match case.as_str() { "web-ask" => "webAskAnything", "fake-address" => "webInput", _ => panic!("unknown controlled fixture case") };
+        let source = source.expect("this controlled browser must expose a unique native tab group and required notifications");
+        let key = AskTurnKey { conversation_id: uuid::Uuid::new_v4(), turn_id: uuid::Uuid::new_v4() };
+        let response = source.read(key, grant, openless_core::ask::AskCancellation::default()).await;
+        let AssistantContextResult::Available { data, .. } = response else { panic!("controlled original page did not remain current") };
+        assert_eq!(data["reference"]["inputKind"], expected);
+        assert!(data["reference"].get("selectedText").is_none());
+        assert!(data["reference"].get("title").is_none());
+        assert!(matches!(source.read(key, grant, openless_core::ask::AskCancellation::default()).await, AssistantContextResult::Unavailable { .. }));
+    }
+    tracker.stop();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 #[ignore = "requires Accessibility permission and the disposable native-live-input-fixture app"]
 async fn real_mac_editor_replaces_only_the_verified_fixture_selection() {
     let pid: i32 = std::env::var("OPENLESS_NATIVE_FIXTURE_PID")
@@ -123,7 +152,7 @@ mod live_ab {
     async fn original(tracker: &TargetTracker, fixture: &Fixture, scope: u64) -> CapturedTarget {
         for _ in 0..20 {
             let captured = tracker.capture_before_focus(
-                Some(fixture.child.id()), scope, ContextAccess { app_metadata: true, surrounding_text: true },
+                Some(fixture.child.id()), scope, ContextAccess { app_metadata: true, surrounding_text: true, ..Default::default() },
             ).await;
             if captured.selection == ExternalSelection::None && captured.write_target.is_some() {
                 return captured;
@@ -139,7 +168,7 @@ mod live_ab {
             // to our child process so even a foreground race cannot bind user text.
             let captured = tracker.capture_for(
                 Some(fixture.child.id()), Some(scope),
-                ContextAccess { app_metadata: true, surrounding_text: true }, CAPTURE_TIMEOUT,
+                ContextAccess { app_metadata: true, surrounding_text: true, ..Default::default() }, CAPTURE_TIMEOUT,
             ).await;
             if captured.selection == ExternalSelection::Selected("red".into())
                 && captured.write_target.is_some()

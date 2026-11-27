@@ -65,6 +65,8 @@ mod global_hotkey_runtime;
 // Currently macOS-only; other platforms degrade gracefully.
 mod host_document;
 #[cfg(not(mobile))]
+mod browser_scene;
+#[cfg(not(mobile))]
 #[path = "hotkey.rs"]
 mod hotkey;
 #[cfg(mobile)]

@@ -2,10 +2,21 @@
 //! The native binding and its verifier are supplied by the existing target owner.
 
 use openless_core::{
-    ask::AskTurnKey,
+    ask::{AskCancellation, AskTurnKey},
     assistant_api::AssistantContextResult,
     browser_scene::{AuthorizedBrowserReference, SceneAuthorization, BROWSER_REFERENCE_RULE},
 };
+
+/// The opaque reader sends work to the existing native target owner. No native
+/// pointer, process id or alternative target capture crosses this boundary.
+pub(crate) trait BrowserReader: Send + Sync {
+    fn read(
+        &self,
+        key: AskTurnKey,
+        grant: SceneAuthorization,
+        cancellation: AskCancellation,
+    ) -> futures_util::future::BoxFuture<'_, AssistantContextResult>;
+}
 
 pub(crate) fn consume<T>(
     reference: &mut AuthorizedBrowserReference<T>,

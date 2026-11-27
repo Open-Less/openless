@@ -15,6 +15,19 @@ pub enum ApplicationCategory {
     Writing,
 }
 
+impl ApplicationCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CodingAgent => "编程 Agent",
+            Self::CodeEditor => "编程",
+            Self::Browser => "浏览器",
+            Self::Chat => "聊天",
+            Self::Email => "邮件",
+            Self::Writing => "写作与笔记",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OutputPolicy {
@@ -58,6 +71,27 @@ pub struct ApplicationRule {
     pub windows_executable_stems: &'static [&'static str],
     pub aliases: &'static [&'static str],
     pub matching_words: &'static [&'static str],
+}
+
+/// Trusted catalog facts only. No process path, page label, title or URL.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationScene {
+    pub name: &'static str,
+    pub category: ApplicationCategory,
+    pub purpose: &'static str,
+    pub output_policy: OutputPolicy,
+}
+
+impl ApplicationRule {
+    pub fn scene(&self) -> ApplicationScene {
+        ApplicationScene {
+            name: self.name,
+            category: self.category,
+            purpose: self.purpose,
+            output_policy: self.output_policy,
+        }
+    }
 }
 
 macro_rules! rule {

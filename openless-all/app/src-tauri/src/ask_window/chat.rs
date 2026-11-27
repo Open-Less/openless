@@ -278,9 +278,11 @@ impl AskHost {
     }
 
     fn context_access(&self) -> target::ContextAccess {
+        let browser = self.context.browser_authorization();
         target::ContextAccess {
             app_metadata: self.context.app_metadata_allowed(),
             surrounding_text: self.backend.get_preferences().cursor_context_enabled,
+            browser_metadata: browser.app_metadata && browser.browser_metadata,
         }
     }
 
@@ -887,15 +889,6 @@ impl super::Integration for DesktopPorts {
         let ask = self.ask.clone();
         Box::pin(async move {
             let conversation = ask.open().map_err(|error| error.message)?;
-            if let (Some(pid), Some(bundle)) = (
-                invocation.foreground_pid,
-                invocation
-                    .foreground_app
-                    .as_ref()
-                    .and_then(|app| app.bundle_id.as_deref()),
-            ) {
-                ask.context.bind_browser_source(conversation, pid, bundle);
-            }
             if let Some(desktop) = app.try_state::<Arc<super::Desktop>>() {
                 desktop.set_conversation(Some(conversation.to_string()));
             }
@@ -903,6 +896,15 @@ impl super::Integration for DesktopPorts {
                 .targets
                 .capture_before_focus(invocation.foreground_pid, generation, ask.context_access())
                 .await;
+            #[cfg(target_os = "macos")]
+            {
+                let grant = ask.context.browser_authorization();
+                if let Some(reader) = ask.targets.browser_source(
+                    generation, grant, ask.context.browser_guard(grant),
+                ).await {
+                    ask.context.bind_browser_reference(conversation, grant, reader);
+                }
+            }
             if app
                 .try_state::<Arc<super::Desktop>>()
                 .is_some_and(|desktop| desktop.external_target_generation() == Some(generation))

@@ -1146,6 +1146,7 @@ impl StandaloneQaService {
             conversation_id: request.conversation_id,
             turn_id: Uuid::new_v4(),
         };
+        self.0.deps.context.begin_turn(key);
         let preparation = tokio::select! {
             biased;
             _ = lifetime.cancelled() => return Err(no_conversation()),
