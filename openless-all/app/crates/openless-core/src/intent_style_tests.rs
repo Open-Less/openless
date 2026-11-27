@@ -353,7 +353,7 @@ async fn run_intent_comparison(config: &ComparisonConfig, output_path: &str) -> 
     let mut file = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&output_path)
+        .open(output_path)
         .unwrap();
     file.write_all(&serde_json::to_vec_pretty(&report).unwrap())
         .unwrap();
@@ -501,18 +501,44 @@ async fn intent_comparison_http_loop_stops_on_first_error() {
     }
 }
 
+// These transport fixtures receive POST requests with Content-Length framing.
+// A response requires a complete request, including across partial TCP reads.
+async fn read_mock_request(socket: &mut tokio::net::TcpStream) {
+    use tokio::io::AsyncReadExt;
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).await.unwrap();
+            assert!(count > 0, "mock request ended before completion");
+            request.extend_from_slice(&buffer[..count]);
+            assert!(request.len() <= 64 * 1024, "mock request exceeds size limit");
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let headers = std::str::from_utf8(&request[..end]).unwrap();
+                assert!(headers.starts_with("POST "), "mock expected a POST request");
+                let length = headers.lines().find_map(|line| {
+                    line.to_ascii_lowercase().strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                }).unwrap_or(0);
+                let total = (end + 4).checked_add(length).unwrap();
+                assert!(total <= 64 * 1024, "mock request exceeds size limit");
+                if request.len() >= total { break; }
+            }
+        }
+    }).await.expect("mock request timed out before completion");
+}
+
 #[tokio::test]
 async fn intent_comparison_transport_budget_and_redirects() {
     use crate::polish::{live_acceptance as probe, send_with_transient_retry as send};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     probe::intent_scope(async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             for _ in 0..36 {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut buffer = [0_u8; 4096];
-                socket.read(&mut buffer).await.unwrap();
+                read_mock_request(&mut socket).await;
                 socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
             }
             assert!(tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept()).await.is_err());
@@ -529,8 +555,7 @@ async fn intent_comparison_transport_budget_and_redirects() {
         let redirect = format!("{url}/must-not-follow");
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buffer = [0_u8; 4096];
-            socket.read(&mut buffer).await.unwrap();
+            read_mock_request(&mut socket).await;
             socket.write_all(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {redirect}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
             assert!(tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept()).await.is_err());
         });
