@@ -519,7 +519,10 @@ fn init_host() -> Host {
         }),
     )));
     let _guard = runtime.enter();
-    match openless_linux_host::LinuxBackendBuilder::from_shared_providers(config)
+    let usage_events = host.host_events.clone();
+    match openless_linux_host::LinuxBackendBuilder::from_shared_providers_with_usage_listener(config, move || {
+        let _ = usage_events.send(("service-usage:changed".into(), "{}".into()));
+    })
         .and_then(|builder| builder.with_host_actions(host_actions.clone()).build())
     {
         Ok(runtime_parts) => {
@@ -1915,11 +1918,13 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .into_iter()
                 .find(|entry| entry.id == session_id)
                 .ok_or_else(|| "history entry not found".to_string())?;
-            if backend
-                .snapshot()
-                .dictation
-                .session_id
-                .is_some_and(|active| active.to_string() == session_id)
+            let dictation = backend.snapshot().dictation;
+            if dictation.session_id.is_some_and(|active| active.to_string() == session_id)
+                && matches!(dictation.phase, openless_core::DictationPhase::Starting
+                    | openless_core::DictationPhase::Recording
+                    | openless_core::DictationPhase::Transcribing
+                    | openless_core::DictationPhase::Polishing
+                    | openless_core::DictationPhase::Inserting)
             {
                 return Err("录音还在进行，先停掉再重新转录".to_string());
             }
@@ -2256,6 +2261,29 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .clear_expression_profile()
                 .map_err(|error| error.to_string())?;
             Ok(json!({ "cleared": true }))
+        }
+        "get_dictation_style_target" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(json_value(backend.dictation_style_target()))
+        }
+        "update_dictation_style" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let session = uuid::Uuid::parse_str(required_str(_args, "sessionId")?)
+                .map(openless_core::SessionId::from_uuid).map_err(|error| error.to_string())?;
+            let selection = serde_json::from_value(_args.get("selection").cloned().ok_or("缺少 selection")?)
+                .map_err(|error| error.to_string())?;
+            Ok(json_value(backend.update_dictation_style(session, selection).map_err(|error| error.to_string())?))
+        }
+        "set_capsule_style_menu" => {
+            // The Linux overlay reserves headroom at creation; React/native hit
+            // regions own popup geometry. Still reject events from stale sessions.
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let session = required_str(_args, "sessionId")?;
+            let open = arg_bool(_args, "open")?;
+            if open && !backend.dictation_style_target().is_some_and(|target| target.session_id.to_string() == session) {
+                return Err("recording_style_required".into());
+            }
+            Ok(json!({ "open": open }))
         }
         "get_dictation_translation_target" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
@@ -2922,13 +2950,10 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
 
 // ── 静态资源 ────────────────────────────────────────────────────────────────
 
+mod static_assets;
+
 fn serve_dir(root: PathBuf, host: std::sync::Arc<Host>) -> std::io::Result<u16> {
-    if !root.join("index.html").exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("{} 里没有 index.html", root.display()),
-        ));
-    }
+    let root = std::sync::Arc::new(static_assets::StaticAssets::load(&root)?);
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     std::thread::spawn(move || {
@@ -2950,7 +2975,7 @@ fn serve_dir(root: PathBuf, host: std::sync::Arc<Host>) -> std::io::Result<u16> 
 ///
 /// - `POST /api/invoke`  `{id,command,args}` → `{ok,value|error}`
 /// - `GET  /api/events`  SSE，推 `{name,payload}`（映射与 GTK 宿主同一份）
-fn handle_request(mut stream: TcpStream, root: &Path, host: &Host) -> std::io::Result<()> {
+fn handle_request(mut stream: TcpStream, root: &static_assets::StaticAssets, host: &Host) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -3020,22 +3045,16 @@ fn handle_request(mut stream: TcpStream, root: &Path, host: &Host) -> std::io::R
         return Ok(());
     }
 
-    let mut file_path = root.join(path.trim_start_matches('/'));
-    if path.ends_with('/') || file_path.is_dir() {
-        file_path.push("index.html");
-    }
-    let body = std::fs::read(&file_path).unwrap_or_default();
-    let (status, mime) = if body.is_empty() {
-        ("404 Not Found", "text/plain")
-    } else {
-        ("200 OK", mime_for(&file_path))
+    let (status, mime, body) = match root.get(&path) {
+        Some((body, name)) => ("200 OK", mime_for(Path::new(name)), body),
+        None => ("404 Not Found", "text/plain", &[][..]),
     };
     let header = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes())?;
-    stream.write_all(&body)?;
+    stream.write_all(body)?;
     Ok(())
 }
 

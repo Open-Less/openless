@@ -76,10 +76,28 @@ impl LinuxBackendBuilder {
     /// host's Tokio runtime (or a scoped `Handle::enter`) so native callbacks can
     /// retain that executor; this factory never creates a second runtime.
     pub fn from_shared_providers(config: BackendConfig) -> Result<Self, BackendError> {
-        // Resolve before touching stores: missing executor is a construction
-        // error, not a reason to create credentials/directories then lose work.
+        Self::from_shared_providers_with_usage_listener(config, || {})
+    }
+
+    pub fn from_shared_providers_with_usage_listener(
+        config: BackendConfig,
+        on_usage_changed: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self, BackendError> {
         let task_spawner: Arc<dyn openless_core::TaskSpawner> =
             Arc::new(LinuxTaskSpawner::capture_current()?);
+        let usage_recorder = match openless_core::usage_ledger::UsageLedger::open(
+            config.data_dir.join("service-usage.json"),
+        ).and_then(|ledger| openless_core::usage_ledger::UsageRecorder::start_with_change_listener(
+            Arc::new(ledger), on_usage_changed,
+        )) {
+            Ok(recorder) => Some(Arc::new(recorder)),
+            Err(error) => {
+                log::warn!("service usage unavailable: {error}");
+                None
+            }
+        };
+        // Resolve before touching stores: missing executor is a construction
+        // error, not a reason to create credentials/directories then lose work.
         let store = LinuxCredentialStore::open(&config.data_dir)?;
         // Only a host that supplies a home directory opts into reading legacy
         // credentials. Data-only builders and integration tests leave it unset;
@@ -111,8 +129,11 @@ impl LinuxBackendBuilder {
         // Linux has no local inference runtime: only shared cloud ASR providers
         // are registered above, and local-ASR requests stay unsupported in Core.
         let polisher = Arc::new(TextPolisherRouter::default());
-        let cloud_polisher: Arc<dyn TextPolisher> =
-            Arc::new(SharedCloudTextPolisher::new(Arc::clone(&credential_store)));
+        let production_polisher = SharedCloudTextPolisher::new(Arc::clone(&credential_store));
+        let cloud_polisher: Arc<dyn TextPolisher> = Arc::new(match &usage_recorder {
+            Some(recorder) => production_polisher.with_usage_recorder(Arc::clone(recorder)),
+            None => production_polisher,
+        });
         for provider_type in SHARED_CLOUD_LLM_PROVIDER_TYPES {
             polisher.register(*provider_type, Arc::clone(&cloud_polisher))?;
         }
@@ -123,6 +144,7 @@ impl LinuxBackendBuilder {
         ));
 
         let mut services = BackendServices::unsupported();
+        services.usage_recorder = usage_recorder;
         services.provider = Arc::new(ProviderService::new(
             Arc::clone(&credential_store),
             Arc::clone(&task_spawner),
@@ -380,6 +402,24 @@ mod tests {
             .unwrap();
         assert!(!backend.backend.snapshot().running);
         let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn production_usage_ledger_is_available_and_notifies_without_polling() {
+        let data_dir = std::env::temp_dir().join(format!("openless-usage-{}", uuid::Uuid::new_v4()));
+        let (send, receive) = std::sync::mpsc::channel();
+        let builder = LinuxBackendBuilder::from_shared_providers_with_usage_listener(
+            BackendConfig { data_dir: data_dir.clone(), ..Default::default() },
+            move || { let _ = send.send(()); },
+        ).unwrap();
+        let recorder = builder.services.as_ref().unwrap().usage_recorder.as_ref().unwrap().clone();
+        assert!(recorder.snapshot().unwrap().0.is_empty());
+        recorder.clear().unwrap();
+        receive.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert!(data_dir.join("service-usage.json").is_file());
+        drop(builder);
+        drop(recorder);
+        std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     #[tokio::test]

@@ -728,6 +728,7 @@ mod tests {
                 modifiers: vec!["alt".into()],
             },
             switch_style: None,
+            skip_auto_style: ShortcutBinding { primary: "Space".into(), modifiers: vec!["alt".into()] },
             open_app: None,
             selection_polish: Some(ShortcutBinding {
                 primary: "X".into(),

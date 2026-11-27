@@ -125,7 +125,10 @@ pub fn credential_key(
         CredentialNamespace::Omni
     } else if account == MARKETPLACE_GITHUB_TOKEN_ACCOUNT {
         CredentialNamespace::Marketplace
-    } else if account == crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT {
+    } else if account == crate::credentials::CLOUD_SYNC_CUSTOM_TOKEN_ACCOUNT
+        || account == crate::deepseek_suite::CONFIG_ACCOUNT
+        || account == "web_search.config"
+    {
         CredentialNamespace::Application
     } else {
         CredentialAccount::parse(account)
@@ -167,6 +170,15 @@ mod tests {
         assert_eq!(llm.namespace, CredentialNamespace::Llm);
         assert_eq!(asr.namespace, CredentialNamespace::Asr);
         assert_eq!(omni.namespace, CredentialNamespace::Omni);
+    }
+
+    #[test]
+    fn application_configs_match_their_shared_service_namespace() {
+        for account in [crate::deepseek_suite::CONFIG_ACCOUNT, "web_search.config"] {
+            let key = credential_key(account, None).unwrap();
+            assert_eq!(key.namespace, CredentialNamespace::Application);
+            assert!(key.provider_id.is_none());
+        }
     }
 
     #[test]

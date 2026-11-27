@@ -512,28 +512,83 @@ fn fcitx5_process_id() -> Option<u32> {
     None
 }
 
+fn linux_input_app(program: &str) -> Option<openless_core::app_style_routing::InputApp> {
+    let program = program.trim();
+    if program.is_empty() || program.len() > 200 || !program.chars().all(|c| c.is_alphanumeric() || "._-".contains(c)) {
+        return None;
+    }
+    Some(openless_core::app_style_routing::InputApp { id: format!("linux:{program}"), name: program.to_string() })
+}
+
 #[derive(Debug, Clone)]
 pub struct Fcitx5TextInserter {
     clipboard_fallback: bool,
+    target: Option<std::sync::Arc<FrozenFcitxTarget>>,
+}
+
+#[derive(Debug)]
+struct FrozenFcitxTarget {
+    ticket: String,
+    program: String,
+}
+
+impl Drop for FrozenFcitxTarget {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        let _ = send_bool_message("CancelDictationTarget", |message| message.append1(self.ticket.clone()));
+    }
+}
+
+impl crate::host_context::SurroundingReader for FrozenFcitxTarget {
+    fn read(&self) -> Result<Option<SurroundingText>, BackendError> {
+        // Check metadata before asking the plugin for any document text.
+        if self.program.is_empty() || crate::host_context::is_sensitive_program(&self.program) { return Ok(None); }
+        #[cfg(target_os = "linux")]
+        {
+            let raw = send_string_message("DictationTargetSurrounding", |message| message.append1(self.ticket.clone()))?;
+            Ok(parse_surrounding_text(&raw))
+        }
+        #[cfg(not(target_os = "linux"))]
+        Ok(None)
+    }
 }
 
 impl Fcitx5TextInserter {
     pub fn new(clipboard_fallback: bool) -> Self {
-        Self { clipboard_fallback }
+        Self { clipboard_fallback, target: None }
     }
 }
 
 impl TextInserter for Fcitx5TextInserter {
+    fn capture_target_for_session(&self, session_id: openless_core::SessionId) -> Option<openless_core::ports::CapturedTextTarget> {
+        #[cfg(target_os = "linux")]
+        {
+            let ticket = session_id.to_string();
+            // Capture before Core performs any asynchronous credential/context work.
+            if !send_bool_message("CaptureDictationTarget", |message| message.append1(ticket.clone())).ok()? { return None; }
+            let program = send_string_message("DictationTargetProgram", |message| message.append1(ticket.clone())).unwrap_or_default();
+            let app = linux_input_app(&program);
+            let target = std::sync::Arc::new(FrozenFcitxTarget { ticket, program });
+            Some(openless_core::ports::CapturedTextTarget {
+                inserter: std::sync::Arc::new(Self { clipboard_fallback: self.clipboard_fallback, target: Some(target.clone()) }),
+                host_context: std::sync::Arc::new(crate::host_context::LinuxHostContextAdapter::for_target(target, app)),
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        { let _ = session_id; None }
+    }
+
     fn begin(
         &self,
         session_id: openless_core::SessionId,
         _context: std::sync::Arc<openless_core::DictationContext>,
     ) -> BoxFuture<'static, Result<std::sync::Arc<dyn TextInsertionSession>, BackendError>> {
         let clipboard_fallback = self.clipboard_fallback;
+        let target = self.target.clone();
         Box::pin(async move {
-            let ticket = session_id.to_string();
+            let ticket = target.as_ref().map(|target| target.ticket.clone()).unwrap_or_else(|| session_id.to_string());
             #[cfg(target_os = "linux")]
-            {
+            if target.is_none() {
                 let capture_ticket = ticket.clone();
                 // A missing native target is a supported clipboard fallback,
                 // not permission to choose a new window after transcription.
@@ -548,6 +603,7 @@ impl TextInserter for Fcitx5TextInserter {
                 clipboard_fallback,
                 ticket,
                 closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                _target: target,
             }) as std::sync::Arc<dyn TextInsertionSession>)
         })
     }
@@ -558,6 +614,7 @@ struct Fcitx5InsertionSession {
     clipboard_fallback: bool,
     ticket: String,
     closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _target: Option<std::sync::Arc<FrozenFcitxTarget>>,
 }
 
 impl Fcitx5InsertionSession {
@@ -1433,6 +1490,13 @@ fn platform_error(message: String) -> BackendError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linux_app_identity_is_stable_and_never_accepts_a_path_or_command() {
+        assert_eq!(super::linux_input_app("google-chrome").unwrap().id, "linux:google-chrome");
+        assert!(super::linux_input_app("/usr/bin/chrome").is_none());
+        assert!(super::linux_input_app("chrome --flag").is_none());
+        assert!(super::linux_input_app("").is_none());
+    }
     use super::*;
 
     #[test]

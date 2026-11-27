@@ -103,12 +103,14 @@ pub fn cursor_context_from(surrounding: &SurroundingText) -> Option<String> {
 /// 注入式宿主上下文适配器。
 pub struct LinuxHostContextAdapter {
     reader: Arc<dyn SurroundingReader>,
+    input_app: Option<openless_core::app_style_routing::InputApp>,
 }
 
 impl Default for LinuxHostContextAdapter {
     fn default() -> Self {
         Self {
             reader: Arc::new(FcitxSurrounding),
+            input_app: None,
         }
     }
 }
@@ -116,20 +118,28 @@ impl Default for LinuxHostContextAdapter {
 impl LinuxHostContextAdapter {
     #[allow(dead_code)]
     pub fn new(reader: Arc<dyn SurroundingReader>) -> Self {
-        Self { reader }
+        Self { reader, input_app: None }
+    }
+
+    pub(crate) fn for_target(reader: Arc<dyn SurroundingReader>, input_app: Option<openless_core::app_style_routing::InputApp>) -> Self {
+        Self { reader, input_app }
     }
 }
 
 impl HostContextAdapter for LinuxHostContextAdapter {
+    fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
+        self.input_app.clone()
+    }
     fn capture(
         &self,
         include_cursor: bool,
     ) -> BoxFuture<'static, Result<openless_core::HostContextCapture, BackendError>> {
         let reader = Arc::clone(&self.reader);
+        let front_app = self.input_app.as_ref().map(|app| app.name.clone());
         Box::pin(async move {
             if !include_cursor {
                 // 明确不读文档：连 surrounding text 都不问。
-                return Ok(openless_core::HostContextCapture::default());
+                return Ok(openless_core::HostContextCapture { front_app, cursor_context: None });
             }
             // DBus 调用是阻塞的，放到阻塞线程池，别占着 tokio worker。
             let surrounding = tokio::task::spawn_blocking(move || reader.read())
@@ -296,6 +306,22 @@ fn observe_loop(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn frozen_app_identity_does_not_require_document_access() {
+        struct ForbiddenReader;
+        impl super::SurroundingReader for ForbiddenReader {
+            fn read(&self) -> Result<Option<crate::fcitx5::SurroundingText>, openless_core::BackendError> {
+                panic!("metadata-only capture must never read the document");
+            }
+        }
+        let app = openless_core::app_style_routing::InputApp { id: "linux:google-chrome".into(), name: "google-chrome".into() };
+        let adapter = super::LinuxHostContextAdapter::for_target(std::sync::Arc::new(ForbiddenReader), Some(app.clone()));
+        use openless_core::ports::HostContextAdapter;
+        assert_eq!(adapter.input_app(), Some(app));
+        let capture = adapter.capture(false).await.unwrap();
+        assert_eq!(capture.front_app.as_deref(), Some("google-chrome"));
+        assert!(capture.cursor_context.is_none());
+    }
     use super::*;
     use openless_core::host_document::EditPair;
 

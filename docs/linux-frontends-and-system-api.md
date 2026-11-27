@@ -68,14 +68,14 @@ retain their normal corners.
    behind a framework-independent host service, add Linux HTTP/event adapters,
    select a host-neutral Ask client, then add native window/focus ownership.
    Do not map missing methods to null or claim that a rendered main page is Ask.
-2. **Automatic per-app style selection**: Core settings endpoints work, but Linux
-   must supply `HostContextAdapter::input_app()` from the same frozen fcitx5
-   dictation target as text insertion. Querying current focus later can misattribute
-   a recording. Add a ticket-scoped program identity method to the plugin, and bind
-   the captured inserter/context before asynchronous credential/context work.
-   Keep application identity separate from document text; a disabled cursor-context
-   preference must not cause document reads. Catalog Linux classification also
-   needs explicit identifiers; do not guess Windows/macOS identifiers.
+2. **Automatic per-app style selection**: Linux now freezes an fcitx5 target before
+   Core's asynchronous startup and supplies `linux:<program>` identity from that
+   same ticket for style routing and insertion. Program metadata never reads the
+   document; ticket-scoped cursor reads respect the opt-in flag and sensitive-app
+   gate. Previously seen apps can be explicitly assigned a style in the shared UI.
+   Catalog category auto-classification still needs Linux identifiers; macOS bundle
+   or Windows executable categories must not be guessed. An old running fcitx5
+   addon lacks the new metadata methods until it is reloaded.
 3. Ask browser-tab/window enumeration, scoped read consent, screenshots/file
    attachments and voice editor ownership need Linux-specific implementations and
    privacy checks. Persisting an enabled consent switch alone is not support.
@@ -92,11 +92,15 @@ retain their normal corners.
   auxiliary roots, capsule controls/empty cleanup (Chromium + WebKit).
 - `cargo test -p openless-linux-web`: real Core routing state/validation, picker
   cancellation semantics, capsule payload and voice-edit arming.
+- Immutable frontend asset snapshot test: replace/delete installed lazy chunks after
+  backend startup and prove that the running process retains its complete old build.
+- Production usage initialization/notification, metadata-only frozen target capture,
+  credential namespace and Linux multimodal recovery regressions are covered.
 - Native isolated virtual KWin test: both shells loaded pages, wrote clipboard
   bytes verified with `wl-paste`, applied native input regions, accepted secondary
   toolkit handoff and exited through the tray event. This is not a full desktop
   dictation/Ask test or proof of every compositor's click-through geometry.
 
-AOCI MCP was blocked by project server approval during this task; the existing
-index is not aligned with these changes. No index semantics were synthesized from
-filenames and no forced rescan was used to erase that drift.
+The existing AOCI index has unresolved governance drift and is not aligned with
+these changes. No index semantics were synthesized from filenames and no forced
+rescan was used to erase that drift.

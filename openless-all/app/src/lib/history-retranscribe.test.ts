@@ -53,6 +53,15 @@ assert(
   'quick notes should retain retranscription even when their original pipeline was multimodal',
 );
 
+assert(
+  canRetranscribeHistoryEntry({ ...archivedEntry, pipelineMode: 'multimodal' }, true),
+  'Linux must offer ASR recovery for an archived failed multimodal request',
+);
+assert(
+  !canRetranscribeHistoryEntry({ hasAudioRecording: false, pipelineMode: 'multimodal' }, true),
+  'Linux recovery still requires an archived recording',
+);
+
 console.log('history-retranscribe: all assertions passed');
 
 assert(

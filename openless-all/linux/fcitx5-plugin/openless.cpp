@@ -433,6 +433,16 @@ public:
         return dictationTargets_.emplace(ticket, savedIc_).second;
     }
 
+    std::string dictationTargetProgram(const std::string &ticket) {
+        const auto found = dictationTargets_.find(ticket);
+        return found == dictationTargets_.end() ? std::string() : found->second->program();
+    }
+
+    std::string dictationTargetSurrounding(const std::string &ticket) {
+        const auto found = dictationTargets_.find(ticket);
+        return surroundingTextFor(found == dictationTargets_.end() ? nullptr : found->second);
+    }
+
     bool commitDictationTarget(const std::string &ticket, const std::string &text) {
         auto found = dictationTargets_.find(ticket);
         if (found == dictationTargets_.end()) return false;
@@ -826,11 +836,18 @@ public:
                 return false;
             });
         }
+        return surroundingTextFor(ic);
+    }
+
+    std::string surroundingTextFor(InputContext *ic) {
         constexpr char kSep = '\x1f';
         if (!ic) {
             return std::string("0") + kSep + std::string() + kSep + "0" + kSep + "0" + kSep;
         }
         const std::string program = ic->program();
+        if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Password)) {
+            return std::string("0") + kSep + program + kSep + "0" + kSep + "0" + kSep;
+        }
         const auto &surrounding = ic->surroundingText();
         const bool valid = surrounding.isValid();
         if (!valid) {
@@ -873,6 +890,8 @@ public:
 
     FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(captureDictationTarget, "CaptureDictationTarget", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(dictationTargetProgram, "DictationTargetProgram", "s", "s");
+    FCITX_OBJECT_VTABLE_METHOD(dictationTargetSurrounding, "DictationTargetSurrounding", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(commitDictationTarget, "CommitDictationTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelDictationTarget, "CancelDictationTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(captureSelectionTarget, "CaptureSelectionTarget", "s", "s");

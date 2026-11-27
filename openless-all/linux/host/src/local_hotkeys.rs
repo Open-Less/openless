@@ -329,6 +329,7 @@ mod tests {
             quick_note: None,
             translation: binding("Z", &["alt"]),
             switch_style: Some(binding("S", &["ctrl", "shift"])),
+            skip_auto_style: binding("Space", &["alt"]),
             open_app: None,
             selection_polish: Some(binding("X", &["alt"])),
             coding_agent_enabled: true,
