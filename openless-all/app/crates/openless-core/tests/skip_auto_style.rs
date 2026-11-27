@@ -124,10 +124,12 @@ fn skip_auto_style_defaults_and_conflicts_cover_every_owner() {
         modifiers: vec![],
     };
     assert!(reject_hotkey_collisions(&shift).is_err());
-    let mut style_conflict = UserPreferences::default();
-    style_conflict.skip_auto_style_hotkey = ShortcutBinding {
-        primary: "K".into(),
-        modifiers: vec!["ctrl".into(), "shift".into()],
+    let mut style_conflict = UserPreferences {
+        skip_auto_style_hotkey: ShortcutBinding {
+            primary: "K".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        },
+        ..UserPreferences::default()
     };
     style_conflict
         .style_pack_hotkeys
@@ -143,16 +145,20 @@ fn skip_auto_style_defaults_and_conflicts_cover_every_owner() {
 fn skip_auto_style_windows_migrates_and_rejects_unverified_modifier_taps() {
     for primary in ["LeftAlt", "RightAlt", "LeftOption", "LeftCommand", "LeftControl"] {
         let binding = ShortcutBinding { primary: primary.into(), modifiers: vec![] };
-        let mut prefs = UserPreferences::default();
-        prefs.skip_auto_style_hotkey = binding.clone();
+        let prefs = UserPreferences {
+            skip_auto_style_hotkey: binding.clone(),
+            ..UserPreferences::default()
+        };
         assert!(reject_hotkey_collisions(&prefs).is_err(), "{primary}");
         let migrated: UserPreferences =
             serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
         assert!(migrated.skip_auto_style_hotkey.is_unassigned(), "{primary}");
     }
-    let mut prefs = UserPreferences::default();
-    prefs.skip_auto_style_hotkey = ShortcutBinding {
-        primary: "K".into(), modifiers: vec!["ctrl".into(), "shift".into()],
+    let prefs = UserPreferences {
+        skip_auto_style_hotkey: ShortcutBinding {
+            primary: "K".into(), modifiers: vec!["ctrl".into(), "shift".into()],
+        },
+        ..UserPreferences::default()
     };
     reject_hotkey_collisions(&prefs).unwrap();
     let roundtrip: UserPreferences =
