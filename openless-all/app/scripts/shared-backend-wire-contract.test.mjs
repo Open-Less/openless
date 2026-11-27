@@ -777,6 +777,7 @@ for (const field of ['skipAutoStyleHotkey', 'skipAutoStylePickerEnabled']) {
 for (const command of [
   'get_dictation_style_target',
   'update_dictation_style',
+  'get_capsule_style_menu_request',
   'set_capsule_style_menu',
 ]) {
   assert.ok(styleIpc.includes(`'${command}'`));

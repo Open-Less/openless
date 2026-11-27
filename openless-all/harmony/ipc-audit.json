@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 194,
+  "total": 195,
   "wired": 108,
-  "missing": 86,
+  "missing": 87,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -461,6 +461,13 @@
     },
     {
       "name": "get_capsule_snapshot",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "get_capsule_style_menu_request",
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
