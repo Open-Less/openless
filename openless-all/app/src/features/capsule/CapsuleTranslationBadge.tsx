@@ -200,7 +200,7 @@ export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
               onChange={(value) => void change(value)}
               side="top"
               popupStyle={{ width: 240 }}
-              popupClassName="ol-capsule-picker-popup"
+              popupClassName="ol-capsule-picker-popup ol-capsule-language-popup"
             />
           </div>
         </div>

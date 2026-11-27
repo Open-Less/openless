@@ -38,6 +38,10 @@ assert.match(capsule, /<CapsuleStyleBadge/);
 for (const badge of [styleBadge, languageBadge]) {
   assert.match(badge, /useCapsulePickerMenu\(\{\s*controller: pickerController\b/);
 }
+assert.match(
+  languageBadge,
+  /popupClassName="ol-capsule-picker-popup ol-capsule-language-popup"/,
+);
 assert.match(styleBadge, /requests\.take\(intent, target\)/);
 assert.match(styleBadge, /menu\.owns\(intent\.sessionId, intent\.requestId\)/);
 assert.match(styleBadge, /menu\.openMenu\(intent\.requestId\)/);
