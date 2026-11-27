@@ -541,6 +541,8 @@ export interface UserPreferences {
   customComboHotkey: ComboBinding | null;
   /** Global hotkey to trigger translation while recording. Default Shift. */
   translationHotkey: ShortcutBinding;
+  skipAutoStyleHotkey: ShortcutBinding;
+  skipAutoStylePickerEnabled: boolean;
   /** Global hotkey to switch to the previous polish style. null = disabled by user (issue #576). */
   switchStyleHotkey: ShortcutBinding | null;
   /** Global hotkey to open the OpenLess main window. null = disabled by user (issue #576). */
@@ -867,6 +869,9 @@ export interface CapsulePayload {
   insertedChars: number | null;
   /** Whether the current session is in translation mode (the user pressed Shift). See issue #4. */
   translation: boolean;
+  skipAutoStyle?: boolean;
+  stylePackId?: string | null;
+  stylePackName?: string | null;
   /** Whether this is a Less Computer session: the processing label shows "using" instead of "thinking". */
   operating?: boolean;
   /**
@@ -944,4 +949,18 @@ export interface PlatformCapabilities {
   supportsInAppDictation: boolean;
   supportsAutoUpdate: boolean;
   supportsVoiceEdit: boolean;
+}
+
+export type DictationStyleSelection =
+  { mode: 'automatic' } | { mode: 'skipAuto' } | { mode: 'stylePack'; stylePackId: string };
+
+export interface DictationStyleTarget {
+  sessionId: string;
+  selection: DictationStyleSelection;
+  skipAutoStyle: boolean;
+  stylePackId: string | null;
+  stylePackName: string | null;
+  polishStylePackId: string | null;
+  availableStyles: StylePack[];
+  mutable: boolean;
 }

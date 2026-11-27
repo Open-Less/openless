@@ -764,4 +764,44 @@ assert.match(
   'mobile dictation insertion must provide a no-op target restore without enabling Selection Polish',
 );
 
+const styleIpc = await read('src/lib/ipc/dictation.ts');
+const hotkeyIpc = await read('src/lib/ipc/hotkeys.ts');
+const sharedTypes = await read('crates/openless-core/src/shared_types.rs');
+const styleContext = await read('crates/openless-core/src/dictation_context.rs');
+const styleCommand = await read('src-tauri/src/commands/dictation.rs');
+const mockSettings = await read('src/lib/ipc/mock-data.ts');
+for (const field of ['skipAutoStyleHotkey', 'skipAutoStylePickerEnabled']) {
+  assert.ok(types.includes(field), `frontend preferences must declare ${field}`);
+  assert.ok(mockSettings.includes(field), `mock settings must include ${field}`);
+}
+for (const command of [
+  'get_dictation_style_target',
+  'update_dictation_style',
+  'set_capsule_style_menu',
+]) {
+  assert.ok(styleIpc.includes(`'${command}'`));
+  assert.ok(styleCommand.includes(`fn ${command}`));
+  assert.ok(invokeHandlers.includes(`commands::${command}`));
+}
+assert.match(hotkeyIpc, /'set_skip_auto_style_hotkey',\s*\{ binding \}/);
+assert.match(
+  coreApi,
+  /pub fn update_dictation_style\([^]*?session_id: SessionId,[^]*?selection: DictationStyleSelection/,
+);
+assert.match(coreApi, /pub fn toggle_dictation_style_for_session/);
+assert.match(coreApi, /style_choices\.available = available_styles/);
+assert.match(styleContext, /pub enum DictationStyleSelection/);
+for (const mode of ['automatic', 'skipAuto', 'stylePack'])
+  assert.ok(types.includes(`mode: "${mode}"`) || types.includes(`mode: '${mode}'`));
+for (const field of ['skip_auto_style', 'style_pack_id', 'style_pack_name']) {
+  assert.ok(sharedTypes.includes(`pub ${field}:`), `capsule must expose ${field}`);
+}
+assert.match(coordinatorHotkeys, /set_skip_auto_style_source/);
+assert.match(coordinatorHotkeys, /toggle_dictation_style_for_session\(context\.session_id\)/);
+assert.match(styleCommand, /set_capsule_picker_menu_impl\(window, coord, session_id, open, true\)/);
+assert.match(
+  styleCommand,
+  /set_capsule_picker_menu_impl\(window, coord, session_id, open, false\)/,
+);
+
 console.log('shared-backend-wire-contract.test.mjs passed');

@@ -94,6 +94,14 @@ export let mockSettings: UserPreferences = {
   outputLanguagePreference: 'auto',
   qaSaveHistory: false,
   customComboHotkey: null,
+  skipAutoStyleHotkey: {
+    primary:
+      typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
+        ? 'LeftCommand'
+        : 'LeftAlt',
+    modifiers: [],
+  },
+  skipAutoStylePickerEnabled: false,
   translationHotkey: { primary: 'Shift', modifiers: [] },
   switchStyleHotkey: {
     primary: 'S',
