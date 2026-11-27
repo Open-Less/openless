@@ -24,6 +24,19 @@ assert.match(verification, /meta\.ctime_nsec\(\)/);
 assert.match(verification, /before != after/);
 assert.match(native, /with_local_startup_spawner/);
 assert.match(worker, /TextStreamChunk\s*\{\s*text: finalized \+ draft\.as_str\(\),\s*offset: 0/);
+// Dictionary hotwords reach TextStream as the session's frozen ASR prompt, set on
+// the worker's environment right before spawn; argv is readable by every account.
+assert.match(
+  read('src-tauri/src/asr/local/experimental.rs'),
+  /let hotwords = context\.asr\.prompt\.clone\(\);[^]*?\.textstream\s*\.start\([^)]*, hotwords\)/,
+);
+assert.match(worker, /apply_context\(&mut command, context\.as_deref\(\)\);\s*let mut child = command\.spawn\(\)/);
+// Rust and the Python worker each name the variable; they must agree.
+const script = read('src-tauri/src/asr/local/experimental/textstream/worker.py');
+for (const source of [worker, script]) {
+  assert.match(source, /CONTEXT_ENV(?:: &str)? = "OPENLESS_TEXTSTREAM_CONTEXT"/);
+}
+assert.match(script, /context = " "\.join\(phrases\)[^]*?init_streaming\(\s*context=context,/);
 const core = read('crates/openless-core/src/local_asr_service.rs');
 const activate = core.match(/    fn activate\([^]*?(?=\n    fn )/)[0];
 assert.doesNotMatch(activate, /\.(?:prepare|preload|preload_lease|download_native_model)\(/);
