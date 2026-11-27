@@ -1,5 +1,12 @@
 import type { CorrectionRule, DictionaryEntry, VocabPresetStore } from '../types';
 import { invokeOrMock } from './shared';
+import { isLinuxHost } from '../../runtime/environment';
+
+// The focused native window owns the Wayland clipboard; a headless fcitx5
+// process may only update its own history while falsely reporting success.
+declare global {
+  interface Window { __openlessCopyText?: (text: string) => Promise<void>; }
+}
 import { mockVocab, mockCorrectionRules } from './mock-data';
 
 export function listVocab(): Promise<DictionaryEntry[]> {
@@ -97,6 +104,12 @@ export function dismissVocabSuggestions(): Promise<void> {
  * that API throws `Document is not focused`.
  */
 export function copyTextToClipboard(text: string): Promise<void> {
+  if (isLinuxHost()) {
+    if (window.__openlessCopyText) return window.__openlessCopyText(text);
+    // Compatibility with older Qt shells which inject only writeText.
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+    return Promise.reject(new Error('Native clipboard unavailable'));
+  }
   return invokeOrMock('copy_text_to_clipboard', { text }, () => undefined);
 }
 

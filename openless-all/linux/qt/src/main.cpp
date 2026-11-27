@@ -55,6 +55,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QJsonArray>
+#include <QRegion>
+#include <QLibrary>
+#include <QtGui/qguiapplication_platform.h>
+#include <cmath>
+#include <functional>
+#include "../../shared/web_host_bridge.h"
 #include <LayerShellQt/Shell>
 #include <LayerShellQt/Window>
 
@@ -64,16 +71,26 @@ namespace {
 class LoggingPage : public QWebEnginePage {
 public:
     using QWebEnginePage::QWebEnginePage;
+    std::function<void(const QJsonArray &)> inputRegionsChanged;
 
 protected:
     /// 剪贴板通道：页面执行 `alert('openless-copy:<text>')`，这里直接写系统
     /// 剪贴板并吞掉弹框。比自定义协议/fetch 都可靠（没有 CORS 与激活限制）。
     void javaScriptAlert(const QUrl &securityOrigin, const QString &message) override {
-        Q_UNUSED(securityOrigin);
+        if (securityOrigin.scheme() != QStringLiteral("http") ||
+            securityOrigin.host() != url().host() || securityOrigin.port() != url().port() ||
+            isExternal(securityOrigin)) return;
+        const QString regionPrefix = QStringLiteral("openless-input-regions:");
+        if (message.startsWith(regionPrefix)) {
+            const auto doc = QJsonDocument::fromJson(message.mid(regionPrefix.size()).toUtf8());
+            if (doc.isArray() && inputRegionsChanged) inputRegionsChanged(doc.array());
+            return;
+        }
         const QString openPrefix = QStringLiteral("openless-open:");
         if (message.startsWith(openPrefix)) {
             const QString url = message.mid(openPrefix.size()).trimmed();
-            if (url.startsWith(QLatin1String("http")) || url.startsWith(QLatin1String("https"))) {
+            const auto scheme = QUrl(url).scheme();
+            if (scheme == QLatin1String("http") || scheme == QLatin1String("https")) {
                 QDesktopServices::openUrl(QUrl(url));
                 qInfo("external open (alert channel): %s", qPrintable(url));
             }
@@ -117,70 +134,6 @@ public:
                  url.scheme() == QLatin1String("blob"));
     }
 };
-
-/// 宿主注入：让前端知道渲染层是 Chromium，且不要画二次标题栏。
-const char *kHostScript =
-    "window.__openlessHost='qt';"
-    // 剪贴板：QtWebEngine 在 Wayland 下经常没有 navigator.clipboard（或写入被
-    // 焦点/权限挡住），History 的复制按钮就会报 "clipboard unavailable"。
-    // 这里直接接管 writeText，走宿主命令（fcitx5 剪贴板，不依赖焦点）。
-    "(function(){"
-    "function put(text){"
-    // 1) 宿主立即写系统剪贴板（Qt 是焦点客户端，写入选区可靠）。
-    "alert('openless-copy:'+String(text));"
-    // 2) 同时把文本交给 fcitx5 插件（进入输入法剪贴板历史）。
-    //    插件的 setClipboard 在部分合成器上只能更新 fcitx 自己的缓存、
-    //    拿不到真实选区所有权（实测：返回 true 但 wl-paste 内容不变），
-    //    所以它**不能**是唯一的写入路径。
-    "try{fetch('/api/invoke',{method:'POST',headers:{'Content-Type':'application/json'},"
-    "body:JSON.stringify({id:'clip-'+Date.now(),command:'copy_text_to_clipboard',"
-    "args:{text:String(text)}})});}catch(e){}"
-    "return Promise.resolve();"
-    "}"
-    "function installDiagnostics(){"
-    // 前端把很多失败吞进 UI 提示里，控制台看不到。这里把它们的文案打出来，
-    // 宿主日志（journal）就能查到真正原因。
-    "try{"
-    "window.addEventListener('openless:sync-ui-persistence-failed',function(e){"
-    "var d=e.detail;"
-    "var msg=d&&(d.message||d.code||d);"
-    "console.error('openless-sync-ui-failed: '+String(msg));"
-    "});"
-    "window.addEventListener('unhandledrejection',function(e){"
-    "var r=e.reason;var msg=r&&(r.message||r.code||r);"
-    "console.error('openless-unhandled-rejection: '+String(msg));"
-    "});"
-    "window.addEventListener('error',function(e){"
-    "console.error('openless-window-error: '+String(e.message));"
-    "});"
-    "}catch(e){}"
-    "}"
-    "function installOpen(){"
-    "try{"
-    "window.open=function(url){"
-    "if(url){alert('openless-open:'+String(url));}"
-    "return null;"
-    "};"
-    "console.log('openless window.open shim installed');"
-    "}catch(e){console.log('openless window.open shim failed: '+e);}"
-    "}"
-    "function install(){"
-    "var clip=null;"
-    "try{clip=navigator.clipboard;}catch(e){}"
-    "if(!clip){clip={};Object.defineProperty(Navigator.prototype,'clipboard',"
-    "{value:clip,configurable:true});}"
-    "try{clip.writeText=function(text){return put(text);};"
-    "console.log('openless clipboard shim installed');}catch(e){"
-    "console.log('openless clipboard shim failed: '+e);}"
-    "}"
-    "install();"
-    "installOpen();"
-    "installDiagnostics();"
-    "})();"
-    "(function(){var d=document.documentElement;"
-    "if(d){d.dataset.olEngine='chromium';}"
-    "else{document.addEventListener('DOMContentLoaded',function(){"
-    "document.documentElement.dataset.olEngine='chromium';});}})();";
 
 /// `openless:` 自定义协议：页面把文本 POST 过来，宿主直接写系统剪贴板。
 ///
@@ -281,6 +234,7 @@ public:
     /// 抬到前台并请求激活（后续实例点图标、托盘「打开」都走这里）。
     void raise();
     void setExpanded(bool expanded);
+    void setInputRegions(const QJsonArray &rects);
     bool isVisible() const { return visible_; }
     Surface kind() const { return kind_; }
 
@@ -298,12 +252,15 @@ private:
     bool expanded_ = false;
     QSize compactSize_;
     QSize expandedSize_;
+    QJsonArray inputRegions_;
 };
 
 SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *parent)
     : kind_(kind), view_(nullptr) {
     view_ = new QWebEngineView();
-    view_->setPage(new LoggingPage(view_));
+    auto *page = new LoggingPage(view_);
+    page->inputRegionsChanged = [this](const QJsonArray &rects) { setInputRegions(rects); };
+    view_->setPage(page);
     // 让页面能用 openless:copy 直接写系统剪贴板。
     static ClipboardSchemeHandler *clipboardHandler = nullptr;
     if (!clipboardHandler) {
@@ -338,7 +295,8 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
         case Surface::Capsule:
             windowKind = "capsule";
             container_->setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint |
-                                       Qt::Tool);
+                                       Qt::Tool | Qt::WindowDoesNotAcceptFocus);
+            container_->setAttribute(Qt::WA_ShowWithoutActivating);
             compactSize_ = QSize(460, 228);
             break;
         case Surface::VoiceEdit:
@@ -376,7 +334,8 @@ SurfaceWindow::SurfaceWindow(Surface kind, const QString &baseUrl, QObject *pare
     script.setInjectionPoint(QWebEngineScript::DocumentCreation);
     script.setRunsOnSubFrames(false);
     script.setWorldId(QWebEngineScript::MainWorld);
-    script.setSourceCode(QString::fromUtf8(kHostScript));
+    script.setSourceCode(QStringLiteral("window.__openlessHost='qt';window.__openlessEngine='chromium';") +
+                         QString::fromUtf8(kOpenlessWebHostScript));
     view_->page()->scripts().insert(script);
 
     // 排障：OPENLESS_QT_URL_CAPSULE / _QA / _MAIN 可以覆盖某个窗口加载的地址，
@@ -415,6 +374,7 @@ void SurfaceWindow::load() {
         // `windowHandle()` —— 只创建 QWindow，真正的 surface 延迟到 show()。
         container_->winId();
         applyLayerShell();
+        if (kind_ == Surface::Capsule) setInputRegions(QJsonArray{});
         // LayerShellQt 的集成只在 surface 创建时生效：配置完要 hide + show
         // 让平台 surface 按 layer-shell 重建（否则会报 already has a shell
         // integration，或干脆不显示）。
@@ -471,17 +431,68 @@ void SurfaceWindow::setVisible(bool visible) {
     if (visible == topLevel()->isVisible()) {
         if (visible) {
             topLevel()->raise();
-            if (kind_ != Surface::VoiceEdit) topLevel()->activateWindow();
+            if (kind_ != Surface::VoiceEdit && kind_ != Surface::Capsule) topLevel()->activateWindow();
         }
         return;
     }
     if (visible) {
         topLevel()->show();
+        if (kind_ == Surface::Capsule) setInputRegions(inputRegions_);
         topLevel()->raise();
-        if (kind_ != Surface::VoiceEdit) topLevel()->activateWindow();
+        if (kind_ != Surface::VoiceEdit && kind_ != Surface::Capsule) topLevel()->activateWindow();
     } else {
         topLevel()->hide();
     }
+}
+
+void SurfaceWindow::setInputRegions(const QJsonArray &rects) {
+    if (kind_ != Surface::Capsule) return;
+    inputRegions_ = rects;
+    QRegion region;
+    for (const auto &value : rects) {
+        if (!value.isObject() || region.rectCount() >= 128) continue;
+        const auto r = value.toObject();
+        const double x = r.value("left").toDouble(-1), y = r.value("top").toDouble(-1);
+        const double w = r.value("width").toDouble(-1), h = r.value("height").toDouble(-1);
+        if (!std::isfinite(x + y + w + h) || w <= 0 || h <= 0) continue;
+        const auto bounds = QRectF(x, y, w, h).intersected(QRectF(view_->rect()));
+        if (!bounds.isEmpty()) region += bounds.toAlignedRect();
+    }
+    auto *window = container_->windowHandle();
+    if (!window) return;
+    if (qEnvironmentVariableIsSet("OPENLESS_INPUT_REGION_TRACE"))
+        qInfo("openless inputRects=%d", region.rectCount());
+    if (QGuiApplication::platformName().startsWith("wayland")) {
+        // QtWayland maps QWindow masks to wl_surface input regions, not pixels.
+        // An empty QRegion means "reset to full input", so use an offscreen box.
+        window->setMask(region.isEmpty() ? QRegion(-2, -2, 1, 1) : region);
+    }
+#if QT_CONFIG(xcb)
+    else if (auto *native = qApp->nativeInterface<QNativeInterface::QX11Application>()) {
+        // QWindow::setMask on X11 also clips visible pixels. ShapeInput changes
+        // only hit testing: non-interactive caption/waveform pixels stay visible.
+        struct Rect { short x, y; unsigned short width, height; };
+        using Shape = void (*)(Display *, unsigned long, int, int, int, Rect *, int, int, int);
+        static QLibrary xext(QStringLiteral("Xext"), 6);
+        static auto shape = reinterpret_cast<Shape>(xext.resolve("XShapeCombineRectangles"));
+        if (shape) {
+            QList<Rect> boxes;
+            const qreal scale = window->devicePixelRatio();
+            for (const QRect &r : region) {
+                const int left = std::floor(r.left() * scale), top = std::floor(r.top() * scale);
+                const int right = std::ceil((r.x() + r.width()) * scale);
+                const int bottom = std::ceil((r.y() + r.height()) * scale);
+                boxes.append({short(left), short(top), ushort(right - left), ushort(bottom - top)});
+            }
+            shape(native->display(), window->winId(), 2 /* ShapeInput */, 0, 0,
+                  boxes.data(), boxes.size(), 0 /* ShapeSet */, 0 /* Unsorted */);
+            using Flush = int (*)(Display *);
+            static QLibrary xlib(QStringLiteral("X11"), 6);
+            static auto flush = reinterpret_cast<Flush>(xlib.resolve("XFlush"));
+            if (flush) flush(native->display());
+        }
+    }
+#endif
 }
 
 void SurfaceWindow::setExpanded(bool expanded) {
@@ -542,8 +553,8 @@ int main(int argc, char **argv) {
                               O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     bool isPrimary = false;
     if (instanceLock < 0) {
-        qWarning("无法创建单实例锁 %s：继续启动（可能多开）", qPrintable(lockPath));
-        isPrimary = true;
+        qCritical("无法创建单实例锁 %s：拒绝多开", qPrintable(lockPath));
+        return 1;
     } else if (::flock(instanceLock, LOCK_EX | LOCK_NB) == 0) {
         isPrimary = true;
         // 锁文件永不删除：删掉会让后来者拿到一个新 inode，锁就失效了。
@@ -552,8 +563,8 @@ int main(int argc, char **argv) {
         instanceLock = -1;
     }
 
-    const QString instanceKey =
-        QStringLiteral("openless-qt-%1").arg(static_cast<qulonglong>(::geteuid()));
+    // Common endpoint: launching the other frontend raises the existing instance.
+    const QString instanceKey = runtimeDir + QStringLiteral("/openless-host.sock");
     if (!isPrimary) {
         if (minimized) return 0;
         // 已有实例：让它抬起窗口，本进程退出。等一小会儿是因为对方的监听
@@ -589,7 +600,8 @@ int main(int argc, char **argv) {
         // 与 Qt 的三个窗口重叠（日志里会出现两份 capsule）。
         QProcessEnvironment backendEnv = QProcessEnvironment::systemEnvironment();
         backendEnv.insert("OPENLESS_HEADLESS", "1");
-        backendEnv.insert("OPENLESS_GUI_EXECUTABLE", QCoreApplication::applicationFilePath());
+        backendEnv.insert("OPENLESS_GUI_EXECUTABLE",
+                          qEnvironmentVariable("OPENLESS_LAUNCHER", QCoreApplication::applicationFilePath()));
         backend->setProcessEnvironment(backendEnv);
         // 默认与自身同目录（安装后是 /usr/lib/openless），这样解包试跑也能找到后端。
         QString defaultHost = QCoreApplication::applicationDirPath() + "/openless-linux-web";
@@ -772,7 +784,7 @@ int main(int argc, char **argv) {
                     } else if (action == "openUrl") {
                         QDesktopServices::openUrl(QUrl(inner.value("url").toString()));
                     } else if (action == "restart") {
-                        QProcess::startDetached(QCoreApplication::applicationFilePath(), {});
+                        QCoreApplication::instance()->setProperty("openlessRestart", true);
                         QCoreApplication::quit();
                     }
                 } else if (name == "voice-edit:show") {
@@ -834,6 +846,16 @@ int main(int argc, char **argv) {
     if (backend && backend->state() != QProcess::NotRunning) {
         backend->terminate();
         backend->waitForFinished(2000);
+    }
+    if (backend && backend->state() != QProcess::NotRunning) {
+        backend->kill();
+        backend->waitForFinished(2000);
+    }
+    if (app.property("openlessRestart").toBool()) {
+        instanceServer->close();
+        QLocalServer::removeServer(instanceKey);
+        if (instanceLock >= 0) ::close(instanceLock);
+        QProcess::startDetached(QCoreApplication::applicationFilePath(), {});
     }
     std::_Exit(exitCode);
 }

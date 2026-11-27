@@ -1,4 +1,4 @@
-import { isTauriHost } from '../runtime/environment';
+import { isNativeDesktopHost, isTauriHost } from '../runtime/environment';
 import { invokeOrPreview } from '../runtime/transport';
 import { downloadUrl } from '../runtime/files';
 import type { ActivityDay, DictationSession } from './contracts';
@@ -43,7 +43,7 @@ export async function getActivityStats(): Promise<ActivityDay[]> {
 }
 
 export async function exportAudioRecording(sessionId: string): Promise<void> {
-  if (isTauriHost()) {
+  if (isTauriHost() || isNativeDesktopHost()) {
     return invokeOrPreview('export_audio_recording', { sessionId }, () => undefined);
   }
   const dataUrl = await commands.readAudioRecording(sessionId);

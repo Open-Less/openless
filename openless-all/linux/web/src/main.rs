@@ -11,6 +11,7 @@ mod events;
 mod voice_edit;
 mod host;
 mod hotkeys;
+mod system;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -630,41 +631,6 @@ fn parse_session_arg(args: &Value, key: &str) -> Result<openless_core::SessionId
     Ok(openless_core::SessionId::from_uuid(uuid))
 }
 
-/// 原生文件选择：Linux 宿主没有 Tauri 的 dialog 插件，用桌面自带的 kdialog。
-/// 取消、未装 kdialog、或没有图形会话时返回 None —— 前端会当成用户取消。
-fn kdialog_output(args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("kdialog")
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!path.is_empty()).then_some(path)
-}
-
-fn pick_file_with_kdialog(filters: &[&str]) -> Option<String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    let mut args = vec!["--title", "OpenLess", "--getopenfilename", home.as_str()];
-    args.extend_from_slice(filters);
-    kdialog_output(&args)
-}
-
-fn pick_save_path_with_kdialog(file_name: &str) -> Option<String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    let safe_name = file_name.replace(['/', '\\'], "_");
-    let initial = format!("{home}/{safe_name}");
-    kdialog_output(&[
-        "--title",
-        "OpenLess",
-        "--getsavefilename",
-        &initial,
-        "Style Pack ZIP (*.zip)",
-    ])
-}
-
 fn shortcut_arg(args: &Value, optional: bool) -> Result<Option<openless_core::shared_types::ShortcutBinding>, String> {
     let raw = args.get("binding").cloned().unwrap_or(Value::Null);
     if raw.is_null() {
@@ -877,6 +843,7 @@ fn channel_kind(kind: Option<&str>) -> Option<openless_core::ChannelKind> {
 fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> {
     let dir = data_dir();
     let backend = host.backend.as_deref();
+    if let Some(result) = system::dispatch(host, command, _args) { return result; }
     match command {
         "get_startup_snapshot" => Ok(json!({
             "contractVersion": "2.0.0",
@@ -1578,15 +1545,15 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             ))
         }
         // ── 原生文件选择（kdialog，KDE 桌面自带）─────────────────────
-        "pick_style_pack_zip" => Ok(json!(pick_file_with_kdialog(&[
-            "Style Pack ZIP (*.zip)",
-        ]))),
+        "pick_style_pack_zip" => Ok(json!(system::pick(system::Picker::OpenZip)?)),
         "pick_style_pack_zip_target" => {
             let file_name = _args
                 .get("fileName")
                 .and_then(Value::as_str)
                 .unwrap_or("style-pack.zip");
-            Ok(json!(pick_save_path_with_kdialog(file_name)))
+            Ok(json!(system::pick(system::Picker::Save {
+                file_name, filter: "Style Pack ZIP (*.zip)",
+            })?))
         }
         // ── 云同步（sync / async 混用：同步直接调，async 用 block_on）─────
         "cloud_sync_e2ee_status" => {
@@ -1921,10 +1888,11 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             std::env::var_os("WAYLAND_DISPLAY").is_some()
         )),
         "restart_app" => {
-            // 与 Tauri 版同语义：退出由 systemd/autostart 拉起；这里直接退出，
-            // 进程管理交给单元文件（`app-openless@autostart.service` 的 Restart 策略）。
-            println!("[linux-web] restart requested");
-            std::process::exit(0);
+            // The active Qt/GTK shell owns restart and must release its lock and
+            // reap its own backend before spawning a replacement.
+            host.host_events.send(("host:action".into(), json!({ "action": "restart" }).to_string()))
+                .map_err(|_| "No desktop shell is connected".to_string())?;
+            Ok(Value::Null)
         }
         // ── 录音回放 / 重新转录 ───────────────────────────────────────
         "read_audio_recording" => {

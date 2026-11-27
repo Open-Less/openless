@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# One launcher, one backend instance. Qt is the default; GTK is explicitly opt-in.
+set -euo pipefail
+bin_dir=$(dirname "$(readlink -f "$0")")
+lib="$bin_dir/../lib/openless"
+share="$bin_dir/../share/openless"
+frontend=qt
+args=()
+while (($#)); do
+  case "$1" in
+    --frontend=*) frontend=${1#*=}; shift ;;
+    --frontend)
+      (($# >= 2)) || { echo '--frontend requires qt or gtk' >&2; exit 2; }
+      frontend=$2; shift 2 ;;
+    --version) cat "$share/version"; exit 0 ;;
+    --help|-h)
+      printf 'OpenLess\nUsage: openless [--frontend=qt|gtk] [--minimized]\nDefault frontend: qt; gtk is an optional WebKitGTK shell.\n'
+      exit 0 ;;
+    --minimized) args+=("$1"); shift ;;
+    *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
+  esac
+done
+case "$frontend" in qt|gtk) ;; *) echo "Unknown frontend: $frontend (choose qt or gtk)" >&2; exit 2 ;; esac
+binary="$lib/openless-$frontend"
+[[ -x "$binary" ]] || { echo "Frontend $frontend is not installed: $binary" >&2; exit 1; }
+# Login entries always use the default launcher rather than pinning a toolkit.
+export OPENLESS_LAUNCHER="$bin_dir/openless"
+exec "$binary" "${args[@]}"

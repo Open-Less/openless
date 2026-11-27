@@ -789,7 +789,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   }, [transcriptVisible]);
 
   useEffect(() => {
-    if (!isTauri || os !== 'mac') return;
+    if (!isTauri || (os !== 'mac' && os !== 'linux')) return;
     let stopped = false;
     let frame = 0;
     let last = '';
@@ -855,7 +855,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   }, [isTauri, os, state, leaving, insertFallback, suggestions.length, publishInputRegions]);
 
   useEffect(() => {
-    if (!isTauri || os !== 'mac') return;
+    if (!isTauri || (os !== 'mac' && os !== 'linux')) return;
     return () => {
       void publishInputRegions([]).catch((error) =>
         console.warn('[capsule] input region cleanup failed', error),

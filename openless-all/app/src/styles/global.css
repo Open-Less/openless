@@ -27,6 +27,15 @@ html[data-ol-platform='linux'][data-ol-aux] {
   color-scheme: only light;
 }
 
+/* Native Qt/GTK decorations already provide the outer window corners. The
+   continuous-corners rule must not round the web content beneath the titlebar. */
+html[data-ol-platform='linux']:not([data-ol-aux]) .ol-winchrome {
+  border-radius: 0 !important;
+  corner-shape: round !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
 html[data-ol-platform='android'],
 html[data-ol-platform='android'] body,
 html[data-ol-platform='android'] #root {

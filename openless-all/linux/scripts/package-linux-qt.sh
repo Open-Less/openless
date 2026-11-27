@@ -49,7 +49,8 @@ require_file() {
 QT_HOST_SRC="$APP_ROOT/../linux/qt/src/main.cpp"
 QT_HOST_BIN="$APP_ROOT/../linux/qt/openless-qt"
 if [ "${OPENLESS_SKIP_QT_BUILD:-0}" != "1" ]; then
-  if [ ! -f "$QT_HOST_BIN" ] || [ "$QT_HOST_SRC" -nt "$QT_HOST_BIN" ]; then
+  if [ ! -f "$QT_HOST_BIN" ] || [ "$QT_HOST_SRC" -nt "$QT_HOST_BIN" ] ||
+     [ "$APP_ROOT/../linux/shared/web_host_bridge.h" -nt "$QT_HOST_BIN" ]; then
     echo "编译窗口层：$QT_HOST_SRC"
     if pkg-config --exists Qt6Core 2>/dev/null; then
       # 发行版把 Qt 头文件放在 /usr/include/<triplet>/qt6，交给 pkg-config 拼。
@@ -77,6 +78,14 @@ if [ "${OPENLESS_SKIP_QT_BUILD:-0}" != "1" ]; then
       $QT_CFLAGS $LS_CFLAGS $QT_LIBS $LS_LIBS
   fi
 fi
+GTK_BIN=${OPENLESS_GTK_BINARY:-${CARGO_TARGET_DIR:-$APP_ROOT/target}/release/openless-gtk}
+if [ -z "${OPENLESS_GTK_BINARY:-}" ]; then
+  GTK_BUILD=${CARGO_TARGET_DIR:-$APP_ROOT/target}/linux-gtk-build
+  cmake -S "$APP_ROOT/../linux/gtk" -B "$GTK_BUILD" -DCMAKE_BUILD_TYPE=Release
+  cmake --build "$GTK_BUILD" --parallel
+  install -Dm755 "$GTK_BUILD/openless-gtk" "$GTK_BIN"
+fi
+require_file "$GTK_BIN"
 require_file "$QT_BIN"
 require_file "$HOST_BIN"
 require_file "$QT_HOST_BIN"
@@ -142,6 +151,7 @@ chmod 0755 "$POST_INSTALL"
 stage_common() {
   local root=$1
   install -Dm755 "$QT_BIN" "$root/usr/lib/openless/openless-qt"
+  install -Dm755 "$GTK_BIN" "$root/usr/lib/openless/openless-gtk"
   install -Dm755 "$HOST_BIN" "$root/usr/lib/openless/openless-linux-web"
   # Do not silently regress to the legacy 127.0.0.1:PORT handshake: it leaves
   # the Qt host waiting forever (and can therefore hide a stale binary in a new deb).
@@ -151,17 +161,7 @@ stage_common() {
   }
   mkdir -p "$root/usr/lib/openless/web/dist"
   cp -a "$DIST_DIR/." "$root/usr/lib/openless/web/dist/"
-  # 启动器：Qt 宿主自己会拉起无头后端，所以这里只 exec 它。
-  install -Dm755 /dev/stdin "$root/usr/bin/openless" << 'LAUNCHER'
-#!/usr/bin/env bash
-set -e
-# 目录相对解析：安装后是 /usr/lib/openless，解包试跑时也能工作。
-lib=$(dirname "$(readlink -f "$0")")/../lib/openless
-share=$(dirname "$(readlink -f "$0")")/../share/openless
-if [ "$1" = "--version" ]; then cat "$share/version"; exit 0; fi
-# Qt 宿主负责拉起同目录下的 openless-linux-web（无头）并在退出时回收。
-exec "$lib/openless-qt" "$@"
-LAUNCHER
+  install -Dm755 "$APP_ROOT/../linux/scripts/openless" "$root/usr/bin/openless"
   install -d "$root/usr/share/openless"
   printf 'OpenLess %s\n' "$VERSION" > "$root/usr/share/openless/version"
   install -Dm644 "$PACKAGING/openless.desktop" "$root/usr/share/applications/openless.desktop"
@@ -204,7 +204,7 @@ Architecture: amd64
 Maintainer: OpenLess Contributors
 Description: OpenLess for Linux - voice dictation and writing assistant
 Depends: fcitx5, fcitx5-module-dbus, fcitx5-frontend-qt6, libc6, libgcc-s1, libstdc++6, libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6, libqt6webenginecore6, libqt6webenginewidgets6, liblayershellqtinterface6, qt6-wayland, libfcitx5core7, libfcitx5config6, libfcitx5utils2
-Recommends: pavucontrol, mesa-vulkan-drivers
+Recommends: pavucontrol, mesa-vulkan-drivers, libgtk-4-1 (>= 4.12), libwebkitgtk-6.0-4, libgtk4-layer-shell0, libsoup-3.0-0
 Homepage: https://github.com/Open-Less/openless
 EOF
 install -m755 "$POST_INSTALL" "$DEB_ROOT/DEBIAN/postinst"
@@ -235,6 +235,7 @@ BuildArch: x86_64
 %global __strip /bin/true
 %global __os_install_post %{nil}
 Requires: fcitx5, fcitx5-frontend-qt6, qt6-qtwebengine, qt6-qtwayland, LayerShellQt
+Recommends: gtk4, webkitgtk6.0, gtk4-layer-shell, libsoup3
 %description
 OpenLess Linux host rendering the official React UI through Qt6 WebEngine.
 %prep

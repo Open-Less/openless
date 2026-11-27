@@ -42,6 +42,14 @@ check_elf() {
     return 1
   fi
 }
+check_gtk_elf() {
+  file -L "$1" | grep -q 'ELF 64-bit.*x86-64'
+  local deps
+  deps=$(ldd "$1")
+  ! grep -q 'not found' <<< "$deps"
+  grep -qi 'webkitgtk' <<< "$deps"
+  ! grep -Eqi 'wry|tauri' <<< "$deps"
+}
 # 后端/命令桥二进制（纯 Rust，不链 WebKit/Tauri）
 check_elf "$TARGET_DIR/release/openless-linux-web"
 
@@ -73,6 +81,8 @@ done
 desktop-file-validate "$WORK/deb/usr/share/applications/openless.desktop"
 appstreamcli validate --no-net "$WORK/deb/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
 check_elf "$WORK/deb/usr/lib/openless/openless-qt"
+check_gtk_elf "$WORK/deb/usr/lib/openless/openless-gtk"
+"$WORK/deb/usr/bin/openless" --help | grep -q 'Default frontend: qt'
 check_elf "$WORK/deb/usr/lib/openless/openless-linux-web"
 check_elf "$WORK/deb/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so"
 # Catch stale build-script output: dpkg metadata may say -N while the UI
@@ -102,6 +112,7 @@ test "$DEB_PLUGIN_SHA" = "$RPM_PLUGIN_SHA"
 desktop-file-validate "$WORK/rpm/usr/share/applications/openless.desktop"
 appstreamcli validate --no-net "$WORK/rpm/usr/share/metainfo/top.openless.OpenLess.metainfo.xml"
 check_elf "$WORK/rpm/usr/lib/openless/openless-qt"
+check_gtk_elf "$WORK/rpm/usr/lib/openless/openless-gtk"
 check_elf "$WORK/rpm/usr/lib/openless/openless-linux-web"
 check_elf "$WORK/rpm/usr/lib64/fcitx5/libopenless.so"
 test "$("$WORK/rpm/usr/bin/openless" --version)" = "OpenLess $DEB_VERSION"
@@ -117,4 +128,4 @@ RPM_DEPENDS=$(rpm --dbpath "$WORK/rpmdb" -qp --requires "${rpms[0]}")
 grep -Fq 'fcitx5' <<< "$RPM_DEPENDS"
 grep -Fq 'qt6-qtwebengine' <<< "$RPM_DEPENDS"
 ! grep -Fq 'webkit' <<< "$RPM_DEPENDS"
-printf 'PASS: deb/rpm contents, ELF dependencies, desktop metadata and SHA-256\n'
+printf 'PASS: deb/rpm contents, Qt + GTK ELF dependencies, desktop metadata and SHA-256\n'

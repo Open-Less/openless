@@ -82,7 +82,12 @@ runs:
         sudo apt-get install -y --no-install-recommends \
           qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
           liblayershellqtinterface-dev qt6-wayland-dev \
-          libqt6webenginewidgets6 libqt6webenginecore6
+          libqt6webenginewidgets6 libqt6webenginecore6 \
+          libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev
+        # Older supported distro releases do not package GTK4 layer-shell yet.
+        if apt-cache show libgtk4-layer-shell-dev >/dev/null 2>&1; then
+          sudo apt-get install -y --no-install-recommends libgtk4-layer-shell-dev
+        fi
 
     # 窗口层的编译放在 `../linux/scripts/package-linux-qt.sh` 里：打包脚本自己检查
     # `main.cpp` 是否比 `../linux/qt/openless-qt` 新，旧了就重编。这样 CI 与本地

@@ -5,11 +5,11 @@ import { isAndroid } from '../../runtime/platform';
 export { isTauri };
 
 export async function openExternal(url: string): Promise<void> {
-  if (isHarmonyRuntime()) {
+  if (isHarmonyRuntime() || isLinuxHost()) {
     await invokeOrMock<void>('open_external_url', { url }, () => undefined);
     return;
   }
-  if (isPreviewHost() || isLinuxHost()) {
+  if (isPreviewHost()) {
     window.open(url, '_blank', 'noopener,noreferrer');
     return;
   }
