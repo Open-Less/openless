@@ -594,12 +594,22 @@ impl OpenAICompatibleLLMProvider {
         let no_proxy =
             crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
         let polish_base_url = config.base_url.clone();
-        let polish_client =
+        let cached_client = ||
             crate::net::cached_client((POLISH_CLIENT_HARD_CAP_SECS, no_proxy), || {
                 http_client_builder(&polish_base_url, POLISH_CLIENT_HARD_CAP_SECS)
                     .build()
                     .unwrap_or_else(|_| reqwest::Client::new())
             });
+        // The comparison must never reuse a production client's pool, redirects,
+        // or protocol retry policy. Other tests and production keep the cache.
+        #[cfg(test)]
+        let polish_client = if live_acceptance::intent_active() {
+            live_acceptance::intent_client(&polish_base_url, POLISH_CLIENT_HARD_CAP_SECS)
+        } else {
+            cached_client()
+        };
+        #[cfg(not(test))]
+        let polish_client = cached_client();
         Self {
             config,
             qa_web_search: false,
@@ -1921,6 +1931,13 @@ fn should_retry_transient(is_connect: bool, is_request: bool, is_timeout: bool) 
 pub(crate) async fn send_with_transient_retry(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LLMError> {
+    #[cfg(test)]
+    if live_acceptance::intent_active() {
+        let mut send = live_acceptance::intent_before_send()?;
+        let response = request.send().await.map_err(llm_error_from_reqwest);
+        send.succeeded = response.as_ref().is_ok_and(|response| response.status().is_success());
+        return response;
+    }
     #[cfg(test)]
     if live_acceptance::active() {
         let attempt = live_acceptance::before_send()?;
@@ -5746,15 +5763,78 @@ mod tests {
 // and observes the public response model without retaining raw SSE or reasoning.
 #[cfg(test)]
 pub(crate) mod live_acceptance {
-    use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Mutex};
+    use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Mutex};
+    tokio::task_local! {
+        static INTENT: Arc<Mutex<IntentState>>;
+    }
+    #[derive(Default)]
+    struct IntentState {
+        sends: usize,
+        fallbacks: usize,
+        in_fallback: bool,
+        stopped: bool,
+    }
+    pub async fn intent_scope<F: std::future::Future>(future: F) -> F::Output {
+        INTENT.scope(Arc::new(Mutex::new(IntentState::default())), future).await
+    }
+    pub fn intent_active() -> bool { INTENT.try_with(|_| ()).is_ok() }
+    pub fn intent_client(base_url: &str, timeout_secs: u64) -> reqwest::Client {
+        super::http_client_builder(base_url, timeout_secs)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .http1_only()
+            .pool_max_idle_per_host(0)
+            .build()
+            .expect("isolated intent transport")
+    }
+    pub struct IntentSend {
+        state: Arc<Mutex<IntentState>>,
+        pub succeeded: bool,
+    }
+    impl Drop for IntentSend {
+        fn drop(&mut self) {
+            if !self.succeeded { self.state.lock().unwrap().stopped = true; }
+        }
+    }
+    pub fn intent_before_send() -> Result<IntentSend, super::LLMError> {
+        let state = INTENT.with(Arc::clone);
+        {
+            let mut current = state.lock().unwrap();
+            if current.stopped || current.sends >= 36 {
+                return Err(super::LLMError::Network("intent comparison stopped or budget exhausted".into()));
+            }
+            current.sends += 1;
+            if current.in_fallback { current.fallbacks += 1; }
+        }
+        Ok(IntentSend { state, succeeded: false })
+    }
+    pub struct IntentFallback(Option<Arc<Mutex<IntentState>>>);
+    impl Drop for IntentFallback {
+        fn drop(&mut self) {
+            if let Some(state) = &self.0 { state.lock().unwrap().in_fallback = false; }
+        }
+    }
+    pub fn intent_fallback() -> IntentFallback {
+        let state = INTENT.try_with(Arc::clone).ok();
+        if let Some(state) = &state { state.lock().unwrap().in_fallback = true; }
+        IntentFallback(state)
+    }
+    pub fn intent_counts() -> serde_json::Value {
+        INTENT.with(|state| {
+            let current = state.lock().unwrap();
+            serde_json::json!({"attemptedSends": current.sends, "fallbackSends": current.fallbacks})
+        })
+    }
     static ACTIVE: AtomicBool = AtomicBool::new(false);
     static SENDS: AtomicUsize = AtomicUsize::new(0);
     static RESPONSE_MODEL: Mutex<Option<String>> = Mutex::new(None);
     pub fn begin() { SENDS.store(0, Ordering::SeqCst); ACTIVE.store(true, Ordering::SeqCst); }
     pub fn active() -> bool { ACTIVE.load(Ordering::SeqCst) }
+    pub fn legacy_limit(first_only: bool) -> usize { if first_only { 1 } else { 10 } }
     pub fn before_send() -> Result<usize, super::LLMError> {
         let previous = SENDS.fetch_add(1, Ordering::SeqCst);
-        if previous >= if std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some() { 1 } else { 10 } {
+        if previous >= legacy_limit(std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some()) {
             return Err(super::LLMError::Network("live acceptance request limit reached".into()));
         }
         Ok(previous + 1)
