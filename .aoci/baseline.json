@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-11-21T04:46:16Z",
-  "updated_at": "2026-11-27T08:38:30Z",
+  "updated_at": "2026-11-27T12:52:30Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -101,9 +101,9 @@
     },
     ".gitignore": {
       "role": "index",
-      "sha256": "21b69dc58a35d2491c9a9a718cbf8ab67ceefff2a3885ae3bf4443c2f8562bbc",
-      "size": 4031,
-      "normalized_sha256": "21b69dc58a35d2491c9a9a718cbf8ab67ceefff2a3885ae3bf4443c2f8562bbc"
+      "sha256": "8e1573f614c0fda748cad2f3b5d314c192855c4d6ac31094a2bac540c12be1f3",
+      "size": 4128,
+      "normalized_sha256": "8e1573f614c0fda748cad2f3b5d314c192855c4d6ac31094a2bac540c12be1f3"
     },
     "Casks/openless.rb": {
       "role": "index",

@@ -205,7 +205,8 @@
     ]
   },
   "installed_agents": [
-    "codex"
+    "codex",
+    "pi"
   ],
   "automation": {
     "mode": "auto"

@@ -168,3 +168,7 @@ coverage/
 /docs/test-captures/
 /docs/test-results/
 /openless-all/ios/docs/screenshots/
+
+# AOCI agent host integration (machine-bound; do not commit)
+.pi/mcp.json
+.pi/mcp.json.backup.*
