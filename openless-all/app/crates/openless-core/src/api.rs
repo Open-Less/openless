@@ -1832,6 +1832,9 @@ struct MutableState {
     /// by every stop entry; no Host latch survives into the next session.
     dictation_translation_requested: Option<bool>,
     dictation_style_selection: Option<DictationStyleSelection>,
+    /// Internal host-intent fence. Never reset or serialized into a UI frame.
+    dictation_style_epoch: u64,
+    dictation_style_picker_enabled: bool,
     /// Style intent not yet included in the snapshot handed to engine.start.
     /// The current selection above also exists for an unchanged initial choice.
     dictation_style_needs_update: bool,
@@ -1849,6 +1852,16 @@ struct SubmittedDictation {
 }
 
 impl MutableState {
+    fn advance_dictation_style_epoch(&mut self) {
+        self.dictation_style_epoch = self.dictation_style_epoch.checked_add(1)
+            .expect("dictation style epoch exhausted");
+    }
+    fn retire_dictation_style(&mut self, session: SessionId) {
+        if self.dictation.session_id == Some(session)
+            && matches!(self.dictation.phase, DictationPhase::Starting | DictationPhase::Recording) {
+            self.advance_dictation_style_epoch();
+        }
+    }
     fn processing_snapshots(&self) -> Vec<DictationStateSnapshot> {
         let mut tasks: Vec<_> = self.processing_dictations.values().collect();
         tasks.sort_by_key(|task| task.submitted_at);
@@ -2570,6 +2583,7 @@ impl EngineProgressSink for BackendEngineProgress {
             EngineProgress::RecordingFault(error) => {
                 let mut state = self.state.write().expect("backend state lock poisoned");
                 ensure_capture_session(&state, session_id)?;
+                state.retire_dictation_style(session_id);
                 state.dictation.phase = DictationPhase::Failed;
                 state.dictation.message = Some(error.message);
                 self.events.publish(
@@ -2595,6 +2609,7 @@ impl EngineProgressSink for BackendEngineProgress {
                     EngineStage::Polishing => DictationPhase::Polishing,
                 };
                 if state.session(session_id).unwrap().phase != phase {
+                    state.retire_dictation_style(session_id);
                     state.session_mut(session_id).unwrap().phase = phase;
                     self.events.publish(
                         Some(session_id),
@@ -3678,6 +3693,8 @@ impl OpenLessBackend {
                 dictation_start_output_target: None,
                 dictation_translation_requested: None,
                 dictation_style_selection: None,
+                dictation_style_epoch: 0,
+                dictation_style_picker_enabled: repositories.preferences.get().skip_auto_style_picker_enabled,
                 dictation_style_needs_update: false,
                 dictation_destination_changed: false,
                 credentials: CredentialsStatus::default(),
@@ -5722,7 +5739,8 @@ impl OpenLessBackend {
                         context.output_target == DictationOutputTarget::QuickNote
                     });
                 self.events.publish(None, BackendEventKind::BackendStopping);
-                if active_session.is_some() {
+                if let Some(active) = active_session {
+                    state.retire_dictation_style(active);
                     state.dictation.phase = DictationPhase::Cancelled;
                     self.events.publish(
                         state.dictation.session_id,
@@ -6509,6 +6527,19 @@ impl OpenLessBackend {
         Self::style_target(&state)
     }
 
+    /// Rust host-only receipt/view; the public style DTO and IPC stay unchanged.
+    /// Target, epoch and picker eligibility come from the same state lock.
+    pub fn dictation_style_target_with_epoch(&self) -> Option<(DictationStyleTarget, u64, bool)> {
+        let state = self.state.read().expect("backend state lock poisoned");
+        Some((Self::style_target(&state)?, state.dictation_style_epoch,
+            state.dictation_style_picker_enabled))
+    }
+
+    /// Also available when the session has ended, to fence an absent host view.
+    pub fn dictation_style_epoch(&self) -> u64 {
+        self.state.read().expect("backend state lock poisoned").dictation_style_epoch
+    }
+
     fn style_target(state: &MutableState) -> Option<DictationStyleTarget> {
         let context = state.dictation_context.as_ref();
         let selection = state.dictation_style_selection.clone()
@@ -6531,13 +6562,21 @@ impl OpenLessBackend {
         session_id: SessionId,
         selection: DictationStyleSelection,
     ) -> Result<DictationStyleTarget, BackendError> {
-        self.change_dictation_style(session_id, Some(selection))
+        self.change_dictation_style(session_id, Some(selection)).map(|(target, _)| target)
     }
 
     pub fn toggle_dictation_style_for_session(
         &self,
         session_id: SessionId,
     ) -> Result<DictationStyleTarget, BackendError> {
+        self.toggle_dictation_style_with_epoch(session_id).map(|(target, _)| target)
+    }
+
+    /// A true hotkey must use this receipt, never mutate then read a newer epoch.
+    pub fn toggle_dictation_style_with_epoch(
+        &self,
+        session_id: SessionId,
+    ) -> Result<(DictationStyleTarget, u64), BackendError> {
         self.change_dictation_style(session_id, None)
     }
 
@@ -6545,7 +6584,7 @@ impl OpenLessBackend {
         &self,
         session_id: SessionId,
         selection: Option<DictationStyleSelection>,
-    ) -> Result<DictationStyleTarget, BackendError> {
+    ) -> Result<(DictationStyleTarget, u64), BackendError> {
         let mut state = self.state.write().expect("backend state lock poisoned");
         ensure_running(&state)?;
         if state.dictation.session_id != Some(session_id)
@@ -6567,13 +6606,14 @@ impl OpenLessBackend {
         } else if matches!(&selection, DictationStyleSelection::StylePack { .. }) {
             return Err(BackendError::new(BackendErrorCode::InvalidState, "recording style list is not ready"));
         }
+        if previous != selection { state.advance_dictation_style_epoch(); }
         state.dictation.skip_auto_style = selection != DictationStyleSelection::Automatic;
         state.dictation_style_selection = Some(selection);
         state.dictation_style_needs_update = true;
         let result = Self::style_target(&state).expect("checked active session");
         self.events.publish(Some(session_id),
             BackendEventKind::DictationStateChanged(state.dictation.clone()));
-        Ok(result)
+        Ok((result, state.dictation_style_epoch))
     }
 
     /// Explicitly retarget this recording and remember the choice. Ordinary settings
@@ -7772,6 +7812,17 @@ impl OpenLessBackend {
     }
 
     fn publish_preferences_changed(&self) {
+        {
+            // All preferences entry points converge here before publishing.
+            // Observe picker off/on under the same fence as style mutations,
+            // even when the Host misses both intermediate settings events.
+            let mut state = self.state.write().expect("backend state lock poisoned");
+            let enabled = self.preferences.get().skip_auto_style_picker_enabled;
+            if enabled != state.dictation_style_picker_enabled {
+                state.advance_dictation_style_epoch();
+                state.dictation_style_picker_enabled = enabled;
+            }
+        }
         let revision = self.preferences_revision.fetch_add(1, Ordering::AcqRel) + 1;
         self.events.publish(
             None,
@@ -8772,6 +8823,7 @@ impl OpenLessBackend {
                 ..DictationStateSnapshot::default()
             };
             state.dictation_start_output_target = Some(options.output_target);
+            state.advance_dictation_style_epoch();
             state.dictation_translation_requested = None;
             // Publish the actual initial choice with Starting, before host or
             // credential capture can suspend and a style gesture can overtake it.
@@ -9337,6 +9389,7 @@ impl OpenLessBackend {
                                 });
                         state.dictation_context = Some(Arc::clone(&context));
                         state.dictation.translation_active = context.polish.translation_active;
+                        state.retire_dictation_style(session_id);
                         state.dictation.phase = DictationPhase::Transcribing;
                         self.main_dictation_trace
                             .record(session_id, format_args!("stage=finalization_started"));
@@ -10148,6 +10201,7 @@ impl OpenLessBackend {
         if state.dictation.session_id != Some(session_id) {
             return;
         }
+        state.retire_dictation_style(session_id);
         state.dictation = DictationStateSnapshot::default();
         state.dictation_context = None;
         state.dictation_style_selection = None;
@@ -10479,6 +10533,7 @@ impl OpenLessBackend {
                 .dictation_context
                 .as_ref()
                 .is_some_and(|context| context.output_target == DictationOutputTarget::QuickNote);
+            state.retire_dictation_style(active);
             state.dictation.phase = DictationPhase::Cancelled;
             self.main_dictation_trace
                 .record(active, format_args!("stage=terminal phase=cancelled"));
@@ -10926,6 +10981,7 @@ impl OpenLessBackend {
             error.message
         );
         let mut state = self.state.write().expect("backend state lock poisoned");
+        state.retire_dictation_style(session_id);
         let Some(snapshot) = state.session_mut(session_id) else {
             return;
         };

@@ -2,7 +2,7 @@
 //! synthetic input: a captured down is drained with its own physical release.
 use std::sync::{Arc, OnceLock};
 use parking_lot::{Mutex, RwLock};
-use openless_core::{DictationStyleSelection, DictationStyleTarget, SessionId};
+use openless_core::{DictationPhase, DictationStateSnapshot, DictationStyleSelection, DictationStyleTarget, SessionId};
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -66,6 +66,7 @@ pub(crate) struct Focus(pub u64, pub u64);
 #[derive(Clone)]
 pub(crate) struct Context {
     pub session_id: SessionId,
+    pub style_epoch: u64,
     pub mutable: bool,
     pub skip_auto: bool,
     pub picker_enabled: bool,
@@ -90,15 +91,16 @@ pub(crate) fn blocked_keys(target: &openless_core::HotkeyRuntimeTarget) -> [bool
     blocked
 }
 
-struct Pending { request: Request, focus: Option<Focus> }
-struct Active { owner: Owner, request_id: Option<String>, focus: Option<Focus> }
-struct Prepared { owner: Owner, focus: Option<Focus> }
+struct Pending { request: Request, style_epoch: u64, focus: Option<Focus> }
+struct Active { owner: Owner, request_id: Option<String>, style_epoch: u64, focus: Option<Focus> }
+struct Prepared { owner: Owner, style_epoch: u64, focus: Option<Focus> }
 #[derive(Default, Clone)]
 struct Press { down: bool, captured: bool, menu_id: Option<String> }
 
 #[derive(Default)]
 pub(crate) struct State {
     serial: u64,
+    last_hotkey_epoch: Option<u64>,
     pending: Option<Pending>,
     active: Option<Active>,
     prepared: Option<Prepared>,
@@ -117,36 +119,50 @@ impl State {
         self.serial = self.serial.checked_add(1).expect("style menu sequence exhausted");
         self.serial.to_string()
     }
+    fn invalidate_before(&mut self, epoch: u64) {
+        if self.pending.as_ref().is_some_and(|p| p.style_epoch < epoch) { self.pending = None; }
+        if self.prepared.as_ref().is_some_and(|p| p.style_epoch < epoch) { self.prepared = None; }
+        if self.active.as_ref().is_some_and(|a| a.style_epoch < epoch) { self.revoke(); }
+        // This fence is authoritative even if the native view is unstable.
+        // Keep presses, and never revoke a record from the current/newer epoch.
+    }
     fn reconcile(&mut self, context: Option<&Context>) {
         if self.prepared.as_ref().is_some_and(|prepared| !context.is_some_and(|c|
-            c.session_id == prepared.owner.session_id && c.mutable && c.focus == prepared.focus)) {
+            c.session_id == prepared.owner.session_id && c.mutable && c.picker_enabled
+                && c.style_epoch == prepared.style_epoch && c.focus == prepared.focus)) {
             self.prepared = None;
         }
         if self.pending.as_ref().is_some_and(|pending| !context.is_some_and(|c|
             c.session_id == pending.request.session_id && c.skip_auto && c.picker_enabled
-                && c.focus == pending.focus)) {
+                && c.style_epoch == pending.style_epoch && c.focus == pending.focus)) {
             self.pending = None;
         }
         if self.active.as_ref().is_some_and(|active| !context.is_some_and(|c|
-            c.session_id == active.owner.session_id && c.mutable && c.focus == active.focus
+            c.session_id == active.owner.session_id && c.mutable && c.picker_enabled
+                && c.style_epoch == active.style_epoch && c.focus == active.focus
                 && (!active.owner.keyboard_available || c.keyboard_available))) {
             self.revoke();
         }
         // presses deliberately survive invalidation: previously swallowed downs
         // still own their releases, while passed downs never acquire an owner.
     }
-    fn hotkey_toggled(&mut self, target: &DictationStyleTarget, context: Option<&Context>) -> Option<Request> {
+    fn hotkey_toggled(&mut self, target: &DictationStyleTarget, style_epoch: u64,
+        context: Option<&Context>) -> Option<Request> {
+        // A delayed mutation receipt must never clear a newer request/owner.
+        let c = context.filter(|c| c.session_id == target.session_id && c.style_epoch == style_epoch)?;
+        if self.last_hotkey_epoch.is_some_and(|epoch| epoch >= style_epoch) { return None; }
         self.reconcile(context);
+        self.last_hotkey_epoch = Some(style_epoch);
         if target.selection != DictationStyleSelection::SkipAuto {
             self.pending = None;
             self.prepared = None;
             self.revoke();
             return None;
         }
-        let c = context.filter(|c| c.session_id == target.session_id && c.picker_enabled && c.skip_auto)?;
+        if !(c.picker_enabled && c.skip_auto) { return None; }
         self.prepared = None;
         let request = Request { session_id: target.session_id, request_id: self.next_id() };
-        self.pending = Some(Pending { request: request.clone(), focus: c.focus });
+        self.pending = Some(Pending { request: request.clone(), style_epoch, focus: c.focus });
         Some(request)
     }
     fn pending(&mut self, label: &str, context: Option<&Context>) -> Option<Request> {
@@ -158,9 +174,6 @@ impl State {
     ) -> Result<Owner, String> {
         self.reconcile(context);
         if !capsule_label(label) { return Err("capsule_window_required".into()); }
-        let c = context.filter(|c| c.session_id == session && c.mutable)
-            .ok_or("recording_style_required")?;
-        if c.focus.is_none() { return Err("capsule_style_menu_target_unavailable".into()); }
         if let Some(request_id) = request {
             if let Some(active) = self.active.as_ref().filter(|active|
                 active.owner.window_label == label && active.owner.session_id == session
@@ -172,20 +185,28 @@ impl State {
                 return Err("capsule_style_request_stale".into());
             }
         }
+        let c = context.filter(|c| c.session_id == session && c.mutable && c.picker_enabled)
+            .ok_or("recording_style_required")?;
+        if c.focus.is_none() { return Err("capsule_style_menu_target_unavailable".into()); }
         let owner = Owner { session_id: session, menu_id: self.next_id(), window_label: label.into(),
             keyboard_available: c.keyboard_available && c.focus.is_some() };
-        self.prepared = Some(Prepared { owner: owner.clone(), focus: c.focus });
+        self.prepared = Some(Prepared { owner: owner.clone(), style_epoch: c.style_epoch, focus: c.focus });
         Ok(owner)
     }
     fn commit(
         &mut self, owner: Owner, request: Option<&str>, context: Option<&Context>,
     ) -> Result<(), String> {
         self.reconcile(context);
-        let c = context.filter(|c| c.session_id == owner.session_id && c.mutable)
-            .ok_or("recording_style_required")?;
+        if self.active.as_ref().is_some_and(|active| active.owner == owner
+            && active.request_id.as_deref() == request) { return Ok(()); }
+        // A reservation that lost its original qualification is a cancellation,
+        // including when the Core session no longer supplies any Context.
+        let prepared = self.prepared.as_ref().filter(|prepared| prepared.owner == owner)
+            .ok_or("capsule_style_menu_reservation_stale")?;
+        let c = context.filter(|c| c.session_id == owner.session_id && c.mutable
+            && c.picker_enabled && c.style_epoch == prepared.style_epoch)
+            .ok_or("capsule_style_menu_reservation_stale")?;
         if let Some(id) = request {
-            if self.active.as_ref().is_some_and(|active| active.owner == owner
-                && active.request_id.as_deref() == Some(id)) { return Ok(()); }
             if owner.window_label != "capsule" || !self.pending.as_ref().is_some_and(|pending|
                 pending.request.session_id == owner.session_id && pending.request.request_id == id) {
                 return Err("capsule_style_request_stale".into());
@@ -198,7 +219,8 @@ impl State {
         self.prepared = None;
         self.pending = None;
         if self.active.as_ref().is_some_and(|active| active.owner != owner) { self.revoke(); }
-        self.active = Some(Active { owner, request_id: request.map(str::to_owned), focus: c.focus });
+        self.active = Some(Active { owner, request_id: request.map(str::to_owned),
+            style_epoch: c.style_epoch, focus: c.focus });
         Ok(())
     }
     fn close(&mut self, label: &str, session: SessionId, menu_id: &str) -> bool {
@@ -241,10 +263,18 @@ impl State {
         self.presses[index].menu_id = Some(menu_id);
         true
     }
+    /// Without a stable Core view, decline fresh downs but retain the physical
+    /// pair decision already made for a held key. Never invalidate a newer owner.
+    fn drain_key(&mut self, key: Key, down: bool) -> bool {
+        let press = &mut self.presses[key.index()];
+        let captured = press.captured;
+        if down { press.down = true; } else { *press = Press::default(); }
+        captured
+    }
     fn key_event(&self, key: Key, repeat: bool, context: Option<&Context>) -> Option<KeyEvent> {
         let c = context.filter(|c| c.keyboard_available && !c.blocked_keys[key.index()])?;
         let active = self.active.as_ref().filter(|a| a.owner.keyboard_available && a.focus.is_some()
-            && c.session_id == a.owner.session_id && c.focus == a.focus)?;
+            && c.session_id == a.owner.session_id && c.style_epoch == a.style_epoch && c.focus == a.focus)?;
         Some(KeyEvent { session_id: active.owner.session_id, menu_id: active.owner.menu_id.clone(),
             window_label: active.owner.window_label.clone(), key, repeat })
     }
@@ -255,53 +285,107 @@ pub(crate) fn capsule_label(label: &str) -> bool {
         .is_some_and(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// A delayed Automatic frame must not hide the badge and close a newer picker.
+/// Preserve existing phase/audio/job and translation presentation semantics.
+pub(crate) fn project_current_style(frame: &mut DictationStateSnapshot, current: &DictationStateSnapshot) {
+    if current.session_id.is_some() && frame.session_id == current.session_id
+        && matches!(current.phase, DictationPhase::Starting | DictationPhase::Recording) {
+        frame.skip_auto_style = current.skip_auto_style;
+        frame.style_pack_id = current.style_pack_id.clone();
+        frame.style_pack_name = current.style_pack_name.clone();
+    }
+}
+
 type Source = Arc<dyn Fn() -> Option<Context> + Send + Sync>;
 type Sink = Arc<dyn Fn(Event) -> bool + Send + Sync>;
+type EpochSource = Arc<dyn Fn() -> u64 + Send + Sync>;
 #[derive(Default)]
-struct Runtime { state: Mutex<State>, source: RwLock<Option<Source>>, sink: RwLock<Option<Sink>> }
+struct Runtime {
+    state: Mutex<State>,
+    source: RwLock<Option<Source>>,
+    sink: RwLock<Option<Sink>>,
+    epoch: RwLock<Option<EpochSource>>,
+}
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 fn runtime() -> &'static Runtime { RUNTIME.get_or_init(Runtime::default) }
 fn context() -> Option<Context> {
     let source = runtime().source.read().clone()?;
     source()
 }
+#[cfg(test)]
 pub(crate) fn configure(source: Source, sink: Sink) {
     *runtime().source.write() = Some(source);
     *runtime().sink.write() = Some(sink);
+    *runtime().epoch.write() = None;
 }
-fn with_state<T>(operation: impl FnOnce(&mut State, Option<&Context>) -> T) -> T {
-    let context = context();
-    let (result, closed) = {
-        let mut state = runtime().state.lock();
-        let result = operation(&mut state, context.as_ref());
-        (result, std::mem::take(&mut state.closed))
-    };
+pub(crate) fn configure_fenced(source: Source, sink: Sink, epoch: EpochSource) {
+    *runtime().source.write() = Some(source);
+    *runtime().sink.write() = Some(sink);
+    *runtime().epoch.write() = Some(epoch);
+}
+fn flush_closed(closed: Vec<ClosedEvent>) {
     let sink = runtime().sink.read().clone();
     for event in closed {
         if let Some(sink) = &sink { let _ = sink(Event::Closed(event)); }
     }
+}
+fn with_state_unchecked<T>(operation: impl FnOnce(&mut State) -> T) -> T {
+    let (result, closed) = {
+        let mut state = runtime().state.lock();
+        let result = operation(&mut state);
+        (result, std::mem::take(&mut state.closed))
+    };
+    flush_closed(closed);
     result
 }
-pub(crate) fn hotkey_toggled(target: &DictationStyleTarget) -> Option<Request> {
-    with_state(|state, context| state.hotkey_toggled(target, context))
+fn with_state<T>(operation: impl FnOnce(&mut State, Option<&Context>) -> T,
+    stale: impl FnOnce() -> T) -> T {
+    let epoch = runtime().epoch.read().clone();
+    // Native focus checks stay outside the menu lock. Before applying their
+    // result, recheck the cheap Core-only fence *under* that lock. This also
+    // prevents an older absent view from revoking a newer session/menu.
+    let before = epoch.as_ref().map(|source| source());
+    let context = context();
+    let mut state = runtime().state.lock();
+    let after = epoch.as_ref().map(|source| source());
+    if before != after || context.as_ref().is_some_and(|c|
+        after.is_some_and(|current| c.style_epoch != current)) {
+        if let Some(current) = after { state.invalidate_before(current); }
+        let closed = std::mem::take(&mut state.closed);
+        drop(state);
+        flush_closed(closed);
+        // Do not repeat a native focus query on a keyboard-hook deadline.
+        // Decline fresh input; only the existing physical pair may be drained.
+        return stale();
+    }
+    let result = operation(&mut state, context.as_ref());
+    let closed = std::mem::take(&mut state.closed);
+    drop(state);
+    flush_closed(closed);
+    result
+}
+pub(crate) fn hotkey_toggled(target: &DictationStyleTarget, epoch: u64) -> Option<Request> {
+    with_state(|state, context| state.hotkey_toggled(target, epoch, context), || None)
 }
 pub(crate) fn pending(label: &str) -> Option<Request> {
-    with_state(|state, context| state.pending(label, context))
+    with_state(|state, context| state.pending(label, context), || None)
 }
 pub(crate) fn reservation(label: &str, session: SessionId, request: Option<&str>) -> Result<Owner, String> {
-    with_state(|state, context| state.reservation(label, session, request, context))
+    with_state(|state, context| state.reservation(label, session, request, context),
+        || Err(if request.is_some() { "capsule_style_request_stale" } else { "capsule_style_menu_reservation_stale" }.into()))
 }
 pub(crate) fn commit(owner: Owner, request: Option<&str>) -> Result<(), String> {
-    with_state(|state, context| state.commit(owner, request, context))
+    with_state(|state, context| state.commit(owner, request, context),
+        || Err("capsule_style_menu_reservation_stale".into()))
 }
 pub(crate) fn close(label: &str, session: SessionId, menu_id: &str) -> bool {
-    with_state(|state, _| state.close(label, session, menu_id))
+    with_state_unchecked(|state| state.close(label, session, menu_id))
 }
 pub(crate) fn invalidate() {
-    with_state(|state, _| { state.pending = None; state.prepared = None; state.revoke(); });
+    with_state_unchecked(|state| { state.pending = None; state.prepared = None; state.revoke(); });
 }
 pub(crate) fn window_lost(label: &str) {
-    with_state(|state, _| {
+    with_state_unchecked(|state| {
         if label == "capsule" { state.pending = None; }
         if state.prepared.as_ref().is_some_and(|p| p.owner.window_label == label) { state.prepared = None; }
         if state.active.as_ref().is_some_and(|a| a.owner.window_label == label) { state.revoke(); }
@@ -311,30 +395,31 @@ pub(crate) fn owner_current(owner: &Owner) -> bool {
     with_state(|state, context| {
         state.reconcile(context);
         state.active.as_ref().is_some_and(|active| active.owner == *owner)
-    })
+    }, || false)
 }
 pub(crate) fn refresh() {
     // Ordinary audio/state traffic must not query foreground windows when
     // there is no picker intent or owner to validate.
     {
         let state = runtime().state.lock();
-        if state.pending.is_none() && state.active.is_none() { return; }
+        if state.pending.is_none() && state.active.is_none() && state.prepared.is_none() { return; }
     }
-    with_state(|state, context| state.reconcile(context));
+    with_state(|state, context| state.reconcile(context), || ());
 }
 pub(crate) fn is_owner(event: &KeyEvent) -> bool {
-    with_state(|state, context| state.is_owner(event, context))
+    with_state(|state, context| state.is_owner(event, context), || false)
 }
 pub(crate) fn key(key: Key, down: bool, repeat: bool, modified: bool) -> bool {
     {
         let mut state = runtime().state.lock();
         if state.pending.is_none() && state.active.is_none() {
-            return state.key(key, down, repeat, modified, None, &|_| false);
+            return state.drain_key(key, down);
         }
     }
     let sink = runtime().sink.read().clone();
     with_state(|state, context| state.key(key, down, repeat, modified, context, &|event|
-        sink.as_ref().is_some_and(|sink| sink(Event::Key(event)))))
+        sink.as_ref().is_some_and(|sink| sink(Event::Key(event)))),
+        || runtime().state.lock().drain_key(key, down))
 }
 
 #[cfg(test)]
@@ -343,7 +428,7 @@ mod tests {
     use std::cell::RefCell;
 
     fn context() -> Context {
-        Context { session_id: SessionId::new(), mutable: true, skip_auto: true,
+        Context { session_id: SessionId::new(), style_epoch: 1, mutable: true, skip_auto: true,
             picker_enabled: true, keyboard_available: true, focus: Some(Focus(9, 1)),
             blocked_keys: [false; 4] }
     }
@@ -370,7 +455,7 @@ mod tests {
         // create an intent; only the explicit native-provenance method can.
         state.reconcile(Some(&c));
         assert!(state.pending("capsule", Some(&c)).is_none());
-        let request = state.hotkey_toggled(&target(&c, DictationStyleSelection::SkipAuto), Some(&c)).unwrap();
+        let request = state.hotkey_toggled(&target(&c, DictationStyleSelection::SkipAuto), c.style_epoch, Some(&c)).unwrap();
         for _ in 0..3 {
             assert_eq!(state.pending("capsule", Some(&c)), Some(request.clone()));
         }
@@ -398,7 +483,7 @@ mod tests {
         for reason in 0..5 {
             let mut state = State::default();
             let c = context();
-            state.hotkey_toggled(&target(&c, DictationStyleSelection::SkipAuto), Some(&c)).unwrap();
+            state.hotkey_toggled(&target(&c, DictationStyleSelection::SkipAuto), c.style_epoch, Some(&c)).unwrap();
             let mut changed = c.clone();
             match reason {
                 0 => changed.skip_auto = false,
@@ -411,11 +496,11 @@ mod tests {
         }
         let mut state = State::default();
         let c = context();
-        assert!(state.hotkey_toggled(&target(&c, DictationStyleSelection::Automatic), Some(&c)).is_none());
-        assert!(state.hotkey_toggled(&target(&c, DictationStyleSelection::StylePack { style_pack_id: "x".into() }), Some(&c)).is_none());
+        assert!(state.hotkey_toggled(&target(&c, DictationStyleSelection::Automatic), c.style_epoch, Some(&c)).is_none());
+        assert!(state.hotkey_toggled(&target(&c, DictationStyleSelection::StylePack { style_pack_id: "x".into() }), c.style_epoch, Some(&c)).is_none());
         let mut disabled = c.clone();
         disabled.picker_enabled = false;
-        assert!(state.hotkey_toggled(&target(&c, DictationStyleSelection::SkipAuto), Some(&disabled)).is_none());
+        assert!(state.hotkey_toggled(&target(&c, DictationStyleSelection::SkipAuto), c.style_epoch, Some(&disabled)).is_none());
     }
 
     #[test]

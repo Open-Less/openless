@@ -1766,7 +1766,7 @@ pub(crate) mod platform {
             let _guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let session = openless_core::SessionId::new();
             let live = Arc::new(parking_lot::Mutex::new(Some(menu::Context {
-                session_id: session, mutable: false, skip_auto: true, picker_enabled: true,
+                session_id: session, style_epoch: 1, mutable: false, skip_auto: true, picker_enabled: true,
                 keyboard_available: true, focus: Some(Focus(3, 1)), blocked_keys: [false; 4],
             })));
             let source = live.clone();
@@ -1791,7 +1791,7 @@ pub(crate) mod platform {
                 session_id: session, selection: openless_core::DictationStyleSelection::SkipAuto,
                 skip_auto_style: true, mutable: false, style_pack_id: None, style_pack_name: None,
                 polish_style_pack_id: None, available_styles: vec![],
-            }).unwrap();
+            }, 1).unwrap();
             assert!(menu::reservation("capsule", session, Some(&request.request_id)).is_err());
             // A down passed before the menu has no matching captured up.
             assert!(!menu_callback(&ctx, 126, true, 0, false));
