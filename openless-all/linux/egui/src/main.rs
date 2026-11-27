@@ -8306,7 +8306,7 @@ mod linux_app {
                 .zip(&editor.protocol.values)
             {
                 if *account == openless_core::llm_protocol::SERVICE_TIER_ACCOUNT
-                    && editor.descriptor.provider_type.as_str() != "ark"
+                    && !matches!(editor.descriptor.provider_type.as_str(), "ark" | "openai")
                 {
                     continue;
                 }
@@ -8501,7 +8501,7 @@ mod linux_app {
                 .enumerate()
             {
                 if *account == openless_core::llm_protocol::SERVICE_TIER_ACCOUNT
-                    && descriptor.provider_type.as_str() != "ark"
+                    && !matches!(descriptor.provider_type.as_str(), "ark" | "openai")
                 {
                     continue;
                 }
