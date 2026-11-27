@@ -93,6 +93,8 @@ pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;
 pub mod style_packs;
+#[cfg(test)]
+mod intent_style_tests;
 pub mod testing;
 pub mod types;
 pub mod usage_ledger;
