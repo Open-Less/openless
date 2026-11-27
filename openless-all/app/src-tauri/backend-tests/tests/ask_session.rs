@@ -370,26 +370,6 @@ async fn failed_submit_then_regrant_cannot_resurrect_the_original_desktop_invoca
 }
 
 #[tokio::test]
-async fn late_standalone_turn_callback_cannot_reopen_closed_desktop_context() {
-    let provider = context::DesktopContext::default();
-    let key = AskTurnKey { conversation_id: Uuid::new_v4(), turn_id: Uuid::new_v4() };
-    provider.open_conversation(key.conversation_id);
-    provider.close_conversation(key.conversation_id);
-    let standalone: &dyn ContextProvider = &provider;
-    standalone.begin_turn(key);
-    // Reopening an empty scope with the same synthetic ID must not inherit a
-    // stale turn marker or let a late callback authorize a newly bound source.
-    provider.open_conversation(key.conversation_id);
-    provider.set_authorization(ContextAuthorization { app_metadata: true, usage: false });
-    provider.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
-    let reads = Arc::new(AtomicUsize::new(0));
-    provider.bind_browser_reference(key.conversation_id, provider.browser_authorization(), Arc::new(InvocationPage(reads.clone())));
-    assert!(matches!(provider.read(key, AssistantContextQuery::BrowserTab, AskCancellation::default()).await.unwrap(),
-        AssistantContextResult::Unavailable { .. }));
-    assert_eq!(reads.load(Ordering::Acquire), 0);
-}
-
-#[tokio::test]
 async fn transitions_revoke_prepared_context_while_model_factory_is_paused() {
     for new_conversation in [true, false] {
         let f = Fixture::new();

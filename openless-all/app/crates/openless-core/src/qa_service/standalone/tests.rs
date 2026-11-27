@@ -1192,11 +1192,13 @@ async fn idempotency_preserves_request_turn_event_ownership_and_one_preparation(
     f.no_more_calls();
 }
 
+type AdmittedTurnHook = Arc<dyn Fn(AskTurnKey) + Send + Sync>;
+
 #[derive(Default)]
 struct AdmittedContext {
     legacy: Context,
     turns: Mutex<Vec<AskTurnKey>>,
-    hook: Mutex<Option<Arc<dyn Fn(AskTurnKey) + Send + Sync>>>,
+    hook: Mutex<Option<AdmittedTurnHook>>,
 }
 
 impl ContextProvider for AdmittedContext {

@@ -814,6 +814,34 @@ mod tests {
     }
 
     #[test]
+    fn standalone_turn_hook_registers_active_and_leaves_no_marker_after_close() {
+        let provider = DesktopContext::default();
+        let key = AskTurnKey { conversation_id: Uuid::new_v4(), turn_id: Uuid::new_v4() };
+        provider.open_conversation(key.conversation_id);
+        let standalone: &dyn openless_core::ask::ContextProvider = &provider;
+
+        standalone.begin_turn(key);
+        {
+            let state = provider.state.lock();
+            assert!(state.conversations.contains_key(&key.conversation_id));
+            assert_eq!(state.browser_turns.get(&key.conversation_id), Some(&key));
+        }
+        provider.close_conversation(key.conversation_id);
+        {
+            let state = provider.state.lock();
+            assert!(!state.conversations.contains_key(&key.conversation_id));
+            assert!(!state.browser_turns.contains_key(&key.conversation_id));
+        }
+        // Inspect immediately after the late real trait-object callback.
+        // Deleting the production close guard would reinsert this marker.
+        standalone.begin_turn(key);
+        let state = provider.state.lock();
+        assert!(!state.browser_turns.contains_key(&key.conversation_id));
+        assert!(!state.conversations.contains_key(&key.conversation_id));
+        assert!(!state.browser_sources.contains_key(&key.conversation_id));
+    }
+
+    #[test]
     fn no_collection_or_reuse_after_revocation_even_if_regranted() {
         let provider = DesktopContext::default();
         let conversation = Uuid::new_v4();
