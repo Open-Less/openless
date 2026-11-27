@@ -14,12 +14,14 @@
 | `app/src` | Tauri 桌面/Android 与 HarmonyOS ArkWeb 共用的 React + TypeScript 前端界面。 |
 | `app/src-tauri` | macOS、Windows 与 Android 的 Tauri 宿主、原生适配层及内置 vendored 依赖（`src-tauri/vendor/`）。 |
 | `app/ask-window` | 桌面端独立「随便问」窗口界面与桥接代码。 |
-| `app/linux-egui` | Linux 原生宿主与 `egui` / `eframe` 界面（不依赖 Tauri 或 WebKitGTK）。 |
-| `app/android` | Android 宿主打包、清单合并与原生胶水代码。 |
-| `app/harmony` | HarmonyOS ArkTS + ArkWeb 宿主及 `harmony/rust` Node-API 桥接。 |
+| `linux/egui` | Linux 原生宿主与 `egui` / `eframe` 界面（不依赖 Tauri 或 WebKitGTK）。 |
+| `android` | Android 宿主打包、清单合并与原生胶水代码。 |
+| `harmony` | HarmonyOS ArkTS + ArkWeb 宿主及 `harmony/rust` Node-API 桥接。 |
 | `app/mobile-ime` | Android 与 HarmonyOS 共享的移动端原生输入法核心。 |
-| `app/windows-ime` | Windows TSF / 输入法注册与测试脚本。 |
-| `app/scripts/linux-fcitx5-plugin` | Linux 听写落字使用的 Fcitx5 插件。 |
+| `windows/ime` | Windows TSF / 输入法注册与测试脚本。 |
+| `windows/nsis`、`windows/wix`、`windows/scripts` | Windows 安装器资产与构建、验收工具。 |
+| `macos/dmg`、`macos/scripts`、`macos/*.plist` | macOS 安装盘布局、构建与验收工具及应用权限配置。 |
+| `linux/fcitx5-plugin` | Linux 听写落字使用的 Fcitx5 插件。 |
 | `ios/` | 原生 Swift iPhone 应用、中英文键盘扩展、录制小组件与 `CoreHost` Rust 桥接。 |
 
 > **无需初始化 Git 子模块**：`app/src-tauri/vendor/` 中已直接包含 `cpal` 与 `tauri-runtime-wry` 的定制源码，克隆仓库后即可直接构建。
@@ -53,15 +55,15 @@ cargo test --locked -p openless-core
 
 根 Rust workspace（`openless-all/app/Cargo.toml`）包含 `openless-core`、`micyou-dsp`、`micyou-infer`、`openless-capsule`、`native-capsule`、`linux-egui` 与 `harmony/rust`，排除 `src-tauri`，因此 Core 与 Linux 检查不依赖 Tauri 或 WebKitGTK。
 
-`linux-egui` 在进程内直接调用 `openless_core::contract` 类型化 Rust 接口，常驻宿主与界面子进程经 Unix Socket（JSONL v2）交换状态快照和事件，并通过 Fcitx5 插件（`scripts/linux-fcitx5-plugin`）落字。
+`linux-egui` 在进程内直接调用 `openless_core::contract` 类型化 Rust 接口，常驻宿主与界面子进程经 Unix Socket（JSONL v2）交换状态快照和事件，并通过 Fcitx5 插件（`linux/fcitx5-plugin`）落字。
 
 Linux 本地测试与打包：
 
 ```bash
 cd openless-all/app
 cargo test --locked -p openless-linux-egui
-bash scripts/package-linux-egui.sh
-bash scripts/verify-linux-egui-packages.sh
+OPENLESS_LINUX_VERSION="$(node -p "require('./package.json').version.split('+')[0]")-$(cat ../linux/egui/package-revision)" bash ../linux/scripts/package-linux-egui.sh
+bash ../linux/scripts/verify-linux-egui-packages.sh
 ```
 
 > Linux 自动化 CI 与发布工作流目前保持暂停；本地脚本仍可产出经校验的 `.deb` / `.rpm` 与 Fcitx5 插件（已停用 AppImage）。对外分发前请参照 [发布清单](../RELEASING.zh.md) 完成检验。
@@ -72,7 +74,7 @@ bash scripts/verify-linux-egui-packages.sh
 
 ```bash
 cd openless-all/app
-INSTALL=0 ./scripts/build-mac.sh
+INSTALL=0 ./../macos/scripts/build-mac.sh
 ```
 
 产出文件：
@@ -80,7 +82,7 @@ INSTALL=0 ./scripts/build-mac.sh
 - `openless-all/app/src-tauri/target/release/bundle/macos/OpenLess.app`
 - `openless-all/app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg`（Apple Silicon）或 `OpenLess_<version>_x64.dmg`（Intel）
 
-若需构建后直接安装到本机用于开发调试，可直接运行 `./scripts/build-mac.sh`。未配置 Apple 正式签名证书时，本地脚本会自动使用 ad-hoc 签名。
+若需构建后直接安装到本机用于开发调试，可直接运行 `./../macos/scripts/build-mac.sh`。未配置 Apple 正式签名证书时，本地脚本会自动使用 ad-hoc 签名。
 
 ## Windows 构建
 
@@ -88,7 +90,7 @@ INSTALL=0 ./scripts/build-mac.sh
 
 ```powershell
 cd openless-all/app
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-preflight.ps1
 ```
 
 ### MSVC 路线（推荐）
@@ -97,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1
 
 ```powershell
 cd openless-all/app
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-package-msvc.ps1
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-package-msvc.ps1
 ```
 
 ### GNU / MinGW 路线
@@ -109,15 +111,15 @@ cd openless-all/app
 scoop install rustup mingw
 rustup toolchain install stable-x86_64-pc-windows-gnu
 rustup target add x86_64-pc-windows-gnu
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1 -Toolchain gnu
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-build-gnu.ps1
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-preflight.ps1 -Toolchain gnu
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-build-gnu.ps1
 ```
 
 产出文件：
 
-- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\openless.exe`
-- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\msi\OpenLess_*_x64_en-US.msi`
-- `%TEMP%\openless-windows-gnu\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\nsis\OpenLess_*_x64-setup.exe`
+- `%TEMP%\openless-windows-gnu\app\src-tauri\target\x86_64-pc-windows-gnu\release\openless.exe`
+- `%TEMP%\openless-windows-gnu\app\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\msi\OpenLess_*_x64_en-US.msi`
+- `%TEMP%\openless-windows-gnu\app\src-tauri\target\x86_64-pc-windows-gnu\release\bundle\nsis\OpenLess_*_x64-setup.exe`
 
 ### 热键注入门禁与运行时说明
 
@@ -125,7 +127,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows-build-gnu.ps1
 
 ```powershell
 cd openless-all/app
-powershell -ExecutionPolicy Bypass -File .\scripts\windows-hotkey-injection-smoke.ps1 -ExePath .\.artifacts\windows-gnu\dev\openless.exe
+powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-hotkey-injection-smoke.ps1 -ExePath .\.artifacts\windows-gnu\dev\openless.exe
 ```
 
 - Windows 不需要 macOS 的辅助功能权限，可在「设置 → 权限 → 全局热键」查看监听状态。
@@ -134,18 +136,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows-hotkey-injection-smok
 
 ## Android 构建
 
-Android SDK/NDK 依赖、脚手架生成、多架构 APK（`arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86`）构建与真机验证见 [Android 构建指南](app/android/README.zh.md#构建与-ci)。
+Android SDK/NDK 依赖、脚手架生成、多架构 APK（`arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86`）构建与真机验证见 [Android 构建指南](android/README.zh.md#构建与-ci)。
 
 ## HarmonyOS 构建
 
-依赖环境：HarmonyOS Command Line Tools（可用 `scripts/prepare-harmony-sdk.sh` 按固定 SHA-256 拉取）、Python 3、Node.js 22+ 以及 `rustup target add aarch64-unknown-linux-ohos`。
+依赖环境：HarmonyOS Command Line Tools（可用 `../harmony/scripts/prepare-harmony-sdk.sh` 按固定 SHA-256 拉取）、Python 3、Node.js 22+ 以及 `rustup target add aarch64-unknown-linux-ohos`。
 
 ```bash
 cd openless-all/app
-bash scripts/build-harmony-frontend.sh
+bash ../harmony/scripts/build-harmony-frontend.sh
 ```
 
-未签名 HAP 输出到 `app/harmony/openless-project/entry/build/default/outputs/default/`。正式签名与 AppGallery 上传流程见 [`RELEASING.zh.md`](../RELEASING.zh.md)。
+未签名 HAP 输出到 `${OPENLESS_CACHE_ROOT:-/data-win/openless-cache}/harmony/openless-project/entry/build/default/outputs/default/`；打包脚本将交付文件暂存到 `app/target/harmony-packages/`。正式签名与 AppGallery 上传流程见 [`RELEASING.zh.md`](../RELEASING.zh.md)。
 
 ## iOS 构建
 

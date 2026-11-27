@@ -59,11 +59,11 @@ Pushing a `v*-tauri` tag triggers a single entry point: `.github/workflows/relea
 ### Linux (Paused Automation)
 
 - Linux CI and automatic release attachment are currently paused. Linux source and local build/packaging scripts remain maintained.
-- Before manually distributing or attaching Linux packages (`.deb` / `.rpm`), increment `openless-all/app/linux-egui/package-revision` (e.g. `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`) and complete exact-candidate on-device installation and dictation acceptance. Linux has no AppImage or in-app updater.
+- Before manually distributing or attaching Linux packages (`.deb` / `.rpm`), increment `openless-all/linux/egui/package-revision` (e.g. `2.0.0-Beta.2-79` → `2.0.0-Beta.2-80`) and complete exact-candidate on-device installation and dictation acceptance. Linux has no AppImage or in-app updater.
 
 ## 5. HarmonyOS Packaging, Signing & AppGallery Connect
 
-HarmonyOS builds via `.github/workflows/release-harmony.yml` using the publicly mirrored HarmonyOS command-line tools (`scripts/prepare-harmony-sdk.sh`, SHA-256 verified and cached via `actions/cache`; override with `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` or a `["self-hosted","harmony"]` runner with `HARMONY_TOOLCHAIN`). Never commit the SDK archive.
+HarmonyOS builds via `.github/workflows/release-harmony.yml` using the publicly mirrored HarmonyOS command-line tools (`../harmony/scripts/prepare-harmony-sdk.sh`, SHA-256 verified and cached via `actions/cache`; override with `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` or a `["self-hosted","harmony"]` runner with `HARMONY_TOOLCHAIN`). Never commit the SDK archive.
 
 ### Channel Matrix
 
@@ -74,9 +74,9 @@ HarmonyOS builds via `.github/workflows/release-harmony.yml` using the publicly 
 | `test` | `OpenLess_harmony_arm64-signed.hap` | `test.{cer,p7b,p12}` | AppGallery Connect test channel only |
 
 - Automatic calls from `release-tauri.yml` pass `channel: ${{ vars.HARMONY_AUTO_CHANNEL || 'none' }}`. Set repository variable `HARMONY_AUTO_CHANNEL` to `release` or `test` to upload a signed candidate package to AGC automatically; store submission for review remains a manual human step.
-- `ci.yml` always builds unsigned (`OPENLESS_HARMONY_CHANNEL=none`). Locally verify an unsigned package with `scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned`.
-- `openless-all/app/harmony/AppScope/app.json5` keeps placeholder `versionName`/`versionCode`; `scripts/package-harmony-hap.sh` temporarily injects `versionName` from `package.json` and `versionCode` from `linux-egui/package-revision` during build and restores the file afterward.
-- The signing step exports `OPENLESS_HARMONY_SIGNING_DIR` via `$GITHUB_ENV` and validates signing material via `scripts/check-harmony-signing.sh` before compiling (never declare `OPENLESS_HARMONY_SIGNING_DIR` as a job-level `env:` key).
+- `ci.yml` always builds unsigned (`OPENLESS_HARMONY_CHANNEL=none`). Locally verify an unsigned package with `../harmony/scripts/verify-harmony-hap.sh <hap> <toolchain> <name> <code> --allow-unsigned`.
+- `openless-all/harmony/AppScope/app.json5` keeps placeholder `versionName`/`versionCode`; `../harmony/scripts/package-harmony-hap.sh` temporarily injects `versionName` from `package.json` and `versionCode` from `../linux/egui/package-revision` during build and restores the file afterward.
+- The signing step exports `OPENLESS_HARMONY_SIGNING_DIR` via `$GITHUB_ENV` and validates signing material via `../harmony/scripts/check-harmony-signing.sh` before compiling (never declare `OPENLESS_HARMONY_SIGNING_DIR` as a job-level `env:` key).
 
 ### Required Repository Secrets & Variables (HarmonyOS)
 
