@@ -126,8 +126,9 @@ pub(crate) fn replace_selection_direct(
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = target;
-        windows::replace_selection_direct(original, replacement, still_current)
+        windows::replace_selection_direct(original, replacement, still_current, || {
+            crate::selection::selection_write_identity_is_current(target)
+        })
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

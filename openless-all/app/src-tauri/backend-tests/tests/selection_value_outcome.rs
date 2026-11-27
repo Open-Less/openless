@@ -10,6 +10,8 @@ mod clipboard_delivery;
 mod direct_delivery;
 #[path = "../../src/host_document/windows/selection_value.rs"]
 mod selection_value;
+#[path = "../../src/selection/target_position.rs"]
+mod target_position;
 
 use futures_util::future::BoxFuture;
 use openless_core::{
@@ -28,11 +30,20 @@ enum Fault {
     ReadbackMismatch,
     TargetLost,
     TargetReadError,
+    CancelledAfterWrite,
     None,
 }
 
 struct State {
     control: String,
+    captured_identity: (u32, u64, u64), // PID, window, control
+    identity: (u32, u64, u64),
+    captured_position: Option<(u64, u64)>,
+    position: Option<(u64, u64)>,
+    result_position: (u64, u64),
+    cancelled: bool,
+    range_checks: usize,
+    identity_checks: usize,
     setters: usize,
     readbacks: usize,
     applies: usize,
@@ -40,6 +51,12 @@ struct State {
     revision: u64,
     protected_revision: Option<u64>,
     copies: Vec<String>,
+}
+
+impl State {
+    fn identity_current(&self) -> bool {
+        !self.cancelled && self.identity == self.captured_identity
+    }
 }
 
 #[derive(Clone)]
@@ -129,8 +146,29 @@ impl SelectionRuntimeAdapter for Runtime {
                         },
                         || {
                             let mut state = this.state.lock().unwrap();
+                            state.range_checks += 1;
+                            state.identity_current()
+                                && target_position::unchanged(
+                                    state.captured_position,
+                                    state.position,
+                                )
+                        },
+                        || {
+                            let mut state = this.state.lock().unwrap();
+                            state.identity_checks += 1;
+                            state.identity_current()
+                        },
+                        || {
+                            let mut state = this.state.lock().unwrap();
                             state.setters += 1;
                             state.control = replacement.clone();
+                            state.position = Some(state.result_position);
+                            if this.fault == Fault::TargetLost {
+                                state.identity.2 += 1;
+                            }
+                            if this.fault == Fault::CancelledAfterWrite {
+                                state.cancelled = true;
+                            }
                             if this.fault == Fault::SetterAfterWrite {
                                 Err("provider timed out after applying")
                             } else {
@@ -146,7 +184,6 @@ impl SelectionRuntimeAdapter for Runtime {
                                     state.control = "provider changed value".into();
                                     Ok(state.control == replacement)
                                 }
-                                Fault::TargetLost => Ok(false),
                                 Fault::TargetReadError => Err("CompareElements failed"),
                                 _ => Ok(state.control == replacement),
                             }
@@ -159,7 +196,7 @@ impl SelectionRuntimeAdapter for Runtime {
                         &mut Clipboard(this.state.clone()),
                         &replacement,
                         revision,
-                        || true,
+                        || !this.state.lock().unwrap().cancelled,
                     )
                     .unwrap();
                     direct_delivery::fallback_result(
@@ -191,14 +228,27 @@ async fn fixture(fault: Fault) -> (OpenLessBackend, Runtime, tempfile::TempDir, 
         .prefix("selection-value-outcome-")
         .tempdir()
         .unwrap();
-    let original = format!(
-        " \t{} VALUE_MIDDLE {}\r\n ",
-        "字".repeat(9000),
-        "尾".repeat(9000)
-    );
+    let original = if fault == Fault::None {
+        "abcdef".to_string()
+    } else {
+        format!(
+            " \t{} VALUE_MIDDLE {}\r\n ",
+            "字".repeat(9000),
+            "尾".repeat(9000)
+        )
+    };
+    let position = Some((0, original.encode_utf16().count() as u64));
     let runtime = Runtime {
         state: Arc::new(Mutex::new(State {
             control: original.clone(),
+            captured_identity: (11, 22, 33),
+            identity: (11, 22, 33),
+            captured_position: position,
+            position,
+            result_position: (3, 0),
+            cancelled: false,
+            range_checks: 0,
+            identity_checks: 0,
             setters: 0,
             readbacks: 0,
             applies: 0,
@@ -214,7 +264,7 @@ async fn fixture(fault: Fault) -> (OpenLessBackend, Runtime, tempfile::TempDir, 
     let mut dependencies = BackendDependencies::unsupported();
     dependencies.selection_runtime = Some(Arc::new(runtime.clone()));
     dependencies.selection_polisher = Some(Arc::new(
-        openless_core::testing::FixtureTextPolisher::successful("confirmed result"),
+        openless_core::testing::FixtureTextPolisher::successful("XYZ"),
     ));
     let backend = OpenLessBackend::new(
         BackendConfig {
@@ -255,6 +305,7 @@ async fn post_submission_faults_remain_terminal_even_if_result_was_copied() {
         Fault::ReadbackMismatch,
         Fault::TargetLost,
         Fault::TargetReadError,
+        Fault::CancelledAfterWrite,
     ] {
         for later_copy in [false, true] {
             let (backend, runtime, directory, id) = fixture(fault).await;
@@ -278,7 +329,8 @@ async fn post_submission_faults_remain_terminal_even_if_result_was_copied() {
             assert_eq!(
                 error.details,
                 Some(serde_json::json!({
-                    "original_saved": true, "result_copied": !later_copy,
+                    "original_saved": true,
+                    "result_copied": !later_copy && fault != Fault::CancelledAfterWrite,
                 }))
             );
             let snapshot = backend.services().selection.snapshot().await.unwrap();
@@ -287,7 +339,7 @@ async fn post_submission_faults_remain_terminal_even_if_result_was_copied() {
             let history = backend.list_history().unwrap();
             assert_eq!(history.len(), 1);
             assert_eq!(history[0].raw_transcript, runtime.original);
-            assert_eq!(history[0].final_text, "confirmed result");
+            assert_eq!(history[0].final_text, "XYZ");
             assert_eq!(
                 history[0].error_code.as_deref(),
                 Some("selectionPolishWriteUnconfirmed")
@@ -304,16 +356,30 @@ async fn post_submission_faults_remain_terminal_even_if_result_was_copied() {
                 assert_eq!(state.applies, 1, "no resubmission after an unknown write");
                 assert_eq!(
                     state.readbacks,
-                    usize::from(fault != Fault::SetterAfterWrite)
+                    usize::from(!matches!(
+                        fault,
+                        Fault::SetterAfterWrite | Fault::TargetLost | Fault::CancelledAfterWrite
+                    ))
                 );
-                assert_eq!(state.copies.len(), 2);
+                assert_eq!(
+                    state.range_checks, 1,
+                    "the original range is only a pre-write fence"
+                );
+                assert_eq!(
+                    state.copies.len(),
+                    if fault == Fault::CancelledAfterWrite && !later_copy {
+                        1
+                    } else {
+                        2
+                    }
+                );
                 assert_eq!(state.copies[0], runtime.original);
                 assert_eq!(
                     state.clipboard,
-                    if later_copy {
+                    if later_copy || fault == Fault::CancelledAfterWrite {
                         runtime.original.as_str()
                     } else {
-                        "confirmed result"
+                        "XYZ"
                     }
                 );
                 assert_eq!(
@@ -321,7 +387,7 @@ async fn post_submission_faults_remain_terminal_even_if_result_was_copied() {
                     if fault == Fault::ReadbackMismatch {
                         "provider changed value"
                     } else {
-                        "confirmed result"
+                        "XYZ"
                     }
                 );
             }
@@ -335,6 +401,8 @@ async fn post_submission_faults_remain_terminal_even_if_result_was_copied() {
 async fn preflight_failure_preserves_classification_and_never_calls_the_setter() {
     let error = selection_value::replace(
         || Err("selectionPolishTargetUnavailable".into()),
+        || panic!("preflight must stop the selection fence"),
+        || panic!("preflight must stop the identity fence"),
         || -> Result<(), ()> { panic!("preflight must stop submission") },
         || -> Result<bool, ()> { panic!("no post-write read before submission") },
     )
@@ -365,10 +433,7 @@ async fn preflight_failure_preserves_classification_and_never_calls_the_setter()
         assert_eq!(state.setters, 0);
         assert_eq!(state.readbacks, 0);
         assert_eq!(state.control, runtime.original);
-        assert_eq!(
-            state.copies,
-            [runtime.original.clone(), "confirmed result".into()]
-        );
+        assert_eq!(state.copies, [runtime.original.clone(), "XYZ".into()]);
     }
     backend.shutdown().await.unwrap();
     directory.close().unwrap();
@@ -376,28 +441,75 @@ async fn preflight_failure_preserves_classification_and_never_calls_the_setter()
 
 #[tokio::test]
 async fn confirmed_value_write_keeps_the_original_clipboard_and_history() {
+    for result_position in [(3, 0), (0, 3)] {
+        let (backend, runtime, directory, id) = fixture(Fault::None).await;
+        {
+            let mut state = runtime.state.lock().unwrap();
+            assert_eq!(state.captured_position, Some((0, 6)));
+            state.result_position = result_position;
+        }
+        backend
+            .services()
+            .selection
+            .confirm(id, None)
+            .await
+            .unwrap();
+        let snapshot = backend.services().selection.snapshot().await.unwrap();
+        assert_eq!(snapshot.phase, SelectionPhase::Completed);
+        assert_eq!(snapshot.insert_outcome, Some(InsertOutcome::Inserted));
+        {
+            let state = runtime.state.lock().unwrap();
+            assert_eq!(state.setters, 1);
+            assert_eq!(state.readbacks, 1);
+            assert_eq!(state.range_checks, 1);
+            assert_eq!(
+                state.identity_checks, 2,
+                "identity must fence both sides of readback"
+            );
+            assert_eq!(state.position, Some(result_position));
+            assert_eq!(state.identity, state.captured_identity);
+            assert_eq!(state.control, "XYZ");
+            assert_eq!(state.copies, [runtime.original.clone()]);
+            assert_eq!(state.clipboard, runtime.original);
+        }
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].raw_transcript, runtime.original);
+        assert_eq!(history[0].final_text, "XYZ");
+        backend.shutdown().await.unwrap();
+        directory.close().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn moving_the_original_range_before_submission_blocks_the_setter() {
     let (backend, runtime, directory, id) = fixture(Fault::None).await;
+    runtime.state.lock().unwrap().position = Some((1, 5));
     backend
         .services()
         .selection
         .confirm(id, None)
         .await
         .unwrap();
-    let snapshot = backend.services().selection.snapshot().await.unwrap();
-    assert_eq!(snapshot.phase, SelectionPhase::Completed);
-    assert_eq!(snapshot.insert_outcome, Some(InsertOutcome::Inserted));
+    assert_eq!(
+        backend
+            .services()
+            .selection
+            .snapshot()
+            .await
+            .unwrap()
+            .insert_outcome,
+        Some(InsertOutcome::CopiedFallback)
+    );
     {
         let state = runtime.state.lock().unwrap();
-        assert_eq!(state.setters, 1);
-        assert_eq!(state.readbacks, 1);
-        assert_eq!(state.control, "confirmed result");
-        assert_eq!(state.copies, [runtime.original.clone()]);
-        assert_eq!(state.clipboard, runtime.original);
+        assert_eq!(state.range_checks, 1);
+        assert_eq!(state.identity_checks, 0);
+        assert_eq!(state.setters, 0);
+        assert_eq!(state.readbacks, 0);
+        assert_eq!(state.control, runtime.original);
+        assert_eq!(state.identity, state.captured_identity);
     }
-    let history = backend.list_history().unwrap();
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].raw_transcript, runtime.original);
-    assert_eq!(history[0].final_text, "confirmed result");
     backend.shutdown().await.unwrap();
     directory.close().unwrap();
 }
