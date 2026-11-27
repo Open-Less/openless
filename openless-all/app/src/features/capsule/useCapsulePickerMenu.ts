@@ -17,6 +17,7 @@ export function useCapsulePickerMenu({
   visible,
   setNativeMenu,
   onFailure,
+  onStaleStyleRequest,
 }: {
   controller: CapsulePickerMenu;
   kind: CapsulePickerKind;
@@ -25,11 +26,12 @@ export function useCapsulePickerMenu({
   visible: boolean;
   setNativeMenu: CapsulePickerDeps['setNativeMenu'];
   onFailure: () => void;
+  onStaleStyleRequest?: CapsulePickerDeps['onStaleStyleRequest'];
 }) {
   const { boundary } = useAppViewport();
   const [open, setOpen] = useState(false);
-  const config = useRef({ visible, target, boundary, onFailure });
-  config.current = { visible, target, boundary, onFailure };
+  const config = useRef({ visible, target, boundary, onFailure, onStaleStyleRequest });
+  config.current = { visible, target, boundary, onFailure, onStaleStyleRequest };
 
   const close = useCallback(() => controller.close(kind), [controller, kind]);
   const openMenu = useCallback(
@@ -43,6 +45,7 @@ export function useCapsulePickerMenu({
           setNativeMenu,
           onOpenChange: setOpen,
           onFailure: () => config.current.onFailure(),
+          onStaleStyleRequest: (request) => config.current.onStaleStyleRequest?.(request),
           waitForGeometry: async (signal) => {
             const viewport = current.boundary ?? document.documentElement;
             await waitForViewportGeometry(

@@ -2,6 +2,7 @@ import type { CapsuleStyleMenuRequest, DictationStyleTarget, StylePack } from '.
 import {
   capsuleOutputStyleLabel,
   CapsuleStylePickerRequests,
+  forgetStylePickerRequest,
   projectCapsuleOutputStyle,
   sameCapsuleOutputStyle,
   styleMenuKeyAction,
@@ -75,6 +76,13 @@ const target: DictationStyleTarget = {
   mutable: true,
 };
 const requests = new CapsuleStylePickerRequests();
+const loadedRequest = { ...request, target };
+const newerLoadedRequest = { ...loadedRequest, requestId: '14' };
+const otherSessionRequest = { ...request, sessionId: 'recording-b' };
+expect(forgetStylePickerRequest(request, request), null);
+expect(forgetStylePickerRequest(loadedRequest, request), null);
+expect(forgetStylePickerRequest(newerLoadedRequest, request), newerLoadedRequest);
+expect(forgetStylePickerRequest(otherSessionRequest, request), otherSessionRequest);
 expect(requests.take(request, { ...target, mutable: false }), null);
 expect(requests.take(request, { ...target, sessionId: 'old-recording' }), null);
 expect(requests.take(request, { ...target, selection: { mode: 'automatic' } }), null);

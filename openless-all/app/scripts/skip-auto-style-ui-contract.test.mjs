@@ -47,6 +47,8 @@ assert.match(
   /setCapsuleStyleMenu\(false, sessionId, \{ menuId: nativeOwner\.menuId \}\)/,
 );
 assert.match(styleBadge, /await getCapsuleStyleMenuRequest\(\)/);
+assert.match(styleBadge, /setRequest\(\(current\) => forgetStylePickerRequest\(current, stale\)\)/);
+assert.match(styleBadge, /setLoaded\(\(current\) => forgetStylePickerRequest\(current, stale\)\)/);
 assert.match(
   styleBadge,
   /updateDictationStyle\(intent\.sessionId, \{\s*mode: 'stylePack',\s*stylePackId,?\s*\}\)/,

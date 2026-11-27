@@ -1,5 +1,10 @@
 import { CapsulePickerMenu, type CapsulePickerDeps } from './capsulePickerMenu';
-import type { CapsuleStyleMenuKey, CapsuleStyleMenuOwner } from '../../api/contracts';
+import { forgetStylePickerRequest } from './capsuleOutputStyle';
+import type {
+  CapsuleStyleMenuKey,
+  CapsuleStyleMenuOwner,
+  CapsuleStyleMenuRequest,
+} from '../../api/contracts';
 
 function expect(actual: unknown, expected: unknown) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -52,6 +57,114 @@ expect(log, [
   'language:true:next',
   'render:true',
 ]);
+
+for (const [error, stale] of [
+  ['capsule_style_request_stale', true],
+  [{ code: 'capsule_style_menu_reservation_stale', message: 'Reservation expired' }, true],
+  [new Error('capsule_style_menu_reservation_stale'), true],
+  ['recording_style_required', false],
+  ['capsule_style_menu_target_unavailable', false],
+  ['geometry failed: capsule_style_request_stale', false],
+  [{ code: 'permission_denied', message: 'capsule_style_request_stale' }, false],
+] as const) {
+  const menu = new CapsulePickerMenu();
+  const events: string[] = [];
+  await menu.open(style, {
+    ...deps,
+    setNativeMenu: async (open) => {
+      events.push(open ? 'reserve' : 'release');
+      if (open) throw error;
+    },
+    waitForGeometry: async () => {
+      events.push('geometry');
+    },
+    onOpenChange: (open) => events.push(`render:${open}`),
+    onFailure: () => events.push('error'),
+    onStaleStyleRequest: (request) => events.push(`stale:${request.sessionId}:${request.requestId}`),
+  });
+  // A subsequent reservation drains any queued cleanup before the assertion.
+  await menu.open(language, deps);
+  expect(
+    events,
+    stale
+      ? ['reserve', 'render:false', 'stale:first:open-1']
+      : ['reserve', 'render:false', 'error', 'release'],
+  );
+}
+
+// The host invalidates an outstanding reservation while a fresh hotkey
+// request in the same session arrives. Rejecting the old reply must leave
+// the fresh request and geometry untouched.
+const raceMenu = new CapsulePickerMenu();
+const raceEvents: string[] = [];
+let currentRequest: CapsuleStyleMenuRequest | null = style;
+let rejectOld = (_: unknown) => {};
+let startOld = () => {};
+const oldStarted = new Promise<void>((resolve) => {
+  startOld = resolve;
+});
+const oldOpen = raceMenu.open(style, {
+  ...deps,
+  setNativeMenu: async (open) => {
+    raceEvents.push(open ? 'old:reserve' : 'old:release');
+    if (!open) return;
+    await new Promise<void>((_, reject) => {
+      rejectOld = reject;
+      startOld();
+    });
+  },
+  waitForGeometry: async () => {
+    raceEvents.push('old:geometry');
+  },
+  onOpenChange: (open) => raceEvents.push(`old:render:${open}`),
+  onFailure: () => raceEvents.push('old:error'),
+  onStaleStyleRequest: (request) => {
+    currentRequest = forgetStylePickerRequest(currentRequest, request);
+    raceEvents.push(`old:stale:${request.requestId}`);
+  },
+});
+await oldStarted;
+const fresh = { ...style, requestId: 'open-2' };
+currentRequest = fresh;
+const freshOpen = raceMenu.open(fresh, {
+  ...deps,
+  setNativeMenu: async (open, _, reserved) => {
+    if (!open) {
+      raceEvents.push(`fresh:release:${reserved?.menuId}`);
+      throw 'capsule_style_menu_reservation_stale';
+    }
+    raceEvents.push('fresh:reserve');
+    return {
+      sessionId: fresh.sessionId,
+      menuId: 'fresh-menu',
+      windowLabel: 'capsule',
+      keyboardAvailable: true,
+    };
+  },
+  onOpenChange: (open) => raceEvents.push(`fresh:render:${open}`),
+  onStaleStyleRequest: (request) => {
+    currentRequest = forgetStylePickerRequest(currentRequest, request);
+    raceEvents.push(`fresh:stale:${request.requestId}`);
+  },
+});
+rejectOld('capsule_style_request_stale');
+await Promise.all([oldOpen, freshOpen]);
+raceMenu.receiveStyleClose({ sessionId: style.sessionId, menuId: 'stale-menu' });
+expect(currentRequest, fresh);
+expect(raceMenu.owns('style', fresh.sessionId, fresh.requestId), true);
+expect(raceEvents, [
+  'old:reserve',
+  'old:render:false',
+  'old:stale:open-1',
+  'fresh:reserve',
+  'fresh:render:true',
+]);
+raceEvents.length = 0;
+raceMenu.close('style');
+await raceMenu.open(language, deps);
+expect(currentRequest, null);
+expect(raceMenu.sessionForChoice('language'), language.sessionId);
+expect(raceEvents, ['fresh:render:false', 'fresh:release:fresh-menu', 'fresh:stale:open-2']);
 
 const inputController = new CapsulePickerMenu();
 const nativeOwner: CapsuleStyleMenuOwner = {

@@ -20,6 +20,7 @@ import { usePopupViewport } from '../../ui/layout/AppViewport';
 import {
   capsuleOutputStyleLabel,
   CapsuleStylePickerRequests,
+  forgetStylePickerRequest,
   styleMenuKeyAction,
   stylePickerRequestForSession,
   type CapsuleOutputStyle,
@@ -51,10 +52,9 @@ export const CapsuleStyleBadge = memo(function CapsuleStyleBadge({
   const [windowLabel, setWindowLabel] = useState<string>();
   const [request, setRequest] = useState<CapsuleStyleMenuRequest | null>(null);
   const [requests] = useState(() => new CapsuleStylePickerRequests());
-  const [loaded, setLoaded] = useState<{
-    requestId: string;
-    target: DictationStyleTarget;
-  } | null>(null);
+  const [loaded, setLoaded] = useState<
+    (CapsuleStyleMenuRequest & { target: DictationStyleTarget }) | null
+  >(null);
   const [error, setError] = useState(false);
   const [saving, setSaving] = useState(false);
   const choice = useRef<symbol>();
@@ -77,7 +77,7 @@ export const CapsuleStyleBadge = memo(function CapsuleStyleBadge({
         return;
       if (
         !(await events.styleMenuRequests((next) => {
-          if (next.sessionId !== captureSessionId) return;
+          if (next.sessionId !== captureSessionId || requests.hasConsumed(next)) return;
           requestRevision += 1;
           setRequest(next);
         }))
@@ -89,7 +89,9 @@ export const CapsuleStyleBadge = memo(function CapsuleStyleBadge({
       if (
         !disposed &&
         requestRevision === revisionAtRead &&
-        pending?.sessionId === captureSessionId
+        pending &&
+        pending.sessionId === captureSessionId &&
+        !requests.hasConsumed(pending)
       ) {
         setRequest(pending);
       }
@@ -100,7 +102,7 @@ export const CapsuleStyleBadge = memo(function CapsuleStyleBadge({
       disposed = true;
       events.dispose();
     };
-  }, [captureSessionId, pickerController, pickerEnabled]);
+  }, [captureSessionId, pickerController, pickerEnabled, requests]);
 
   const intent = stylePickerRequestForSession(
     request,
@@ -110,7 +112,7 @@ export const CapsuleStyleBadge = memo(function CapsuleStyleBadge({
   const requestId = intent?.requestId;
   const sessionId = intent?.sessionId;
   const target =
-    requestId && loaded?.requestId === requestId && loaded.target.sessionId === sessionId
+    requestId && loaded?.requestId === requestId && loaded.sessionId === sessionId
       ? loaded.target
       : null;
   const setNativeMenu = useCallback<CapsulePickerDeps['setNativeMenu']>(
@@ -136,6 +138,10 @@ export const CapsuleStyleBadge = memo(function CapsuleStyleBadge({
     visible: Boolean(intent),
     setNativeMenu,
     onFailure: () => setError(true),
+    onStaleStyleRequest: (stale) => {
+      setRequest((current) => forgetStylePickerRequest(current, stale));
+      setLoaded((current) => forgetStylePickerRequest(current, stale));
+    },
   });
 
   useEffect(() => {
@@ -156,7 +162,7 @@ export const CapsuleStyleBadge = memo(function CapsuleStyleBadge({
           return;
         }
         if (next.sessionId === sessionId && next.selection.mode === 'skipAuto') {
-          setLoaded({ requestId, target: next });
+          setLoaded({ sessionId, requestId, target: next });
         }
       } catch {
         if (!disposed) setError(true);
