@@ -67,6 +67,17 @@ class SecretlessPreflightTests(unittest.TestCase):
         self.assertEqual(helper.count("cargo test --locked -p openless-core --lib -j 1 --no-run --message-format=json"), 1)
         self.assertNotIn("cargo ", helper.split("  verify)", 1)[1])
 
+    def test_paid_target_uses_step_env_not_unavailable_job_runner_context(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        paid = workflow.split("\n  live-acceptance:\n", 1)[1]
+        header, steps = paid.split("    steps:\n", 1)
+        self.assertNotIn("runner.", header)
+        for name in ("Build acceptance without credentials", "Run explicitly selected bounded acceptance"):
+            step = steps.split("      - name: " + name + "\n", 1)[1].split("\n      - name:", 1)[0]
+            self.assertIn("        env:\n", step)
+            self.assertIn("CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target", step)
+        self.assertIn('rm -rf "$RUNNER_TEMP/openless-live-target"', steps)
+
     def test_shared_gate_lists_live_only_and_rejects_zero_tests(self):
         # Stubs are intentional: this validates shell control flow without compiling.
         with tempfile.TemporaryDirectory(prefix="openless-secretless-contract-") as scratch:

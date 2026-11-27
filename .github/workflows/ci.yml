@@ -1346,8 +1346,6 @@ jobs:
       contains(fromJSON('["refs/heads/main","refs/heads/beta"]'), github.ref)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target
     permissions:
       contents: read
     defaults:
@@ -1369,6 +1367,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build acceptance without credentials
         id: live-build
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target
         run: |
           set -euo pipefail
           umask 077
@@ -1386,6 +1386,7 @@ jobs:
       - name: Run explicitly selected bounded acceptance
         if: inputs.live_acceptance != 'intent-style-comparison'
         env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           LIVE_ACCEPTANCE: ${{ inputs.live_acceptance }}
         run: |
