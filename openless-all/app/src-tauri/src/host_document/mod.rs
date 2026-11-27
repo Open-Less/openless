@@ -117,18 +117,21 @@ pub(crate) fn replace_selection_direct(
     original: &str,
     replacement: &str,
     still_current: impl Fn() -> bool,
+    target: &crate::selection::SelectionInsertionTarget,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        macos::replace_selection_direct(original, replacement, still_current)
+        let _ = still_current;
+        macos::replace_selection_direct(target, original, replacement)
     }
     #[cfg(target_os = "windows")]
     {
+        let _ = target;
         windows::replace_selection_direct(original, replacement, still_current)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (original, replacement, still_current);
+        let _ = (original, replacement, still_current, target);
         Err("selectionPolishTargetUnavailable".into())
     }
 }

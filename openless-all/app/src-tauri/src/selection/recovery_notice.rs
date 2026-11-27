@@ -22,6 +22,19 @@ pub(crate) fn capacity_failure_message(locale: &str) -> &'static str {
     }
 }
 
+pub(crate) fn uncertain_write_message(locale: &str) -> &'static str {
+    match locale {
+        "zh-CN" => "可能已写入，请先核对原输入框；原文和结果保留在历史记录",
+        "zh-TW" => "可能已寫入，請先核對原輸入框；原文和結果保留在歷史記錄",
+        "ja" => "入力済みの可能性があります。元の欄を確認してください。原文と結果は履歴にあります。",
+        "ko" => "이미 입력되었을 수 있습니다. 원래 입력란을 확인하세요. 원문과 결과는 기록에 있습니다.",
+        "es" => "Puede que el texto ya se haya insertado. Comprueba el campo original; ambos textos están en el historial.",
+        "fr" => "Le texte a peut-être été inséré. Vérifiez le champ d’origine ; les deux textes sont dans l’historique.",
+        "de" => "Der Text wurde möglicherweise eingefügt. Prüfe das ursprüngliche Feld; beide Texte sind im Verlauf.",
+        _ => "The text may already be inserted. Check the original field first; both texts are saved in history.",
+    }
+}
+
 fn localized_message(locale: &str) -> &'static str {
     match locale {
         "zh-CN" => "如果有掉词，可前往 App 的历史记录获取原文。",

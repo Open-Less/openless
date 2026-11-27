@@ -604,8 +604,8 @@ impl SelectionServiceInner {
                 &self.history,
                 session_id,
                 state.snapshot.preview_text.as_deref(),
-                if cause.message == "selectionInputTooLarge" {
-                    "selectionInputTooLarge"
+                if matches!(cause.message.as_str(), "selectionInputTooLarge" | "selectionPolishWriteUnconfirmed") {
+                    cause.message.as_str()
                 } else {
                     "selectionFailed"
                 },
@@ -646,6 +646,16 @@ impl SelectionServiceInner {
         if !active {
             return false;
         }
+        if error.code == BackendErrorCode::OutcomeUnknown {
+            if let Err(persistence_error) = update_original_record(
+                &self.history,
+                session_id,
+                state.snapshot.preview_text.as_deref(),
+                "selectionPolishWriteUnconfirmed",
+            ) {
+                log::warn!("failed to settle uncertain selection history: {persistence_error}");
+            }
+        }
         state.snapshot.phase = if settled {
             SelectionPhase::Failed
         } else {
@@ -653,6 +663,9 @@ impl SelectionServiceInner {
         };
         let snapshot = state.snapshot.clone();
         drop(state);
+        if error.code == BackendErrorCode::OutcomeUnknown {
+            self.publish_history_changed();
+        }
         self.events.publish(
             Some(session_id),
             BackendEventKind::SelectionStateChanged(snapshot),
