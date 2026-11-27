@@ -2787,6 +2787,9 @@ export const es: typeof zhCN = {
     sherpaModelQwen3: 'Qwen3-ASR 0.6B INT8',
     sherpaModelQwen3Desc:
       'Modelo Qwen3-ASR convertido para sherpa-onnx, con reconocimiento multilingüe y mejor tratamiento del contexto en textos largos.',
+    sherpaModelOrukFourier2B: 'Oruk Fourier 2B INT8 (solo inglés)',
+    sherpaModelOrukFourier2BDesc:
+      'Modelo opcional Qwen3-ASR INT8 solo en inglés de Oruk (~2,24 GiB, licencia no comercial CC BY-NC 4.0).',
     modelSelectTitle: 'Modelos de este dispositivo',
     modelSelectDesc: 'Consulta las descargas, administra archivos o carga un modelo para probarlo.',
     modelSelectPlaceholder: 'Selecciona un modelo descargado…',

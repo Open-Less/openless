@@ -188,6 +188,7 @@ const SHERPA_MODEL_ALIASES: &[&str] = &[
     "whisper-small-multi",
     "whisper-large-v3-multi",
     "qwen3-asr-0.6b-int8",
+    "oruk-fourier-2b-int8",
     "zipformer-bilingual-zh-en-streaming",
 ];
 
@@ -237,7 +238,7 @@ impl LocalAsrTarget {
             "sense-voice-small-zh" => Some(SherpaModelFamily::SenseVoice),
             "paraformer-zh" => Some(SherpaModelFamily::Paraformer),
             "whisper-small-multi" | "whisper-large-v3-multi" => Some(SherpaModelFamily::Whisper),
-            "qwen3-asr-0.6b-int8" => Some(SherpaModelFamily::Qwen3Asr),
+            "qwen3-asr-0.6b-int8" | "oruk-fourier-2b-int8" => Some(SherpaModelFamily::Qwen3Asr),
             "zipformer-bilingual-zh-en-streaming" => Some(SherpaModelFamily::Zipformer),
             _ => None,
         }
