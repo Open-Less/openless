@@ -102,6 +102,9 @@ export {
   getCapsuleSnapshot,
   setCapsuleTranscriptVisible,
   handleWindowHotkeyEvent,
+  getDictationStyleTarget,
+  updateDictationStyle,
+  setCapsuleStyleMenu,
 } from './dictation';
 
 // style-packs
@@ -146,6 +149,7 @@ export {
   setDictationHotkey,
   setSelectionPolishHotkey,
   setTranslationHotkey,
+  setSkipAutoStyleHotkey,
   setSwitchStyleHotkey,
   setOpenAppHotkey,
   setQuickNoteHotkey,
