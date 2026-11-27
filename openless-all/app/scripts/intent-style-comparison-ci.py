@@ -110,10 +110,9 @@ def apply_status(report, raw):
                 raise ValueError("unexpected result")
 
 
-def validate_dispatch():
+def validate_source():
     expected = os.environ.get("INTENT_EXPECTED_SOURCE_SHA", "")
     ref = os.environ.get("GITHUB_REF", "")
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
     if (
         not re.fullmatch("[0-9a-f]{40}", expected)
         or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
@@ -122,11 +121,6 @@ def validate_dispatch():
         or os.environ.get("GITHUB_SHA") != expected
         or os.environ.get("INTENT_WORKFLOW_SHA") != expected
         or os.environ.get("GITHUB_WORKFLOW_REF") != f"{REPOSITORY}/.github/workflows/ci.yml@{ref}"
-        or os.environ.get("GITHUB_ACTOR") != AUTHORIZED_ACTOR
-        or os.environ.get("GITHUB_ACTOR_ID") != AUTHORIZED_ACTOR_ID
-        or os.environ.get("INTENT_TRIGGERING_ACTOR") != AUTHORIZED_ACTOR
-        or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"
-        or not re.fullmatch("[1-9][0-9]{0,19}", run_id)
     ):
         raise ValueError("unverified dispatch")
     checkout = subprocess.run(
@@ -140,6 +134,22 @@ def validate_dispatch():
     return {
         "sourceSha": expected, "workflowSha": expected,
         "workflowRef": os.environ["GITHUB_WORKFLOW_REF"],
+    }
+
+
+def validate_dispatch():
+    verified = validate_source()
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if (
+        os.environ.get("GITHUB_ACTOR") != AUTHORIZED_ACTOR
+        or os.environ.get("GITHUB_ACTOR_ID") != AUTHORIZED_ACTOR_ID
+        or os.environ.get("INTENT_TRIGGERING_ACTOR") != AUTHORIZED_ACTOR
+        or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"
+        or not re.fullmatch("[1-9][0-9]{0,19}", run_id)
+    ):
+        raise ValueError("unverified dispatch")
+    return {
+        **verified,
         "runId": run_id, "runAttempt": 1,
         "actor": AUTHORIZED_ACTOR, "actorId": AUTHORIZED_ACTOR_ID,
     }
@@ -457,6 +467,8 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "select-binary":
             select_binary(sys.argv[2])
+        elif len(sys.argv) == 2 and sys.argv[1] == "source-preflight":
+            print(json.dumps(validate_source(), sort_keys=True))
         elif len(sys.argv) == 2 and sys.argv[1] == "preflight":
             with tempfile.TemporaryDirectory(prefix="openless-intent-recipient-") as scratch:
                 intent_preflight(Path(scratch))

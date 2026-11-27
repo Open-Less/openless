@@ -20,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       live_acceptance:
-        description: Paid official-provider acceptance only (skips ordinary platform checks)
+        description: Optional acceptance or secretless preflight (skips platform checks)
         type: choice
-        options: ['off', style, style-diagnostic, search, intent-style-comparison]
+        options: ['off', style, style-diagnostic, search, intent-style-comparison, intent-style-preflight]
         default: 'off'
       intent_recipient_certificate:
         description: Public PEM recipient certificate for encrypted intent evidence (never a private key)
@@ -30,7 +30,7 @@ on:
         required: false
         default: ''
       intent_expected_source_sha:
-        description: Reviewed 40-character source/workflow SHA for intent comparison only
+        description: Reviewed 40-character source/workflow SHA for intent preflight or comparison
         type: string
         required: false
         default: ''
@@ -1297,11 +1297,51 @@ jobs:
             test "$MSRV_RESULT" = success
           fi
 
+  intent-secretless-preflight:
+    name: Optional secretless intent preflight
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.live_acceptance == 'intent-style-preflight' &&
+      github.repository == 'Open-Less/openless' &&
+      contains(fromJSON('["refs/heads/main","refs/heads/beta"]'), github.ref)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify reviewed source without provider credentials
+        env:
+          INTENT_EXPECTED_SOURCE_SHA: ${{ inputs.intent_expected_source_sha }}
+          INTENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: python3 scripts/intent-style-comparison-ci.py source-preflight
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile once and verify only dummy and local mock paths
+        run: |
+          set -euo pipefail
+          umask 077
+          scratch=$(mktemp -d "$RUNNER_TEMP/openless-intent-preflight.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          export TMPDIR="$scratch/tmp"
+          export CARGO_TARGET_DIR="$scratch/target"
+          mkdir -p "$TMPDIR"
+          bash scripts/intent-style-gates.sh python
+          binary_assignment=$(bash scripts/intent-style-gates.sh build "$scratch/manifest.jsonl")
+          [[ "$binary_assignment" == binary=* ]]
+          binary=${binary_assignment#binary=}
+          bash scripts/intent-style-gates.sh verify "$binary"
+
   live-acceptance:
     name: Optional official-provider live acceptance
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.live_acceptance != 'off' &&
+      inputs.live_acceptance != 'intent-style-preflight' &&
       github.repository == 'Open-Less/openless' &&
       contains(fromJSON('["refs/heads/main","refs/heads/beta"]'), github.ref)
     runs-on: ubuntu-latest
@@ -1334,27 +1374,15 @@ jobs:
           umask 077
           build_manifest=$(mktemp "$RUNNER_TEMP/openless-live-build.XXXXXX")
           trap 'rm -f "$build_manifest"' EXIT
-          cargo test --locked -p openless-core --lib -j 1 --no-run --message-format=json > "$build_manifest"
-          python3 scripts/intent-style-comparison-ci.py select-binary "$build_manifest" >> "$GITHUB_OUTPUT"
+          bash scripts/intent-style-gates.sh build "$build_manifest" >> "$GITHUB_OUTPUT"
       - name: Verify intent mock transport gates without provider credentials
         if: inputs.live_acceptance == 'intent-style-comparison'
         env:
           INTENT_TEST_BINARY: ${{ steps.live-build.outputs.binary }}
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_intent_style_comparison_ci.py
-          for name in \
-            intent_comparison_http_loop_32_and_36 \
-            intent_comparison_http_loop_stops_on_first_error \
-            intent_comparison_transport_budget_and_redirects \
-            intent_comparison_transport_connect_request_and_timeout_stop \
-            intent_comparison_legacy_limits_remain_independent; do
-            target="intent_style_tests::$name"
-            "$INTENT_TEST_BINARY" "$target" --exact --list | grep -Fx "$target: test" > /dev/null
-          done
-          "$INTENT_TEST_BINARY" intent_style_tests::intent_comparison_ --test-threads=1
-          target=intent_style_tests::intent_live_configured_channel_comparison
-          "$INTENT_TEST_BINARY" "$target" --ignored --exact --list | grep -Fx "$target: test" > /dev/null
+          bash scripts/intent-style-gates.sh python
+          bash scripts/intent-style-gates.sh verify "$INTENT_TEST_BINARY"
       - name: Run explicitly selected bounded acceptance
         if: inputs.live_acceptance != 'intent-style-comparison'
         env:

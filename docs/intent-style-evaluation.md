@@ -40,6 +40,47 @@ OAuth 渠道或不希望复制凭据时，在风格设置建立两个临时自�
 
 逐条检查信息是否遗漏、撤销是否生效、是否重复归组、层级与编号是否合理、专名数字是否保留、是否新增要求或代答。给每条记录通过 / 不通过和具体偏差；失败后可以修改提示词，但不能覆盖已有对照证据。最终效果由用户判断。渠道是否返回缓存读取和推理用量，仍须通过应用的用量账本另行检查；该并排记录不代替缓存或计费测量。
 
+## 无 provider secret 的云端预验证
+
+先使用非默认手动模式 `intent-style-preflight` 取得通道动态证据，**不要用付费模式来做
+预验**。独立 job `intent-secretless-preflight` 只有 contents:read，checkout 不保留凭据，
+没有 provider secret 映射或 environment。它仅允许官方仓库 main/beta，复用同一来源
+校验：40 位 expected SHA、事件 SHA、workflow SHA、checkout HEAD 和官方 ci.yml ref
+必须一致；无需 API key、收件人证书或指纹，也不调用 wrapper 的 `run`。
+
+协调者先把补丁纳入经过审查的完整集成版本，在该 checkout 的 `openless-all/app/`
+记录确切 SHA。以下仅为协调者后续的云端命令，本任务没有执行：
+
+```sh
+expected_source_sha=$(git rev-parse HEAD)
+test "$(gh api repos/Open-Less/openless/git/ref/heads/beta --jq .object.sha)" = "$expected_source_sha"
+gh workflow run ci.yml --repo Open-Less/openless --ref beta \
+  -f live_acceptance=intent-style-preflight \
+  -f "intent_expected_source_sha=$expected_source_sha"
+```
+
+这个模式与 paid live-acceptance 在条件上互斥，不会在预验通过后自动付款。
+changes/平台 gate 不启动，默认 off 和旧 style/diagnostic/search 不变。
+独占 runner.temp 目录内依次执行：
+
+1. 22 项 Python/OpenSSL dummy（模型进程/git context 均 mock，OpenSSL 使用临时 dummy）。
+2. **一次** `cargo test --locked -p openless-core --lib -j 1 --no-run --message-format=json`；
+   既有 select-binary 从 manifest 取得唯一 Core 测试二进制。
+3. 严格逐名枚举 5 项非 ignored 测试，再执行其精确共同前缀；必须实际 5 passed、
+   0 failed、0 ignored，不能接受 0 tests。
+4. 对唯一 live 函数仅执行 `--ignored --exact --list`，要求恰一个精确匹配，绝不执行。
+
+其中前四项 Rust 目标验证真实本地传输/循环，第五项只检查旧限额常量和当前 scope 状态。
+编译/枚举/mock 的无 provider 步骤共用 `scripts/intent-style-gates.sh`，供预验与付费路径
+各自的前置检查使用；脚本没有 live 执行分支。日志只保留已验证的测试计数、来源 SHA
+及固定失败阶段，临时 manifest、target、TMPDIR、dummy 文件和原始命令输出均清理。
+
+保留这次确切 run ID、实际执行的 job、验证过的 SHA 和安全计数；skipped 不是通过。
+预验成功只证明这个 SHA 的通道测试，不证明模型效果，也不会生成语义对照。
+后续如有集成改动，必须在新的最终 SHA 重新取得无密钥证据，不能移用旧 SHA 的结果。
+只有门禁和复审完成后，才按下面**另外一次明确的付费模式 dispatch**安排既有授权的
+唯一真实对照；预验不会调用它，付费流程的身份/attempt/SHA/证书门禁保持原样。
+
 ## 使用既有 Actions secret 的加密语义对照
 
 现有 `Optional official-provider live acceptance` 的非默认选项
