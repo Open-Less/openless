@@ -16,9 +16,12 @@ assert.match(detail, /showingRaw && hasSelectionOriginal\(item\)/);
 assert.match(detail, /onClick=\{\(\) => void onCopy\(showingRaw\)\}/);
 assert.match(originalSelection, /selectionOriginalClipboardText\(entries, selectedIds\)/);
 assert.match(originalSelection, /await copyTextToClipboard\(text\)/);
-assert.match(originals, /entry\.source === 'selection_polish'/);
+assert.match(
+  originals,
+  /\(entry\.source === 'selection_polish' \|\| entry\.source === 'selection_voice_edit'\)/,
+);
 assert.match(originals, /\.map\(\(entry\) => entry\.rawTranscript\)\s*\.join\('\\n\\n'\)/);
-assert.doesNotMatch(originals, /\.trim\(/);
+assert.doesNotMatch(originals, /\.trim\(|\b(?:finalText|summary)\b/);
 
 for (const locale of ['zh-CN', 'zh-TW', 'en', 'de', 'es', 'fr', 'ja', 'ko']) {
   const source = read(`src/i18n/${locale}.ts`);
