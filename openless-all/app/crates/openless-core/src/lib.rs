@@ -7,6 +7,8 @@
 pub mod activity;
 pub mod app_catalog;
 pub mod app_style_routing;
+pub mod input_scene;
+pub mod browser_scene;
 pub mod android_types;
 pub mod api;
 pub mod main_dictation_trace;
