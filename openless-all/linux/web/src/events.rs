@@ -37,6 +37,10 @@ pub fn map_event(event: &BackendEvent) -> Option<(&'static str, serde_json::Valu
             "dictation:state",
             serde_json::to_value(state).unwrap_or(serde_json::Value::Null),
         ),
+        BackendEventKind::DictationJobsChanged(jobs) => (
+            "dictation:jobs",
+            serde_json::to_value(jobs).unwrap_or(serde_json::Value::Null),
+        ),
         BackendEventKind::HistoryChanged(change) => (
             "history:changed",
             serde_json::to_value(change).unwrap_or(serde_json::Value::Null),

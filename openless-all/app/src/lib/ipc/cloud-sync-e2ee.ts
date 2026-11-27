@@ -55,7 +55,7 @@ export interface RestorePreview {
   localGeneration: string;
   counts: Record<string, number>;
   deviceSettingsToReview: string[];
-  conflicts: Array<{ id: string; kind: string; reason: string }>;
+  conflicts: Array<{ id: string; kind: string; reason: string; localLabel?: string; cloudLabel?: string }>;
 }
 
 export interface EncryptedSyncEventScope {

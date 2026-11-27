@@ -60,14 +60,14 @@ retain their normal corners.
 
 ### Not complete: do not advertise as supported
 
-1. **New Ask host**: `ask_*` session/attachment/editor/voice/context APIs still live
-   in the Tauri host. The old Linux `window=qa` route is no longer implemented by
-   the current React router. The new Ask page is a separate entry and its client
-   imports Tauri directly. Opening the old route is NOT a working Ask integration.
-   Correct next step: extract the existing Tauri session/attachment coordination
-   behind a framework-independent host service, add Linux HTTP/event adapters,
-   select a host-neutral Ask client, then add native window/focus ownership.
-   Do not map missing methods to null or claim that a rendered main page is Ask.
+1. **New Ask host**: `ask_*` session/attachment/editor/context APIs still live
+   in the Tauri host. Linux package 236 restores `window=qa` as a shared React
+   view of the existing Core QA service, with text/voice questions and cancellation,
+   accessible from Tools. This is not the separate newer Ask entry, whose client
+   still imports Tauri directly. Full parity requires extracting Tauri session and
+   attachment coordination behind a framework-independent host service and adding
+   Linux HTTP/event and native-focus adapters. Do not map missing methods to null
+   or claim that the basic QA view implements attachments or context permissions.
 2. **Automatic per-app style selection**: Linux now freezes an fcitx5 target before
    Core's asynchronous startup and supplies `linux:<program>` identity from that
    same ticket for style routing and insertion. Program metadata never reads the

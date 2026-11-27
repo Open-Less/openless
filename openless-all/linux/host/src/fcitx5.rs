@@ -39,6 +39,32 @@ pub(crate) const CONTROLLER_INTERFACE: &str = "org.fcitx.Fcitx.Controller1";
 #[cfg(target_os = "linux")]
 const CONTROLLER_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Read-only diagnostics: never address an activatable well-known service.
+/// Resolve its existing unique owner first, then introspect that exact owner.
+pub fn plugin_diagnostics() -> serde_json::Value {
+    let installed = system_plugin_available() || std::env::var("HOME").ok().is_some_and(|home|
+        Path::new(&home).join(".local/lib/fcitx5/libopenless.so").is_file());
+    let mut result = serde_json::json!({ "installed": installed, "daemonRunning": false,
+        "loaded": false, "insertionReady": false, "hotkeysReady": false, "metadataReady": false });
+    #[cfg(target_os = "linux")]
+    if let Ok(connection) = dbus::blocking::Connection::new_session() {
+        let bus = connection.with_proxy("org.freedesktop.DBus", "/org/freedesktop/DBus", Duration::from_millis(750));
+        let owner: Result<(String,), _> = bus.method_call("org.freedesktop.DBus", "GetNameOwner", (DESTINATION,));
+        if let Ok((owner,)) = owner {
+            result["daemonRunning"] = true.into();
+            let addon = connection.with_proxy(owner, OBJECT_PATH, Duration::from_millis(750));
+            let xml: Result<(String,), _> = addon.method_call("org.freedesktop.DBus.Introspectable", "Introspect", ());
+            if let Ok((xml,)) = xml {
+                result["loaded"] = xml.contains(INTERFACE).into();
+                result["insertionReady"] = (xml.contains("CaptureDictationTarget") && xml.contains("CommitDictationTarget")).into();
+                result["hotkeysReady"] = (xml.contains("SetHotkeyRaw") && xml.contains("SetSkipAutoStyleHotkeyRaw") && xml.contains("HotkeyEvent")).into();
+                result["metadataReady"] = xml.contains("DictationTargetProgram").into();
+            }
+        }
+    }
+    result
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FcitxPluginInstallPlan {
     pub target_library: PathBuf,
@@ -1137,21 +1163,9 @@ pub fn selection_text() -> Result<String, BackendError> {
 
 #[cfg(target_os = "linux")]
 pub fn available() -> bool {
-    use dbus::blocking::BlockingSender;
-    let Ok(connection) = dbus::blocking::Connection::new_session() else {
-        return false;
-    };
-    let Ok(message) = dbus::Message::new_method_call(
-        DESTINATION,
-        OBJECT_PATH,
-        "org.freedesktop.DBus.Peer",
-        "Ping",
-    ) else {
-        return false;
-    };
-    connection
-        .send_with_reply_and_block(message, TIMEOUT)
-        .is_ok()
+    // A Peer.Ping addressed to the well-known name can activate Fcitx5.
+    // Status queries, including legacy hotkey status, must remain passive.
+    plugin_diagnostics()["loaded"].as_bool().unwrap_or(false)
 }
 
 /// What the barrier does with the daemon's `org.fcitx.Fcitx5` name while a

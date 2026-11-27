@@ -226,6 +226,10 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             target.switch_style.as_ref(),
         ))?;
         tolerate_optional_fcitx_method(apply_action_hotkey(
+            "SetSkipAutoStyleHotkeyRaw",
+            Some(&target.skip_auto_style),
+        ))?;
+        tolerate_optional_fcitx_method(apply_action_hotkey(
             "SetOpenAppHotkeyRaw",
             target.open_app.as_ref(),
         ))?;

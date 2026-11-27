@@ -145,6 +145,13 @@ pub fn spawn_headless(
                             let _ =
                                 backend.request_host_action(openless_core::HostAction::ShowMain);
                         }
+                        LinuxHotkeyEvent::SkipAutoStylePressed => {
+                            if let Some(target) = backend.dictation_style_target() {
+                                if let Err(error) = backend.toggle_dictation_style_for_session(target.session_id) {
+                                    log::warn!("[hotkey] {error}");
+                                }
+                            }
+                        }
                         LinuxHotkeyEvent::SwitchStylePressed => {
                             if let Err(error) = backend.activate_previous_style_pack() {
                                 log::warn!("[hotkey] {error}");

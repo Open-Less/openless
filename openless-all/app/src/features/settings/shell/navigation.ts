@@ -109,7 +109,9 @@ export function visibleGeneralPages(
   return GENERAL_PAGES.filter((page) => {
     if (page.id === 'translation') return platform == null || platform === 'desktop';
     if (page.id === 'askEntry') return unifiedAsk;
-    if (page.id === 'askHistory') return !unifiedAsk;
+    // This page controls the new Tauri Ask host's context/read permissions,
+    // not the legacy Core QA view. Linux has no such read adapter yet.
+    if (page.id === 'askHistory') return !unifiedAsk && os !== 'linux';
     if (page.id === 'phone') return platform === 'desktop';
     if (page.id === 'capsule') return platform == null || platform === 'desktop';
     return true;

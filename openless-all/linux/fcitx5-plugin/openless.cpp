@@ -107,6 +107,8 @@ public:
           translationRawStates_(0),
           switchStyleRawSym_(0),
           switchStyleRawStates_(0),
+          skipAutoStyleRawSym_(0),
+          skipAutoStyleRawStates_(0),
           openAppRawSym_(0),
           openAppRawStates_(0),
           hasCustomDictationKey_(false),
@@ -159,6 +161,10 @@ public:
                     auto states = static_cast<uint32_t>(keyEvent.key().states()) &
                                   openless_hotkeys::kModifierMask;
                     bool isPress = !keyEvent.isRelease();
+                    if (isPress) {
+                        if (switchStyleHeld_ && sym != switchStyleRawSym_) switchStyleCombined_ = true;
+                        if (skipAutoStyleHeld_ && sym != skipAutoStyleRawSym_) skipAutoStyleCombined_ = true;
+                    }
 
                     // 命中判定统一走 hotkey_match.h：字母大小写折叠 + US 布局
                     // base/shifted 视为同一物理键（前端把 Shift 折进 keysym）。
@@ -294,8 +300,27 @@ public:
                     }
                     if (switchStyleRawSym_ != 0 &&
                         hit(switchStyleRawSym_, switchStyleRawStates_)) {
-                        switchStyleEvent(sym, states, isPress);
+                        const bool repeat = !openless_hotkeys::shouldNotifyAction(isPress, static_cast<uint32_t>(keyEvent.origKey().states())) && isPress;
+                        if (isModifierKeySym(switchStyleRawSym_) && switchStyleRawStates_ == 0) {
+                            if (isPress && !repeat) { switchStyleHeld_ = true; switchStyleCombined_ = false; }
+                            if (!isPress) {
+                                if (switchStyleHeld_ && !switchStyleCombined_) switchStyleEvent(sym, states, true);
+                                switchStyleHeld_ = false;
+                            }
+                        } else if (isPress && !repeat) switchStyleEvent(sym, states, true);
                         consume(switchStyleRawSym_);
+                        return;
+                    }
+                    if (skipAutoStyleRawSym_ != 0 && hit(skipAutoStyleRawSym_, skipAutoStyleRawStates_)) {
+                        const bool repeat = !openless_hotkeys::shouldNotifyAction(isPress, static_cast<uint32_t>(keyEvent.origKey().states())) && isPress;
+                        if (isModifierKeySym(skipAutoStyleRawSym_) && skipAutoStyleRawStates_ == 0) {
+                            if (isPress && !repeat) { skipAutoStyleHeld_ = true; skipAutoStyleCombined_ = false; }
+                            if (!isPress) {
+                                if (skipAutoStyleHeld_ && !skipAutoStyleCombined_) skipAutoStyleEvent(sym, states, true);
+                                skipAutoStyleHeld_ = false;
+                            }
+                        } else if (isPress && !repeat) skipAutoStyleEvent(sym, states, true);
+                        consume(skipAutoStyleRawSym_);
                         return;
                     }
                     if (openAppRawSym_ != 0 &&
@@ -706,6 +731,12 @@ public:
         persistRawHotkey("SwitchStyle", sym, states);
     }
 
+    void setSkipAutoStyleHotkeyRaw(uint32_t sym, uint32_t states) {
+        skipAutoStyleRawSym_ = sym;
+        skipAutoStyleRawStates_ = states;
+        persistRawHotkey("SkipAutoStyle", sym, states);
+    }
+
     void setOpenAppHotkeyRaw(uint32_t sym, uint32_t states) {
         openAppRawSym_ = sym;
         openAppRawStates_ = states;
@@ -909,6 +940,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSwitchStyleHotkeyRaw, "SetSwitchStyleHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setSkipAutoStyleHotkeyRaw, "SetSkipAutoStyleHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setOpenAppHotkeyRaw, "SetOpenAppHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setStylePackHotkeys, "SetStylePackHotkeys", "a(suu)", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
@@ -921,6 +953,7 @@ public:
     FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(switchStyleEvent, "SwitchStyleEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(skipAutoStyleEvent, "SkipAutoStyleEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(openAppEvent, "OpenAppEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(stylePackHotkeyEvent, "StylePackHotkeyEvent", "uub");
 
@@ -973,6 +1006,7 @@ public:
             translationRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
         }
         loadRawHotkey(raw, "SwitchStyle", switchStyleRawSym_, switchStyleRawStates_);
+        loadRawHotkey(raw, "SkipAutoStyle", skipAutoStyleRawSym_, skipAutoStyleRawStates_);
         loadRawHotkey(raw, "OpenApp", openAppRawSym_, openAppRawStates_);
         stylePackHotkeys_.clear();
         if (auto *countValue = raw.valueByPath("StylePackHotkeyCount")) {
@@ -1114,6 +1148,7 @@ private:
             {"selection_polish", selectionPolishRawSym_, selectionPolishRawStates_},
             {"translation", translationRawSym_, translationRawStates_},
             {"switch_style", switchStyleRawSym_, switchStyleRawStates_},
+            {"skip_auto_style", skipAutoStyleRawSym_, skipAutoStyleRawStates_},
             {"open_app", openAppRawSym_, openAppRawStates_},
         };
         if (hasCustomDictationKey_) {
@@ -1236,6 +1271,12 @@ private:
     uint32_t translationRawStates_;
     uint32_t switchStyleRawSym_;
     uint32_t switchStyleRawStates_;
+    uint32_t skipAutoStyleRawSym_;
+    uint32_t skipAutoStyleRawStates_;
+    bool switchStyleHeld_ = false;
+    bool switchStyleCombined_ = false;
+    bool skipAutoStyleHeld_ = false;
+    bool skipAutoStyleCombined_ = false;
     uint32_t openAppRawSym_;
     uint32_t openAppRawStates_;
     std::vector<std::tuple<std::string, uint32_t, uint32_t>> stylePackHotkeys_;

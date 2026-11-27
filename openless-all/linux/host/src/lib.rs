@@ -53,7 +53,7 @@ pub use desktop::{
     DesktopError, Notification,
 };
 #[cfg(target_os = "linux")]
-pub use fcitx5::prepare_fcitx5;
+pub use fcitx5::{prepare_fcitx5, plugin_diagnostics};
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,
     copy_to_clipboard as fcitx5_copy_to_clipboard,
@@ -306,6 +306,12 @@ impl LinuxHost {
                 Ok(None)
             }
             LinuxHotkeyEvent::TranslationPressed { pressed: false, .. } => Ok(None),
+            LinuxHotkeyEvent::SkipAutoStylePressed => {
+                if let Some(target) = self.backend.dictation_style_target() {
+                    self.backend.toggle_dictation_style_for_session(target.session_id)?;
+                }
+                Ok(None)
+            }
             LinuxHotkeyEvent::SwitchStylePressed => {
                 self.backend.activate_previous_style_pack()?;
                 Ok(None)

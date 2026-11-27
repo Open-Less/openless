@@ -53,6 +53,7 @@ pub enum LinuxHotkeyEvent {
         pressed: bool,
     },
     SwitchStylePressed,
+    SkipAutoStylePressed,
     OpenAppPressed,
     StylePackPressed {
         symbol: u32,
@@ -315,6 +316,7 @@ fn event_from_signal(
             Some(LinuxHotkeyEvent::TranslationPressed { symbol, states, pressed })
         }
         ("SwitchStyleEvent", true) => Some(LinuxHotkeyEvent::SwitchStylePressed),
+        ("SkipAutoStyleEvent", true) => Some(LinuxHotkeyEvent::SkipAutoStylePressed),
         ("OpenAppEvent", true) => Some(LinuxHotkeyEvent::OpenAppPressed),
         ("StylePackHotkeyEvent", true) => {
             Some(LinuxHotkeyEvent::StylePackPressed { symbol, states })

@@ -221,8 +221,11 @@ void hostEvent(Host *host, const std::string &wire) {
         }
     } else if (name == "qa:state") {
         const auto kind = field(inner, "kind");
-        show(qa, !kind.empty() && kind != "idle");
-        bool expanded = kind == "thinking" || kind == "answer" || kind == "answerDelta" || kind == "awaitingApproval";
+        JSCValue *openValue = inner ? jsc_value_object_get_property(inner, "panelOpen") : nullptr;
+        const bool panelOpen = openValue && jsc_value_to_boolean(openValue);
+        if (openValue) g_object_unref(openValue);
+        show(qa, panelOpen || (!kind.empty() && kind != "idle"));
+        bool expanded = panelOpen || kind == "recording" || kind == "thinking" || kind == "answer" || kind == "answerDelta" || kind == "awaitingApproval";
         gtk_window_set_default_size(qa.window, expanded ? 760 : 480, expanded ? 416 : 80);
     }
     if (inner) g_object_unref(inner);

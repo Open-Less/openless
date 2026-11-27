@@ -115,6 +115,11 @@ export function RestoreReview({
                       category: t(`cloudSyncE2ee.categories.${categoryKey(conflict.kind)}`),
                     })}
                   </legend>
+                  {(conflict.localLabel || conflict.cloudLabel) && (
+                    <p style={{ overflowWrap: 'anywhere', fontWeight: 600 }}>
+                      {conflict.localLabel || conflict.cloudLabel}
+                    </p>
+                  )}
                   <p>
                     {t(
                       `cloudSyncE2ee.conflictReasons.${['both_modified', 'delete_modify', 'no_common_baseline'].includes(conflict.reason) ? conflict.reason : 'other'}`,
@@ -133,6 +138,11 @@ export function RestoreReview({
                           }}
                         />{' '}
                         {t(`cloudSyncE2ee.conflict${side === 'local' ? 'Local' : 'Cloud'}`)}
+                        {(side === 'local' ? conflict.localLabel : conflict.cloudLabel) && (
+                          <span style={{ marginLeft: 6, overflowWrap: 'anywhere' }}>
+                            · {side === 'local' ? conflict.localLabel : conflict.cloudLabel}
+                          </span>
+                        )}
                       </label>
                     ))}
                   </div>

@@ -31,6 +31,7 @@ pub enum LocalHotkey {
     QuickNote,
     Translation,
     SwitchStyle,
+    SkipAutoStyle,
     SelectionPolish,
     OpenApp,
     /// 风格包热键带 **pack id**（不是下标）：窗口进程与宿主各自持有的
@@ -97,7 +98,7 @@ pub fn match_hotkey(
         // 不支持的主键（UI 词表里有、X11 keysym 表里没有）：交给插件那条路。
         return None;
     }
-    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 7] = [
+    let candidates: [(Option<&ShortcutBinding>, LocalHotkey); 8] = [
         (Some(&target.dictation), LocalHotkey::Dictation),
         (target.qa.as_ref(), LocalHotkey::Qa),
         (target.quick_note.as_ref(), LocalHotkey::QuickNote),
@@ -107,6 +108,7 @@ pub fn match_hotkey(
         ),
         (Some(&target.translation), LocalHotkey::Translation),
         (target.switch_style.as_ref(), LocalHotkey::SwitchStyle),
+        (Some(&target.skip_auto_style), LocalHotkey::SkipAutoStyle),
         (target.open_app.as_ref(), LocalHotkey::OpenApp),
     ];
     for (binding, hotkey) in candidates {
@@ -192,6 +194,7 @@ pub fn plugin_event_hotkey(
             LocalHotkey::Translation
         }
         LinuxHotkeyEvent::SwitchStylePressed => LocalHotkey::SwitchStyle,
+        LinuxHotkeyEvent::SkipAutoStylePressed => LocalHotkey::SkipAutoStyle,
         LinuxHotkeyEvent::OpenAppPressed => LocalHotkey::OpenApp,
         LinuxHotkeyEvent::StylePackPressed { symbol, states } => {
             let raw = (*symbol, *states);

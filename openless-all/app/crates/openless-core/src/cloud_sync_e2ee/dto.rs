@@ -169,6 +169,11 @@ pub struct SyncConflictItem {
     pub kind: String,
     /// A fixed reason code, never a value, path, history excerpt, or API key.
     pub reason: String,
+    /// Display-only style names. Never credentials, prompts, icon bytes or history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

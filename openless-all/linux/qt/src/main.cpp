@@ -826,9 +826,10 @@ int main(int argc, char **argv) {
                     const QString kind = inner.value("kind").toString();
                     qInfo("qa:state kind=%s", qPrintable(kind));
                     const bool idle = kind.isEmpty() || kind == "idle";
-                    qa.setVisible(!idle);
+                    const bool panelOpen = inner.value("panelOpen").toBool();
+                    qa.setVisible(panelOpen || !idle);
                     // 有回答或思考中 ⇒ 展开；活动提示、录音中 ⇒ 收起成小条。
-                    const bool expanded = kind == "thinking" || kind == "answer" ||
+                    const bool expanded = panelOpen || kind == "recording" || kind == "thinking" || kind == "answer" ||
                                           kind == "answerDelta" || kind == "awaitingApproval";
                     qa.setExpanded(expanded);
                 }

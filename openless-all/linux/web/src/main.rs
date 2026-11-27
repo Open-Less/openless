@@ -1514,7 +1514,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         // ── 热键 ──────────────────────────────────────────────────────
         "set_dictation_hotkey" | "set_qa_hotkey" | "set_quick_note_hotkey"
         | "set_selection_polish_hotkey" | "set_translation_hotkey"
-        | "set_switch_style_hotkey" | "set_open_app_hotkey" => {
+        | "set_switch_style_hotkey" | "set_skip_auto_style_hotkey" | "set_open_app_hotkey" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             // Only dictation is mandatory. Null clears every other shortcut,
             // including translation, exactly as the desktop command contract does.
@@ -1532,6 +1532,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 "set_translation_hotkey" => {
                     prefs.translation_hotkey = binding.clone().unwrap_or_else(openless_core::shared_types::ShortcutBinding::unassigned);
                 }
+                "set_skip_auto_style_hotkey" => prefs.skip_auto_style_hotkey = binding.clone().unwrap_or_else(openless_core::shared_types::ShortcutBinding::unassigned),
                 "set_switch_style_hotkey" => prefs.switch_style_hotkey = binding.clone(),
                 "set_open_app_hotkey" => prefs.open_app_hotkey = binding.clone(),
                 _ => {}
@@ -2590,6 +2591,7 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             hotkeys::stop_monitor(&host.mic_monitor);
             Ok(Value::Null)
         },
+        "get_linux_input_plugin_status" => Ok(openless_linux_host::plugin_diagnostics()),
         "get_hotkey_status" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
@@ -2597,6 +2599,11 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
                 .block_on(backend.services().platform.hotkey_status())
                 .map_err(|error| error.to_string())?;
             Ok(json_value(status))
+        }
+        "get_desktop_onboarding_state" => {
+            let finished = read_json(&data_dir().join("desktop-onboarding.json"))
+                .and_then(|value| value.get("finished").and_then(Value::as_bool)).unwrap_or(false);
+            Ok(json!({ "finished": finished }))
         }
         "set_desktop_onboarding_finished" => {
             // 引导完成状态落在偏好里（Tauri 用单独的状态文件；Linux 没有那次
@@ -2613,6 +2620,13 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             Ok(json!({ "finished": finished }))
         }
         // ── QA / 胶囊窗口级命令 ──────────────────────────────────────
+        "ask_window_open" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
+            runtime.block_on(backend.services().qa.show()).map_err(|error| error.to_string())?;
+            set_qa_expanded(host, true);
+            Ok(Value::Null)
+        }
         "qa_get_snapshot" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
             let runtime = host.runtime.clone().ok_or_else(|| "运行时未就绪".to_string())?;
@@ -2671,6 +2685,15 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
             // 窗口尺寸由宿主决定（与 Tauri 同语义：只改变展示形态，不动会话状态）。
             set_qa_expanded(host, expanded);
             Ok(json!({ "expanded": expanded }))
+        }
+        "main_caption_trace_enabled" => Ok(json!(false)),
+        "get_capsule_auxiliary_snapshot" => {
+            let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
+            Ok(json!({
+                "suggestions": backend.pending_corrections(),
+                "fallback": null,
+                "processing": backend.snapshot().processing_dictations,
+            }))
         }
         "get_capsule_snapshot" => {
             let backend = backend.ok_or_else(|| "后端未就绪".to_string())?;
@@ -2746,13 +2769,14 @@ fn dispatch(host: &Host, command: &str, _args: &Value) -> Result<Value, String> 
         // 但 Linux 上「后端」指的是 fcitx5 插件，所以这里给的是真实的三项：
         // 插件是否装了、守护进程在不在、D-Bus 服务是否有 owner。
         "get_ime_backend_status" => {
-            let plugin_installed = openless_linux_host::fcitx5_plugin_installed();
-            let daemon_running = openless_linux_host::fcitx5_available();
+            let status = openless_linux_host::plugin_diagnostics();
+            let plugin_installed = status["installed"].as_bool().unwrap_or(false);
+            let daemon_running = status["daemonRunning"].as_bool().unwrap_or(false);
             Ok(json!({
                 "backend": "fcitx5",
                 "pluginInstalled": plugin_installed,
                 "daemonRunning": daemon_running,
-                "ready": plugin_installed && daemon_running,
+                "ready": status["insertionReady"] == true && status["hotkeysReady"] == true,
             }))
         }
         // Linux 没有 TSF：结构必须和前端的 `WindowsImeStatus` 完全一致，
