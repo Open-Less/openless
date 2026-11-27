@@ -239,6 +239,12 @@ pub struct DictationStateSnapshot {
     /// must keep their warming presentation until that callback is observed.
     #[serde(default)]
     pub recording_ready: bool,
+    #[serde(default)]
+    pub skip_auto_style: bool,
+    #[serde(default)]
+    pub style_pack_id: Option<String>,
+    #[serde(default)]
+    pub style_pack_name: Option<String>,
 }
 
 impl Default for DictationStateSnapshot {
@@ -251,6 +257,9 @@ impl Default for DictationStateSnapshot {
             message: None,
             translation_active: false,
             recording_ready: false,
+            skip_auto_style: false,
+            style_pack_id: None,
+            style_pack_name: None,
         }
     }
 }
@@ -449,6 +458,7 @@ mod tests {
             message: None,
             translation_active: true,
             recording_ready: true,
+            ..Default::default()
         };
         let value = serde_json::to_value(snapshot).unwrap();
         assert_eq!(value["phase"], "transcribing");

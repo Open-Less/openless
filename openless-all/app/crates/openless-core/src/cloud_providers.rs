@@ -247,6 +247,68 @@ impl TranscriptionEngine for SharedCloudTranscriptionEngine {
     }
 }
 
+const STREAM_INCOMPLETE_TOLERANCE_BYTES: u64 = 32_000;
+
+async fn finalize_streaming_transcript<E, F>(
+    provider_name: &str,
+    long_recording: bool,
+    stream_complete: bool,
+    coverage: (u64, u64),
+    sender_result: Result<(), E>,
+    cancel_fn: impl FnOnce(),
+    await_final: F,
+) -> Result<crate::asr::RawTranscript, BackendError>
+where
+    E: std::fmt::Display,
+    F: std::future::Future<Output = Result<crate::asr::RawTranscript, E>>,
+{
+    let (sent_bytes, received_bytes) = coverage;
+    let unsent_bytes = received_bytes.saturating_sub(sent_bytes);
+
+    if let Err(error) = sender_result {
+        cancel_fn();
+        let mapped = map_asr_error(error);
+        if long_recording || unsent_bytes > STREAM_INCOMPLETE_TOLERANCE_BYTES {
+            log::warn!(
+                "[{provider_name}] rejecting incomplete stream (sent={sent_bytes}, received={received_bytes}, long={long_recording}): {}",
+                mapped.message
+            );
+            return Err(mapped.retryable(true));
+        }
+        let salvaged = timeout_transcription(Duration::from_secs(120), await_final)
+            .await
+            .map_err(|_| mapped.clone().retryable(true))?;
+        if salvaged.text.trim().is_empty() {
+            return Err(mapped.retryable(true));
+        }
+        return Ok(salvaged);
+    }
+
+    if !stream_complete && (long_recording || unsent_bytes > STREAM_INCOMPLETE_TOLERANCE_BYTES) {
+        cancel_fn();
+        log::warn!(
+            "[{provider_name}] rejecting unverified audio coverage (sent={sent_bytes}, received={received_bytes}, long={long_recording})"
+        );
+        return Err(BackendError::new(
+            BackendErrorCode::Provider,
+            format!("ASR stream audio incomplete ({sent_bytes}/{received_bytes} bytes written)"),
+        )
+        .retryable(true));
+    }
+
+    let result = timeout_transcription(Duration::from_secs(120), await_final).await?;
+    if result.text.trim().is_empty() && !stream_complete {
+        return Err(BackendError::new(
+            BackendErrorCode::Provider,
+            format!(
+                "ASR stream produced empty text with incomplete coverage ({sent_bytes}/{received_bytes} bytes)"
+            ),
+        )
+        .retryable(true));
+    }
+    Ok(result)
+}
+
 impl AudioConsumer for CloudTranscriptionSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         self.pcm_bytes
@@ -304,20 +366,16 @@ impl TranscriptionSession for CloudTranscriptionSession {
             let transcript = match kind {
                 CloudTranscriptionSessionKind::Volcengine(provider) => {
                     let sender_result = provider.send_last_frame().await;
-                    if long_recording {
-                        if let Err(error) = sender_result {
-                            provider.cancel();
-                            return Err(map_asr_error(error));
-                        }
-                    }
-                    if sender_result.is_err() {
-                        // Stop the transport. A result already handed off by the
-                        // receiver remains available through its oneshot channel.
-                        provider.cancel();
-                    }
-                    timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await
-                        .map_err(|error| sender_result.err().map(map_asr_error).unwrap_or(error))?
+                    finalize_streaming_transcript(
+                        "volcengine-asr",
+                        long_recording,
+                        provider.is_stream_complete(),
+                        provider.audio_coverage(),
+                        sender_result,
+                        || provider.cancel(),
+                        provider.await_final_result(),
+                    )
+                    .await?
                 }
                 CloudTranscriptionSessionKind::Whisper(provider) => {
                     let timeout = crate::provider_rules::whisper_transcribe_timeout(
@@ -365,36 +423,56 @@ impl TranscriptionSession for CloudTranscriptionSession {
                     provider.finish().await.map_err(map_asr_error)?
                 }
                 CloudTranscriptionSessionKind::Bailian(provider) => {
-                    let sent = provider.send_last_frame().await;
-                    if long_recording {
-                        sent.map_err(map_asr_error)?;
-                    }
-                    timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await?
+                    let sender_result = provider.send_last_frame().await;
+                    finalize_streaming_transcript(
+                        "bailian-asr",
+                        long_recording,
+                        provider.is_stream_complete(),
+                        provider.audio_coverage(),
+                        sender_result,
+                        || provider.cancel(),
+                        provider.await_final_result(),
+                    )
+                    .await?
                 }
                 CloudTranscriptionSessionKind::QwenRealtime(provider) => {
-                    let sent = provider.send_last_frame().await;
-                    if long_recording {
-                        sent.map_err(map_asr_error)?;
-                    }
-                    timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await?
+                    let sender_result = provider.send_last_frame().await;
+                    finalize_streaming_transcript(
+                        "qwen3-asr",
+                        long_recording,
+                        provider.is_stream_complete(),
+                        provider.audio_coverage(),
+                        sender_result,
+                        || provider.cancel(),
+                        provider.await_final_result(),
+                    )
+                    .await?
                 }
                 CloudTranscriptionSessionKind::StepfunRealtime(provider) => {
-                    let sent = provider.send_last_frame().await;
-                    if long_recording {
-                        sent.map_err(map_asr_error)?;
-                    }
-                    timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await?
+                    let sender_result = provider.send_last_frame().await;
+                    finalize_streaming_transcript(
+                        "stepfun-asr",
+                        long_recording,
+                        provider.is_stream_complete(),
+                        provider.audio_coverage(),
+                        sender_result,
+                        || provider.cancel(),
+                        provider.await_final_result(),
+                    )
+                    .await?
                 }
                 CloudTranscriptionSessionKind::Xfyun(provider) => {
-                    let sent = provider.send_last_frame().await;
-                    if long_recording {
-                        sent.map_err(map_asr_error)?;
-                    }
-                    timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await?
+                    let sender_result = provider.send_last_frame().await;
+                    finalize_streaming_transcript(
+                        "xfyun-asr",
+                        long_recording,
+                        provider.is_stream_complete(),
+                        provider.audio_coverage(),
+                        sender_result,
+                        || provider.cancel(),
+                        provider.await_final_result(),
+                    )
+                    .await?
                 }
                 CloudTranscriptionSessionKind::TencentCloud(provider) => {
                     provider
@@ -1116,7 +1194,7 @@ impl Drop for PolishRegistration {
     }
 }
 
-enum CloudPolisherProvider {
+pub(crate) enum CloudPolisherProvider {
     OpenAi(crate::polish::ActiveLLMProvider),
     Gemini(crate::llm_gemini::GeminiProvider),
 }
@@ -1602,7 +1680,24 @@ async fn build_cloud_polisher_provider(
     credentials: &dyn CredentialStore,
     context: &DictationContext,
 ) -> Result<CloudPolisherProvider, BackendError> {
-    if context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
+    build_cloud_channel_provider(
+        credentials,
+        &context.llm,
+        context.pipeline_mode == crate::shared_types::PipelineMode::Deepseek,
+        context.polish.llm_thinking_enabled,
+        context.polish.polish_request_overrides.as_ref(),
+    )
+    .await
+}
+
+pub(crate) async fn build_cloud_channel_provider(
+    credentials: &dyn CredentialStore,
+    route: &crate::dictation_context::ProviderInvocation,
+    deepseek_suite: bool,
+    thinking: bool,
+    overrides: Option<&crate::polish_strategy::PolishRequestOverrides>,
+) -> Result<CloudPolisherProvider, BackendError> {
+    if deepseek_suite {
         let suite = crate::deepseek_suite::DeepSeekSuiteConfig::load(credentials).await?;
         require_configured(&suite.api_key, "DeepSeek suite API key")?;
         let config = crate::polish::OpenAICompatibleConfig::new(
@@ -1612,23 +1707,22 @@ async fn build_cloud_polisher_provider(
             suite.api_key,
             crate::deepseek_suite::MODEL,
         )
-        .with_thinking_enabled(context.polish.llm_thinking_enabled);
+        .with_thinking_enabled(thinking);
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::OpenAI(
                 crate::polish::OpenAICompatibleLLMProvider::new(config),
             ),
         ));
     }
-    let channel_id = context.llm.provider_id.trim();
-    let provider_type = context.llm.provider_type.trim();
+    let channel_id = route.provider_id.trim();
+    let provider_type = route.provider_type.trim();
     if channel_id.is_empty() || provider_type.is_empty() {
         return Err(BackendError::new(
             BackendErrorCode::InvalidArgument,
             "LLM channel id and provider type must not be empty",
         ));
     }
-    let model = context
-        .llm
+    let model = route
         .model
         .clone()
         .and_then(non_blank_owned)
@@ -1659,16 +1753,16 @@ async fn build_cloud_polisher_provider(
         ));
     }
     if provider_type == crate::polish::CODEX_OAUTH_PROVIDER_ID {
-        let mut config = crate::polish::CodexOAuthConfig::new(model)
-            .with_thinking_enabled(context.polish.llm_thinking_enabled);
-        if let Some(effort) = strategy_reasoning_effort(context) {
+        let mut config =
+            crate::polish::CodexOAuthConfig::new(model).with_thinking_enabled(thinking);
+        if let Some(effort) = overrides_reasoning_effort(overrides) {
             // Codex uses the Responses API, whose effort enum does not accept
             // `none`; omit that unsupported override rather than sending a
             // request that the endpoint rejects.
             let effort = (effort != "none").then_some(effort);
             config = config.with_reasoning_effort(effort);
         }
-        config = config.with_max_output_tokens(strategy_max_tokens(context));
+        config = config.with_max_output_tokens(overrides.and_then(|value| value.max_tokens));
         let provider = crate::polish::CodexOAuthLLMProvider::new(config);
         return Ok(CloudPolisherProvider::OpenAi(
             crate::polish::ActiveLLMProvider::Codex(provider),
@@ -1706,12 +1800,12 @@ async fn build_cloud_polisher_provider(
     crate::endpoint_security::validate_http_endpoint(&endpoint)
         .map_err(|error| map_llm_error(error.to_string()))?;
     if provider_type == "gemini" {
-        let thinking_enabled = strategy_thinking_enabled(context);
+        let thinking_enabled = overrides_thinking_enabled(thinking, overrides);
         let mut config =
             crate::llm_gemini::GeminiConfig::new(api_key, model, endpoint.trim_end_matches('/'))
                 .with_thinking_enabled(thinking_enabled)
-                .with_max_output_tokens(strategy_max_tokens(context));
-        if let Some(temperature) = strategy_temperature(context) {
+                .with_max_output_tokens(overrides.and_then(|value| value.max_tokens));
+        if let Some(temperature) = overrides.and_then(|value| value.temperature()) {
             config = config.with_temperature(temperature);
         }
         let provider = crate::llm_gemini::GeminiProvider::new(config);
@@ -1732,11 +1826,7 @@ async fn build_cloud_polisher_provider(
     .map(parse_temperature)
     .transpose()?
     .flatten();
-    let strategy_temperature = context
-        .polish
-        .polish_request_overrides
-        .as_ref()
-        .and_then(|overrides| overrides.temperature());
+    let strategy_temperature = overrides.and_then(|overrides| overrides.temperature());
     let temperature = strategy_temperature.or_else(|| {
         crate::polish::openai_compatible_temperature_for_provider(
             provider_type,
@@ -1762,9 +1852,9 @@ async fn build_cloud_polisher_provider(
         model,
     )
     .with_protocol(protocol)
-    .with_thinking_enabled(context.polish.llm_thinking_enabled)
-    .with_reasoning_effort(strategy_reasoning_effort(context))
-    .with_max_tokens_override(strategy_max_tokens(context))
+    .with_thinking_enabled(thinking)
+    .with_reasoning_effort(overrides_reasoning_effort(overrides))
+    .with_max_tokens_override(overrides.and_then(|value| value.max_tokens))
     .with_temperature(temperature)
     .with_extra_headers(extra_headers);
     Ok(CloudPolisherProvider::OpenAi(
@@ -1795,11 +1885,10 @@ fn omni_temperature(
     })
 }
 
-fn strategy_reasoning_effort(context: &DictationContext) -> Option<String> {
-    context
-        .polish
-        .polish_request_overrides
-        .as_ref()
+fn overrides_reasoning_effort(
+    overrides: Option<&crate::polish_strategy::PolishRequestOverrides>,
+) -> Option<String> {
+    overrides
         .and_then(|overrides| overrides.reasoning_effort)
         .map(|effort| match effort {
             crate::polish_strategy::ReasoningEffort::None => "none",
@@ -1810,14 +1899,25 @@ fn strategy_reasoning_effort(context: &DictationContext) -> Option<String> {
         .map(str::to_string)
 }
 
-fn strategy_thinking_enabled(context: &DictationContext) -> bool {
-    context
-        .polish
-        .polish_request_overrides
-        .as_ref()
+fn overrides_thinking_enabled(
+    default_thinking: bool,
+    overrides: Option<&crate::polish_strategy::PolishRequestOverrides>,
+) -> bool {
+    overrides
         .and_then(|overrides| overrides.reasoning_effort)
         .map(|effort| !matches!(effort, crate::polish_strategy::ReasoningEffort::None))
-        .unwrap_or(context.polish.llm_thinking_enabled)
+        .unwrap_or(default_thinking)
+}
+
+fn strategy_reasoning_effort(context: &DictationContext) -> Option<String> {
+    overrides_reasoning_effort(context.polish.polish_request_overrides.as_ref())
+}
+
+fn strategy_thinking_enabled(context: &DictationContext) -> bool {
+    overrides_thinking_enabled(
+        context.polish.llm_thinking_enabled,
+        context.polish.polish_request_overrides.as_ref(),
+    )
 }
 
 fn strategy_max_tokens(context: &DictationContext) -> Option<u32> {
@@ -3284,6 +3384,63 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn strategy_overrides_reach_dictation_without_leaking_into_ask() {
+        let store = InMemoryCredentialStore::default();
+        for (account, value) in [
+            (LLM_ENDPOINT_ACCOUNT, "http://127.0.0.1:8080/v1"),
+            (LLM_TEMPERATURE_ACCOUNT, "1.2"),
+            (crate::llm_protocol::REQUEST_FORMAT_ACCOUNT, "responses"),
+        ] {
+            write_channel_secret(
+                &store,
+                CredentialNamespace::Llm,
+                "strategy-channel",
+                account,
+                value,
+            )
+            .await;
+        }
+        let mut context = DictationContext {
+            llm: ProviderInvocation::new("strategy-channel", "custom"),
+            ..Default::default()
+        };
+        context.llm.model = Some("fixture-model".into());
+        context.polish.llm_thinking_enabled = true;
+        context.polish.polish_request_overrides =
+            Some(crate::polish_strategy::PolishRequestOverrides {
+                temperature_milli: Some(400),
+                max_tokens: Some(321),
+                reasoning_effort: Some(crate::polish_strategy::ReasoningEffort::High),
+            });
+        let CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(dictation)) =
+            build_cloud_polisher_provider(&store, &context)
+                .await
+                .unwrap()
+        else {
+            panic!("expected the configured compatible provider");
+        };
+        let CloudPolisherProvider::OpenAi(crate::polish::ActiveLLMProvider::OpenAI(ask)) =
+            build_cloud_channel_provider(&store, &context.llm, false, false, None)
+                .await
+                .unwrap()
+        else {
+            panic!("expected the same compatible channel for Ask");
+        };
+        let messages = vec![serde_json::json!({"role": "user", "content": "fixture"})];
+        let dictation_body =
+            crate::llm_protocol::request_body(dictation.ask_config(), false, messages.clone());
+        let ask_body = crate::llm_protocol::request_body(ask.ask_config(), false, messages);
+        assert_eq!(dictation.ask_config().temperature, Some(0.4));
+        assert_eq!(dictation_body["max_output_tokens"], 321);
+        assert_eq!(dictation_body["reasoning"]["effort"], "high");
+        assert_eq!(ask.ask_config().temperature, Some(1.2));
+        assert_eq!(ask_body["reasoning"]["effort"], "low");
+        assert!(ask_body.get("max_output_tokens").is_none());
+        assert!(ask.ask_config().reasoning_effort.is_none());
+        assert!(!ask.ask_config().thinking_enabled);
+    }
+
     struct ObservedTranslationStream {
         chunks: Mutex<Vec<TextStreamChunk>>,
         arrived: tokio::sync::Semaphore,
@@ -3719,8 +3876,18 @@ mod tests {
         let key = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY is required");
         assert!(!key.trim().is_empty(), "DEEPSEEK_API_KEY is required");
         let credentials = Arc::new(crate::InMemoryCredentialStore::default());
-        for (account, value) in [(LLM_API_KEY_ACCOUNT, key.as_str()), (LLM_ENDPOINT_ACCOUNT, crate::deepseek_suite::ENDPOINT)] {
-            credentials.write(CredentialKey::new(CredentialNamespace::Llm, Some("deepseek".into()), account).unwrap(), crate::SecretValue::new(value)).await.unwrap();
+        for (account, value) in [
+            (LLM_API_KEY_ACCOUNT, key.as_str()),
+            (LLM_ENDPOINT_ACCOUNT, crate::deepseek_suite::ENDPOINT),
+        ] {
+            credentials
+                .write(
+                    CredentialKey::new(CredentialNamespace::Llm, Some("deepseek".into()), account)
+                        .unwrap(),
+                    crate::SecretValue::new(value),
+                )
+                .await
+                .unwrap();
         }
         drop(key);
         let polisher = SharedCloudTextPolisher::new(credentials);
@@ -3744,34 +3911,71 @@ mod tests {
             ("long", &structured, false, long.as_str(), "整体官网范围前置；所有独有约束、例外、术语、未决冲突与问句保留，只去重复"),
         ];
         crate::polish::live_acceptance::begin();
-        for (case, pack, translate, input, expectation) in cases.into_iter().take(if std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some() { 1 } else { 8 }) {
-            let mut prefs = crate::UserPreferences::default();
-            prefs.translation_target_language = "English".into();
-            prefs.working_languages = vec!["简体中文".into()];
+        for (case, pack, translate, input, expectation) in
+            cases
+                .into_iter()
+                .take(if std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some() {
+                    1
+                } else {
+                    8
+                })
+        {
+            let prefs = crate::UserPreferences {
+                translation_target_language: "English".into(),
+                working_languages: vec!["简体中文".into()],
+                ..Default::default()
+            };
             let mut invocation = crate::ProviderInvocation::for_provider("deepseek");
             invocation.model = Some(crate::deepseek_suite::MODEL.into());
-            let context = DictationContext::capture(&prefs, pack,
-                crate::dictation_context::DictationProviderInvocations::new(crate::ProviderInvocation::for_provider("fixture-asr"), invocation, crate::ProviderInvocation::for_provider("unused")),
-                Vec::new(), Vec::new(), &crate::DictationStartOptions { translation_requested: translate, ..Default::default() });
+            let context = DictationContext::capture(
+                &prefs,
+                pack,
+                crate::dictation_context::DictationProviderInvocations::new(
+                    crate::ProviderInvocation::for_provider("fixture-asr"),
+                    invocation,
+                    crate::ProviderInvocation::for_provider("unused"),
+                ),
+                Vec::new(),
+                Vec::new(),
+                &crate::DictationStartOptions {
+                    translation_requested: translate,
+                    ..Default::default()
+                },
+            );
             let _ = crate::polish::live_acceptance::take_model();
-            let result = polisher.polish(SessionId::new(), Arc::new(context), input.into(), Arc::new(IgnoreTextStreamSink)).await;
+            let result = polisher
+                .polish(
+                    SessionId::new(),
+                    Arc::new(context),
+                    input.into(),
+                    Arc::new(IgnoreTextStreamSink),
+                )
+                .await;
             if let Err(error) = &result {
-                println!("LIVE_STYLE {}", serde_json::json!({"case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
+                println!(
+                    "LIVE_STYLE {}",
+                    serde_json::json!({"case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
                     "channel":"official DeepSeek acceptance (not verified user Ark channel)", "requested_model":crate::deepseek_suite::MODEL,
                     "response_model":crate::polish::live_acceptance::take_model(), "style_id":pack.id, "translation":translate,
                     "input":input, "output":null, "error_code":format!("{:?}",error.code), "expected_semantics":expectation,
-                    "semantic_review":"not evaluated: provider request failed; remaining cases not run"}));
+                    "semantic_review":"not evaluated: provider request failed; remaining cases not run"})
+                );
             }
-            let result = result.unwrap_or_else(|error| panic!("{case}: official request failed, code={:?}", error.code));
-            println!("LIVE_STYLE {}", serde_json::json!({
-                "case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
-                "channel":"official DeepSeek acceptance (not verified user Ark channel)",
-                "requested_model":crate::deepseek_suite::MODEL,
-                "response_model":crate::polish::live_acceptance::take_model(),
-                "style_id":pack.id,"translation":translate,"input":input,
-                "source_output":result.source_text,"output":result.text,
-                "expected_semantics":expectation,"semantic_review":"pending human/agent review; transport success is not semantic pass"
-            }));
+            let result = result.unwrap_or_else(|error| {
+                panic!("{case}: official request failed, code={:?}", error.code)
+            });
+            println!(
+                "LIVE_STYLE {}",
+                serde_json::json!({
+                    "case":case, "endpoint":crate::deepseek_suite::ENDPOINT,
+                    "channel":"official DeepSeek acceptance (not verified user Ark channel)",
+                    "requested_model":crate::deepseek_suite::MODEL,
+                    "response_model":crate::polish::live_acceptance::take_model(),
+                    "style_id":pack.id,"translation":translate,"input":input,
+                    "source_output":result.source_text,"output":result.text,
+                    "expected_semantics":expectation,"semantic_review":"pending human/agent review; transport success is not semantic pass"
+                })
+            );
             assert!(!result.text.trim().is_empty(), "{case}: empty output");
         }
     }
@@ -4433,5 +4637,148 @@ mod tests {
         assert!(parse_temperature("2.1").is_err());
         assert!(parse_extra_headers(r#"{"x-trace":"ok"}"#).is_ok());
         assert!(parse_extra_headers(r#"{"Authorization":"secret"}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn finalize_streaming_transcript_enforces_coverage_and_short_salvage_policy() {
+        let canceled = Arc::new(AtomicBool::new(false));
+        let mark_cancel = || {
+            canceled.store(true, Ordering::Release);
+        };
+
+        // Long recording with failed finish/send must fail even when partial text is available.
+        let err = finalize_streaming_transcript(
+            "test-asr",
+            true,
+            false,
+            (32_000, 32_000),
+            Err("mid-stream disconnect"),
+            mark_cancel,
+            async {
+                Ok(crate::asr::RawTranscript {
+                    text: "partial".into(),
+                    duration_ms: 1000,
+                })
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(canceled.load(Ordering::Acquire));
+        assert!(err.message.contains("mid-stream disconnect"));
+
+        // Short session with >1s unsent audio must reject partial fallback (#1/#2/#3/#4)
+        // and mark retryable so archived replay can recover.
+        let canceled_short_gap = Arc::new(AtomicBool::new(false));
+        let err = finalize_streaming_transcript(
+            "test-asr",
+            false,
+            false,
+            (3_200, 64_000),
+            Err("tail write failed"),
+            || canceled_short_gap.store(true, Ordering::Release),
+            async {
+                Ok(crate::asr::RawTranscript {
+                    text: "truncated partial".into(),
+                    duration_ms: 2000,
+                })
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(canceled_short_gap.load(Ordering::Acquire));
+        assert!(err.retryable);
+        assert!(err.message.contains("tail write failed"));
+
+        // Short session with complete coverage salvages non-empty partial when close-out fails.
+        let salvaged = finalize_streaming_transcript(
+            "test-asr",
+            false,
+            false,
+            (32_000, 32_000),
+            Err("finish ack dropped"),
+            || {},
+            async {
+                Ok(crate::asr::RawTranscript {
+                    text: "salvaged short text".into(),
+                    duration_ms: 1000,
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(salvaged.text, "salvaged short text");
+
+        // Short session with failed send_last_frame and empty text must surface error.
+        let empty_failed = finalize_streaming_transcript(
+            "test-asr",
+            false,
+            false,
+            (32_000, 32_000),
+            Err("finish ack dropped"),
+            || {},
+            async {
+                Ok(crate::asr::RawTranscript {
+                    text: "   ".into(),
+                    duration_ms: 1000,
+                })
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(empty_failed.message.contains("finish ack dropped"));
+        assert!(empty_failed.retryable);
+
+        // Short session where salvage await fails (e.g. concurrent cancel) must stay retryable.
+        let await_failed = finalize_streaming_transcript(
+            "test-asr",
+            false,
+            false,
+            (32_000, 32_000),
+            Err("finish ack dropped"),
+            || {},
+            async { Err::<crate::asr::RawTranscript, _>("no final result") },
+        )
+        .await
+        .unwrap_err();
+        assert!(await_failed.message.contains("finish ack dropped"));
+        assert!(await_failed.retryable);
+
+        // Silence with complete coverage is still allowed for connection checks.
+        let silent_ok = finalize_streaming_transcript::<&str, _>(
+            "test-asr",
+            false,
+            true,
+            (16_000, 16_000),
+            Ok(()),
+            || {},
+            async {
+                Ok(crate::asr::RawTranscript {
+                    text: "".into(),
+                    duration_ms: 500,
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(silent_ok.text, "");
+
+        // Empty text with incomplete coverage must fail.
+        let empty_incomplete = finalize_streaming_transcript::<&str, _>(
+            "test-asr",
+            false,
+            false,
+            (16_000, 16_000),
+            Ok(()),
+            || {},
+            async {
+                Ok(crate::asr::RawTranscript {
+                    text: "".into(),
+                    duration_ms: 500,
+                })
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(empty_incomplete.retryable);
     }
 }

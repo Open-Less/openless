@@ -66,6 +66,7 @@ def main():
         for release in releases:
             assert git(ROOT, "rev-list", "-n", "1", release).decode().strip() == RELEASES[release]
             old = temp / release
+            # Historical release tar trees retain their original app-local platform layout.
             extract(ROOT, RELEASES[release], ["openless-all/app/crates", "openless-all/app/linux-egui", "openless-all/app/native-capsule", "openless-all/app/harmony/rust", "openless-all/app/assets", "openless-all/app/contract", "openless-all/app/src/lib/ipc", "openless-all/app/Cargo.toml", "openless-all/app/Cargo.lock"], old)
             old_app = old / "openless-all/app"
             tests = old_app / "crates/openless-core/src/cloud_sync_e2ee_store/tests.rs"

@@ -1,80 +1,115 @@
-# OpenLess 架构与接口调用
+# OpenLess 架构、全平台形态与模块索引
 
-OpenLess 由界面、宿主和共享 Core 三层组成。界面接收输入并展示状态。宿主连接各个平台的窗口、热键、麦克风、编辑器和凭据库。Core 在宿主进程内管理会话、业务规则、服务调用和数据。本文路径相对于仓库根目录。
+OpenLess 采用 **界面层（UI）→ 平台宿主层（Host）→ 共享核心层（`openless-core`）** 三层架构：六个平台共享同一套框架无关的 Rust 核心库，各平台各自维护原生的窗口、快捷键、系统权限、输入法与凭据体验。
 
-## 模块职责
+```text
+React UI  ── Tauri 适配层（macOS / Windows / Android）──┐
+egui UI   ── Linux 原生宿主（无 Tauri / WebKitGTK）─────┤
+SwiftUI   ── iOS 原生应用与键盘（CoreHost）──────────────┼── openless-core
+ArkTS UI  ── HarmonyOS 适配层（ArkWeb + napi）──────────┘
+```
 
-| 模块 | 职责与源码入口 |
+> 官网架构与数据流图览同步展示于 <https://openless.top/zh/docs/development/#架构>（English: <https://openless.top/en/docs/development/#architecture>）。本文中的源码路径均相对于仓库根目录，开发者全平台构建流程见 [中文全平台构建指南](../openless-all/README.zh.md)（[English](../openless-all/README.md)）。
+
+## 全平台客户端形态、适配状态与子文档导航
+
+| 平台 | 客户端形态与核心模块 | 当前状态与验收进度 | 分发方式 | 对应子文档 |
+| --- | --- | --- | --- | --- |
+| **macOS 14 Sonoma+** | Tauri 2 + React（[`src-tauri/`](../openless-all/app/src-tauri/)） | 完整桌面应用：全局快捷键、落字、连续听写、风格包、光标上下文、Apple Speech、实验性本地 ASR | DMG（Apple Silicon / Intel）、Homebrew cask | [全平台构建指南](../openless-all/README.zh.md) · [Homebrew 更新提醒](guides/homebrew.md) |
+| **Windows 10+** | Tauri 2 + React（[`src-tauri/`](../openless-all/app/src-tauri/)）+ 原生 TSF 输入法（[`../windows/ime`](../openless-all/windows/ime/)） | 完整桌面应用，支持 TSF 输入法落字与 Foundry / sherpa 本地 ASR | NSIS / MSI 安装包 | [全平台构建指南](../openless-all/README.zh.md) |
+| **Linux** | 原生 `egui` / `eframe` 宿主（[`../linux/egui`](../openless-all/linux/egui/)，无 Tauri / WebKitGTK）+ [`linux-fcitx5-plugin`](../openless-all/linux/fcitx5-plugin/) | 已接通 Core 2.0 服务与 `fcitx5` 插件；L01–L12 真机验收进行中，deb/rpm 自动化发布待恢复 | 源码构建 | [全平台构建指南](../openless-all/README.zh.md) · [命令事件兼容基线](linux-egui-command-event-baseline.json) |
+| **Android 8.0+** | Tauri 移动宿主 + React + OpenLess 键盘（[`../android`](../openless-all/android/)、[`mobile-ime/`](../openless-all/app/mobile-ime/)） | 主应用、悬浮胶囊、输入法、光标上下文、应用内更新均已接通 | 按 ABI 提供 APK | [Android 说明](../openless-all/android/README.zh.md)（[EN](../openless-all/android/README.md)）· [Mobile IME](../openless-all/app/mobile-ime/README.zh.md)（[EN](../openless-all/app/mobile-ime/README.md)） |
+| **iOS 16+** | 原生 SwiftUI/UIKit 主应用、键盘扩展与小组件（[`openless-all/ios/`](../openless-all/ios/)），`CoreHost` 桥接 Rust 核心 | 支持中英文输入、语音模式、长按空格听写、翻译与本地 SenseVoice | 源码构建 + 个人签名 | [iOS 构建与签名指南](../openless-all/ios/README.zh.md)（[EN](../openless-all/ios/README.md)） |
+| **HarmonyOS** | ArkTS + ArkWeb + Node-API Core（[`../harmony`](../openless-all/harmony/)、[`mobile-ime/`](../openless-all/app/mobile-ime/)） | 适配中：已可构建 HAP 且输入法接入共享管线；真实联网真机验收、更新检测与商店分发待完成 | GitHub Releases 附未签名 HAP | [全平台构建指南](../openless-all/README.zh.md) · [Mobile IME](../openless-all/app/mobile-ime/README.zh.md) |
+
+## 分层与核心模块职责
+
+| 模块 | 源码入口与职责 |
 | --- | --- |
-| React 界面 | [src/app](../openless-all/app/src/app/) 负责启动与窗口路由，[src/features](../openless-all/app/src/features/) 负责业务页面，[src/data](../openless-all/app/src/data/) 管理快照、失效和写入，[src/api](../openless-all/app/src/api/) 提供分域调用。 |
-| 宿主传输 | [src/runtime/transport.ts](../openless-all/app/src/runtime/transport.ts) 验证启动快照并发送进程间调用（IPC）。[src/preview](../openless-all/app/src/preview/) 实现浏览器预览，提供夹具数据及模拟事件。 |
-| 共享 Core | [api.rs](../openless-all/app/crates/openless-core/src/api.rs) 定义 `OpenLessBackend` 和业务入口，[ports.rs](../openless-all/app/crates/openless-core/src/ports.rs) 定义麦克风、插入等宿主接口，[events.rs](../openless-all/app/crates/openless-core/src/events.rs) 定义语义事件。 |
-| macOS、Windows 与 Android 宿主 | [src-tauri/src/lib.rs](../openless-all/app/src-tauri/src/lib.rs) 注册 IPC，[coordinator.rs](../openless-all/app/src-tauri/src/coordinator.rs) 组装 Core 和会话，[core_adapters.rs](../openless-all/app/src-tauri/src/core_adapters.rs) 对接宿主能力，[tauri_events.rs](../openless-all/app/src-tauri/src/tauri_events.rs) 将 Core 事件交给界面。 |
-| Linux | [linux-egui](../openless-all/app/linux-egui/) 使用 egui 界面和常驻宿主。`LinuxHost` 直接调用 Rust 类型化接口，宿主与界面子进程经 Unix socket 交换请求和快照。见 [Linux 接口](development/linux.md)。 |
-| HarmonyOS | [harmony](../openless-all/app/harmony/) 的 ArkTS 管理系统和输入法，ArkWeb 复用 React 界面，`harmony/rust` 经 Node-API 连接 Core。 |
-| iOS | [ios](../openless-all/ios/) 的 Swift 应用、键盘扩展和录制小组件分别运行。`CoreHost` 是原生 Rust 桥，应用负责录音和 Keychain，扩展经 App Group 交换有限的命令与结果。 |
+| **共享核心（`openless-core`）** | [`crates/openless-core/`](../openless-all/app/crates/openless-core/)：框架无关的业务核心，不依赖 Tauri、WebView、egui 或 eframe。[`api.rs`](../openless-all/app/crates/openless-core/src/api.rs) 定义 `OpenLessBackend` 业务入口，[`ports.rs`](../openless-all/app/crates/openless-core/src/ports.rs) 定义录音、落字、凭据、存储等宿主端口，[`events.rs`](../openless-all/app/crates/openless-core/src/events.rs) 定义 `BackendEvent` 语义事件，[`dictation_engine.rs`](../openless-all/app/crates/openless-core/src/dictation_engine.rs) 协调单次与连续听写会话。 |
+| **音频与原生胶囊 Crates** | [`crates/micyou-dsp`](../openless-all/app/crates/micyou-dsp/) 与 [`crates/micyou-infer`](../openless-all/app/crates/micyou-infer/) 提供降噪与回声消除前处理；[`crates/openless-capsule`](../openless-all/app/crates/openless-capsule/) 与 [`native-capsule`](../openless-all/app/native-capsule/) 提供原生语音胶囊状态与渲染支撑。 |
+| **React 桌面/移动界面** | [`app/src/app`](../openless-all/app/src/app/) 负责启动与窗口路由，[`app/src/features`](../openless-all/app/src/features/) 承载设置、历史、风格包、词典、云同步等业务页面，[`app/src/data`](../openless-all/app/src/data/) 管理快照缓存与失效，[`app/src/api`](../openless-all/app/src/api/) 提供分域调用，[`app/src/runtime/transport.ts`](../openless-all/app/src/runtime/transport.ts) 校验契约版本并封装 IPC；[`app/src/preview`](../openless-all/app/src/preview/) 提供浏览器预览夹具。 |
+| **桌面问答与选区改写** | [`app/ask-window`](../openless-all/app/ask-window/) 承载独立问答与选区改写窗口，与宿主原生通道协同调用 `openless-core` 的问答、选区处理、联网搜索与附件能力。 |
+| **Tauri 宿主（macOS / Windows / Android）** | [`src-tauri/src/lib.rs`](../openless-all/app/src-tauri/src/lib.rs) 注册 IPC 命令与窗口生命周期，[`coordinator.rs`](../openless-all/app/src-tauri/src/coordinator.rs) 管理快捷键与会话所有权，[`core_adapters.rs`](../openless-all/app/src-tauri/src/core_adapters.rs) 对接录音、剪贴板/辅助功能/TSF 落字与系统凭据库，[`tauri_events.rs`](../openless-all/app/src-tauri/src/tauri_events.rs) 转发语义事件与胶囊状态。 |
+| **Linux 原生宿主（egui）** | [`linux/egui`](../openless-all/linux/egui/) 常驻宿主直接调用 `openless_core::contract`，与界面子进程经 Unix Socket（JSONL v2）同步快照与事件，经 [`linux-fcitx5-plugin`](../openless-all/linux/fcitx5-plugin/) 完成输入法落字。 |
+| **移动端输入法与原生宿主** | Android（[`android`](../openless-all/android/)）与 HarmonyOS（[`harmony`](../openless-all/harmony/)）共享 [`app/mobile-ime`](../openless-all/app/mobile-ime/) 输入法核心；iOS（[`openless-all/ios`](../openless-all/ios/)）由主应用承载麦克风录音与 Keychain 凭据，键盘扩展与主应用经 App Group 交换有限指令与结果（不经 App Group 传递原始音频）。 |
+| **跨层契约定义** | [`app/contract/backend-2.0.json`](../openless-all/app/contract/backend-2.0.json) 固定启动快照、语义事件、枚举与宿主门面契约（版本 `2.0.0`）。修改跨层命令或事件时须同步检查 Rust、TypeScript、宿主注册端及兼容基线 [`linux-egui-command-event-baseline.json`](linux-egui-command-event-baseline.json)。 |
 
-[backend-2.0.json](../openless-all/app/contract/backend-2.0.json) 记录启动快照、事件、枚举和宿主接口。改动跨层命令时同时核对 Rust、TypeScript、宿主注册和事件接收端。
+## 请求与事件流向
 
-## 请求怎样经过各层
-
-~~~mermaid
+```mermaid
 flowchart LR
-  UI["React 界面"] --> API["分域 API / 宿主传输"]
-  API --> Host["Tauri commands / HarmonyOS bridge"]
-  Native["Linux 或 iOS 原生界面"] --> Adapter["各自的宿主接口"]
-  Host --> Core["OpenLessBackend"]
+  UI["React / ArkWeb 界面"] --> API["分域 API / 宿主传输"]
+  API --> Host["Tauri / HarmonyOS 宿主"]
+  Native["Linux egui / iOS Swift 原生界面"] --> Adapter["原生宿主适配层"]
+  Host --> Core["openless-core (OpenLessBackend)"]
   Adapter --> Core
-  Core --> Store["本地仓储"]
-  Core --> Providers["服务商接口"]
-  Core --> Ports["宿主接口：录音、凭据、落字"]
-  Core --> Events["BackendEvent"]
+  Core --> Store["本地持久化（偏好 / 历史 / 词典 / 风格包）"]
+  Core --> Providers["云端与本地服务（ASR / LLM / 多模态 / DeepSeek 大统一）"]
+  Core --> Events["BackendEvent 语义事件"]
   Events --> Host
   Events --> Adapter
-~~~
+  Host --> UI
+  Adapter --> Native
+```
 
-### 启动与设置
+## 核心数据流与安全边界
 
-1. [bootstrap.tsx](../openless-all/app/src/app/bootstrap.tsx) 选择窗口入口。传输层等待宿主就绪并读取 `get_startup_snapshot`，验证接口版本后再初始化业务界面。
-2. React 通过分域 API 读取快照并订阅事件。设置保存由 `update_setting_fields` 提交字段差异，Core 按修订号持久化。`prefs:changed` 使界面重新读取；写入失败只撤回对应的未确认编辑。
-3. 同一窗口内的快照查询由 `src/data` 处理重叠请求和失效。历史、活动统计、服务用量分开保存，保留和删除规则各自生效。
+### 1. 启动、配置与持久化
 
-### 听写
+1. 界面启动时拉取一份 `BootstrapSnapshot`（含当前版本、偏好设置、服务商、风格包与运行状态），随后仅通过增量语义事件同步变更，避免整页重刷。
+2. 宿主在启动阶段注册快捷键、系统托盘与原生胶囊，并按平台检查系统权限（如 macOS 麦克风与辅助功能、Windows 麦克风与全局热键监听）。
+3. 设置更新以字段补丁方式提交（`update_setting_fields`），Core 按修订号串行持久化并广播 `prefs:changed`；写入失败时仅回退未确认的局部编辑。
+4. 历史记录、活动热力图统计与服务用量台账分表存储，各自执行独立的保留与清理策略。
 
-热键或原生按钮 → 宿主录音会话 → [dictation_engine.rs](../openless-all/app/crates/openless-core/src/dictation_engine.rs) → 转写及可选润色 → 宿主落字 → 历史与终态事件。宿主提供麦克风、目标编辑器和实际写入结果。设备确认停止后，采集拥有者转成保留原 sessionId 与冻结上下文的后台任务，下一段无需等待后处理；最终处理按提交顺序进行。录音取消、错误和超时只清理本段资源，旧段不能改写下一段状态。见[采集、任务与安全写回契约](development/recording-overlap.md)。
+### 2. 语音听写、后处理与光标回填
 
-云识别和润色由 Core 选择渠道并发送请求。本地模型的下载和激活按模型家族由 Core 与宿主共同负责。点击胶囊、流式原文与写入目标编辑器分别走各自的界面和宿主路径。见[语音链路](development/speech.md)、[本地模型](development/local-models.md)和[自定义润色策略](development/polish-strategy.md)。
+单次及连续语音输入的完整链路：
 
-### 问答与选区
+`全局快捷键 / 触发按钮 → Coordinator（会话所有权） → 麦克风 PCM 采集 → openless-core 听写引擎 → 识别与后处理管线 → 宿主安全落字 / 剪贴板回退 → 历史与统计持久化`
 
-桌面问答窗口由 [windowRoutes.tsx](../openless-all/app/src/app/windowRoutes.tsx) 分派。界面发送 `qa_submit_text` 等命令给 [Tauri 问答适配](../openless-all/app/src-tauri/src/commands/qa.rs)，由 [Core 问答服务](../openless-all/app/crates/openless-core/src/qa_service.rs) 管理会话、请求和结果事件。[选区语音服务](../openless-all/app/crates/openless-core/src/selection_voice_service.rs) 根据语音意图生成编辑预览或问答，确认写回时由宿主复核原输入目标。Linux 的问答界面经 Linux 宿主调用同一业务层。
+- **三条语音与模型管线**（配置指南见 <https://openless.top/zh/docs/setup/> 与 [仓库入口说明](guides/speech-services.md)）：
+  - **传统模式（ASR + 可选 LLM）**：支持近 30 个云端与本地 ASR 渠道（火山引擎、阿里云百炼、讯飞 RTASR、腾讯混元、阶跃星辰、智谱 GLM、小米 MiMo、Whisper 兼容、Apple Speech 及 Foundry/sherpa/MLX 本地模型），自由搭配 20+ 润色模型（火山方舟、DeepSeek、OpenAI、Gemini、OpenRouter 及任意 OpenAI 兼容端点）。
+  - **多模态模式（单模型）**：由 Google Gemini、OpenAI Audio、阿里云 Qwen-Omni 等支持音频输入的模型一步完成转写与润色。
+  - **DeepSeek 大统一**：使用 DeepSeek 官方密钥统一承接语音听写、问答、原生联网搜索与回答朗读。
+- **连续输入与后台队列**：支持连续多段（10～20 段）语音输入。前一段录音停止后立刻进入后台异步队列（冻结原 `sessionId`、目标应用与光标上下文），用户可直接开始下一段，最终结果按提交顺序依次写回原输入框。单段取消、超时或失败仅清理当前片段。
+- **风格包、词典与光标上下文**：识别前台应用或应用分类后自动匹配对应风格包；个人词典按命中优先级注入 ASR 热词与润色提示词；可选的「从纠正中学习」需逐条确认且仅保存在本地；可选光标上下文自动排除密码框、安全输入与终端。
+- **落字与回退**：优先经原生辅助功能、输入法插件（Fcitx5 / 移动端 IME / Windows TSF）或系统插入通道直写目标框；遇到受限窗口时自动回退到剪贴板。
 
-系统选区润色/翻译保留完整选中文字，先写入同一历史记录的 `rawTranscript`，再保护原文剪贴板，最后发送完整模型请求。原文、原控件和原范围分别核对；服务拒绝或输出不完整不能替换选区。剪贴板兜底、原位置续接和平台验收边界见[选区全文与原文保护](development/selection-originals.md)。
+### 3. 远程输入、加密云同步与凭据管理
 
-Android 浮窗从听写转到追问时，宿主先保存选区，再用 `stop_dictation_for_qa` 结束原录音取得转写，由 `QaApi::submit_captured_text` 提交问题。这个路径跳过原听写的润色和落字。
+- **手机远程输入**：桌面端启动局域网 HTTPS 服务并生成本机根证书与配对码；手机浏览器核对证书 SHA-256 指纹并配对后上传语音，由桌面端完成转写、润色并写入电脑光标处（使用方式见 [手机远程输入指南](guides/remote-input.md)）。
+- **加密云同步**：同步偏好、词典、风格包与历史前在客户端完成端到端加密（`cloud_sync_e2ee`），服务端仅存储密文快照。
+- **服务密钥与凭据**：所有第三方服务 API Key 由操作系统凭据库保存（macOS Keychain / Windows Credential Manager / Linux Secret Service / iOS Keychain），不以明文形式写入配置或提交到仓库。
 
-### 移动端输入法
+## 客户端架构与流程图
 
-Android 的 [OpenLessImeService](../openless-all/app/android/kotlin/OpenLessImeService.kt) 持有当前编辑器的 `InputConnection` 并提交文字。[native_bridge.rs](../openless-all/app/src-tauri/src/android/native_bridge.rs) 通过 JNI 调用 Rust；Runtime Service 与 Warmup Activity 负责后台服务和 WebView 的启动或恢复。HarmonyOS 由 ArkTS 输入法扩展调用系统 `InputClient`。两端共用 [Rime 引擎](../openless-all/app/mobile-ime/README.zh.md)，负责拼音候选与词库。切换编辑器使旧候选和异步识别结果失效，只有宿主确认文字已提交后才向引擎确认候选。
+可编辑 Mermaid 源文件（`.mmd`）与导出图片（`.svg` / `.png`）统一存放在 [`docs/images/client-diagrams/`](images/client-diagrams/README.md)：
 
-语音与词汇规则走 Core。密码框、禁止学习的输入框和敏感应用受宿主隐私策略约束；手改学词的观察和建议由 [Core 观察模块](../openless-all/app/crates/openless-core/src/host_document/) 管理，确认后才写入词典。Android 跨应用写入的无障碍、Shizuku 和剪贴板路径各自返回结果。
+### 客户端架构
 
-## 按功能定位代码
+![OpenLess 客户端架构](images/client-diagrams/openless-client-architecture.zh-CN.png)
 
-| 功能 | 改动入口 |
-| --- | --- |
-| 热键、权限、窗口、胶囊、目标插入 | [Tauri coordinator](../openless-all/app/src-tauri/src/coordinator/) · [界面窗口路由](../openless-all/app/src/app/windowRoutes.tsx) · [Windows TSF/IME](../openless-all/app/windows-ime/) |
-| 服务渠道、凭据、语音识别与润色 | [Core 模块声明](../openless-all/app/crates/openless-core/src/lib.rs) 中的 `provider_*`、`asr`、`polish`、`omni`、`credentials`。服务密钥通过宿主系统库保存。 |
-| 历史、词汇、纠错、风格和市场 | [Core 源码](../openless-all/app/crates/openless-core/src/) 中的 `history`、`vocabulary`、`correction`、`style_pack_store`、`marketplace`，配合对应的 `src/features` 页面。 |
-| 应用识别与按应用选择风格 | [app_catalog.rs](../openless-all/app/crates/openless-core/src/app_catalog.rs) 从独立公共 API 获取目录并保留可用缓存，[app_style_routing.rs](../openless-all/app/crates/openless-core/src/app_style_routing.rs) 管理本机分类归属和风格规则。目录内容在 `openless-marketplace` 服务端维护；目标、选择与独立场景前缀在听写开始时冻结，最终模型请求将场景放在所选风格之前；见[场景契约](development/app-style-routing.md#冻结应用场景前缀)。 |
-| 加密云同步 | [Tauri 云同步命令](../openless-all/app/src-tauri/src/commands/cloud_sync_e2ee.rs) → Core `cloud_sync_e2ee` → protocol、documents 和 store 模块。加密、身份、合并和恢复在原生层完成。见[数据与协议](development/cloud-sync.md)。 |
-| 远程输入 | [Tauri remote_server](../openless-all/app/src-tauri/src/remote_server/) 或 Linux 宿主 → Core 远程输入服务 → 外部音频会话。见[远程输入协议](development/remote-input.md)。 |
-| UI、主题、语言、浏览器夹具 | [src/ui](../openless-all/app/src/ui/) · [src/styles](../openless-all/app/src/styles/) · [src/i18n](../openless-all/app/src/i18n/) · [src/preview](../openless-all/app/src/preview/) |
+[中文 SVG](images/client-diagrams/openless-client-architecture.zh-CN.svg) · [中文 Mermaid](images/client-diagrams/openless-client-architecture.zh-CN.mmd) · [English PNG](images/client-diagrams/openless-client-architecture.png) · [English SVG](images/client-diagrams/openless-client-architecture.svg)
 
-## 构建和验证从哪开始
+### 客户端数据流
 
-[openless-all/app](../openless-all/app/) 是 npm、共享 Core 与 Linux 的 Cargo 工作目录。`src-tauri` 与 `src-tauri/backend-tests` 使用各自的 Rust 清单；原生 iOS 工程有独立版本和签名。依赖、工具链与命令见[全平台构建](../openless-all/README.zh.md)。
+![OpenLess 客户端数据流](images/client-diagrams/openless-client-data-flow.zh-CN.png)
 
-- 界面与接口变动从应用目录运行 `npm test`。修改生成的服务目录时，从 Core 运行 `cargo run --locked -p openless-core --example export_provider_descriptors`。
-- Core 和 Linux 分别运行 `cargo test --locked -p openless-core` 和 `cargo test --locked -p openless-linux-egui`。Tauri 与所涉及平台的检查由 [CI 工作流](../.github/workflows/ci.yml) 定义。
-- 自动检查、已安装应用与设备交互分别取证。打包和发布门槛见[发布规范](../RELEASING.zh.md)，仍缺的实现与验证见[开发需求](requirements.md)。
+[中文 SVG](images/client-diagrams/openless-client-data-flow.zh-CN.svg) · [中文 Mermaid](images/client-diagrams/openless-client-data-flow.zh-CN.mmd) · [English PNG](images/client-diagrams/openless-client-data-flow.png) · [English SVG](images/client-diagrams/openless-client-data-flow.svg)
+
+### 启动、权限与录音流程
+
+![OpenLess 启动、权限与录音流程](images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png)
+
+[中文 SVG](images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg) · [中文 Mermaid](images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [English PNG](images/client-diagrams/openless-client-startup-recording-flow.png) · [English SVG](images/client-diagrams/openless-client-startup-recording-flow.svg)
+
+## 分支、发布机制与平台工程规划
+
+- **双渠道分支**：`beta` 为默认开发集成分支（Beta 渠道），`main` 为正式版分支（仅由维护者从 `beta` 合并）；所有贡献 PR 统一提交至 `beta`。
+- **更新器清单**：桌面端更新器清单托管在 `https://dl.aeoform.com/updates/{stable|beta}/latest-{target}-{arch}[-beta].json`，不附在 GitHub Release 资产中。
+- **维护者发布清单**：[RELEASING.zh.md](../RELEASING.zh.md)（[English](../RELEASING.md)）记录发布权限、五处版本号同步闸门、签名公证、HarmonyOS 渠道与发布说明署名规范。
+- **阶段重点与平台验收**：
+  - 当前阶段优先保障核心听写链路稳定（录音、转写、历史恢复、可靠落字、兼容性、测试与文档），详见 [维护公告 #1479](https://github.com/Open-Less/openless/issues/1479)。
+  - **Linux**：完成 L01–L12 真机验收并恢复 deb/rpm 自动发布流水线。
+  - **HarmonyOS**：完成真实联网真机验收、应用内更新检测与商店分发。

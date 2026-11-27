@@ -11,7 +11,7 @@
 //! - commands: Tauri IPC surface
 
 // ── Linux 桌面不再由 Tauri 提供 ───────────────────────────────────────────────
-// 用户在 Linux 上已使用 egui 前端（`openless-all/app/linux-egui`），Tauri 版的 Linux
+// 用户在 Linux 上已使用 egui 前端（`openless-all/linux/egui`），Tauri 版的 Linux
 // 桌面实现（fcitx5 插件桥 `linux_fcitx.rs`、Linux 热键/插入/选区路径、平台覆盖配置
 // `tauri.linux.conf.json`）已随本次一并删除。这里显式拦住误在 Linux 上构建 Tauri 版
 // 的情况，给出可操作的提示，而不是让人面对一堆“找不到模块”的零散错误。
@@ -19,8 +19,8 @@
 // 不受影响的平台：macOS / Windows（桌面）与 Android（`target_os = "android"`）。
 #[cfg(target_os = "linux")]
 compile_error!(
-    "Tauri 版已不再支持 Linux 桌面：请使用 egui 前端 openless-all/app/linux-egui，\
-     打包用 openless-all/app/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
+    "Tauri 版已不再支持 Linux 桌面：请使用 egui 前端 openless-all/linux/egui，\
+     打包用 openless-all/linux/scripts/package-linux-egui.sh（deb/rpm/manual zip）。"
 );
 
 mod android;
@@ -249,6 +249,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_dictation_translation_target,
             commands::select_dictation_translation_target,
             commands::set_capsule_language_menu,
+            #[cfg(not(mobile))]
+            commands::set_capsule_style_menu,
             commands::get_settings,
             commands::get_settings_snapshot,
             commands::get_voice_activation_state,
@@ -356,6 +358,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::list_vocab_presets,
             commands::save_vocab_presets,
             commands::start_dictation,
+            commands::get_dictation_style_target,
+            commands::update_dictation_style,
             commands::stop_dictation,
             commands::cancel_dictation,
             commands::start_voice_edit_session,
@@ -456,6 +460,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
             commands::set_translation_hotkey,
+            commands::set_skip_auto_style_hotkey,
             commands::set_switch_style_hotkey,
             commands::set_open_app_hotkey,
             commands::set_quick_note_hotkey,
@@ -1169,6 +1174,7 @@ fn run_desktop() {
                 coordinator.stop_coding_agent_hotkey_listener();
                 coordinator.stop_combo_hotkey_listener();
                 coordinator.stop_translation_hotkey_listener();
+                coordinator.stop_skip_auto_style_hotkey_listener();
                 coordinator.stop_switch_style_hotkey_listener();
                 coordinator.stop_open_app_hotkey_listener();
                 coordinator.stop_quick_note_hotkey_listener();
@@ -2114,14 +2120,6 @@ pub fn log_dir_path() -> std::path::PathBuf {
     #[cfg(not(target_os = "android"))]
     {
         std::env::temp_dir().join("OpenLess")
-    }
-}
-
-pub(crate) fn require_ask_anything() -> Result<(), String> {
-    if ask_anything_available() {
-        Ok(())
-    } else {
-        Err("Ask Anything is disabled in this build".into())
     }
 }
 
@@ -3080,9 +3078,9 @@ const VOICE_EDIT_WINDOW_HEIGHT: f64 = 620.0;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_voice_edit_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
+) -> Result<tauri::WebviewWindow<R>, String> {
     if let Some(window) = app.get_webview_window("voice-edit") {
-        return Some(window);
+        return Ok(window);
     }
     match WebviewWindowBuilder::new(
         app,
@@ -3107,28 +3105,25 @@ fn ensure_voice_edit_window<R: tauri::Runtime>(
             #[cfg(target_os = "macos")]
             {
                 let window_clone = window.clone();
-                let _ = app.run_on_main_thread(move || {
+                app.run_on_main_thread(move || {
                     make_chat_window_panel_macos(&window_clone, "voice-edit");
                     make_chat_window_draggable_macos(&window_clone, "voice-edit");
-                });
+                })
+                .map_err(|error| {
+                    log::warn!("[voice-edit] panel setup dispatch failed: {error}");
+                    format!("Voice Edit panel setup dispatch failed: {error}")
+                })?;
             }
-            Some(window)
+            Ok(window)
         }
         Err(error) => {
             log::warn!("[voice-edit] create panel failed: {error}");
-            None
+            Err(format!("Voice Edit window creation failed: {error}"))
         }
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn ensure_voice_edit_window<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-) -> Option<tauri::WebviewWindow<R>> {
-    app.get_webview_window("voice-edit")
-}
-
-pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     #[cfg(target_os = "android")]
     if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
         crate::android::jni::android::open_qa_host(env, context)
@@ -3138,39 +3133,53 @@ pub(crate) fn show_voice_edit_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = app.emit_to("main", "voice-edit:show", serde_json::json!({}));
-        return;
+        return Ok(());
     }
 
-    let Some(window) = ensure_voice_edit_window(app) else {
-        return;
-    };
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        let window_clone = window.clone();
-        let _ = app.run_on_main_thread(move || {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            match window_clone.ns_window() {
-                Ok(handle) if !handle.is_null() => unsafe {
-                    let ns = handle as *mut AnyObject;
-                    let _: () = msg_send![ns, orderFrontRegardless];
-                },
-                _ => {
-                    let _ = window_clone.show();
+        let window = ensure_voice_edit_window(app)?;
+        #[cfg(target_os = "macos")]
+        {
+            let window_clone = window.clone();
+            app.run_on_main_thread(move || {
+                use objc2::msg_send;
+                use objc2::runtime::AnyObject;
+                match window_clone.ns_window() {
+                    Ok(handle) if !handle.is_null() => unsafe {
+                        let ns = handle as *mut AnyObject;
+                        let _: () = msg_send![ns, orderFrontRegardless];
+                    },
+                    _ => {
+                        let _ = window_clone.show();
+                    }
                 }
+            })
+            .map_err(|error| {
+                log::warn!("[voice-edit] show dispatch failed: {error}");
+                format!("Voice Edit window show dispatch failed: {error}")
+            })?;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Preserve the external editor until capture; QA's helper deliberately focuses its WebView.
+            if let Err(error) = window.set_focusable(false) {
+                log::warn!("[voice-edit] set_focusable failed: {error}");
             }
-        });
+            window.show().map_err(|error| {
+                log::warn!("[voice-edit] show failed: {error}");
+                format!("Voice Edit window show failed: {error}")
+            })?;
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        window.show().map_err(|error| {
+            log::warn!("[voice-edit] show failed: {error}");
+            format!("Voice Edit window show failed: {error}")
+        })?;
+        VOICE_EDIT_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
+        let _ = app.emit_to("voice-edit", "voice-edit:shown", serde_json::json!({}));
+        Ok(())
     }
-    #[cfg(target_os = "windows")]
-    {
-        // Preserve the external editor until capture; QA's helper deliberately focuses its WebView.
-        let _ = window.set_focusable(false);
-        let _ = window.show();
-    }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let _ = window.show();
-    VOICE_EDIT_PANEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let _ = app.emit_to("voice-edit", "voice-edit:shown", serde_json::json!({}));
 }
 
 pub(crate) fn set_voice_edit_interactive<R: tauri::Runtime>(app: &AppHandle<R>, interactive: bool) {

@@ -1,34 +1,36 @@
-# OpenLess 文档
+# OpenLess 文档总目录
 
-从你要做的事选一个入口。
+从你的目标直接进入对应文档。面向用户的在线手册持续维护于 **OpenLess 官网文档**：<https://openless.top/zh/docs/>（English: <https://openless.top/en/docs/>）。
 
-## 使用 OpenLess
+## 上手与使用 OpenLess
 
-| 想做什么 | 阅读 |
+| 想做什么 | 文档入口 |
 | --- | --- |
-| 下载应用或看某个版本改了什么 | [GitHub Releases](https://github.com/Open-Less/openless/releases) |
-| 安装、授予权限、听写、使用词库或云同步 | [中文使用指南](../USAGE.zh.md) · [English user guide](../USAGE.md) |
-| 配置语音识别或语言模型 | [语音与模型服务设置](guides/speech-services.md) |
-| 用手机录音并把文字输入电脑 | [手机远程输入](guides/remote-input.md) |
-| 给 Homebrew 安装的 OpenLess 设置更新提示 | [Homebrew 更新提醒](guides/homebrew.md) |
+| 了解 OpenLess、平台支持、功能亮点与路线图 | [中文 README](../README.zh.md) · [English README](../README.md) · [官网文档](https://openless.top/zh/docs/) |
+| 下载各平台安装包与查看更新记录 | [官网下载与安装](https://openless.top/zh/docs/installation/) · [GitHub Releases](https://github.com/Open-Less/openless/releases) |
+| 安装、授予系统权限、听写、风格包、词典与云同步 | [中文使用指南](../USAGE.zh.md) · [English User Guide](../USAGE.md) |
+| 配置语音识别（ASR）、语言模型（LLM）、多模态或 DeepSeek 大统一 | [官网配置入门](https://openless.top/zh/docs/setup/) · [仓库入口说明](guides/speech-services.md) |
+| 查看润色、口述改口与 Prompt 结构化参考样例 | [润色参考样例（JSONL）](references/polish-reference-examples.sample.jsonl) · [官网语音输入与润色](https://openless.top/zh/docs/voice-input/) |
+| 用手机浏览器录音并把文字输入到电脑 | [手机远程输入指南](guides/remote-input.md) |
+| 为 macOS Homebrew 安装的 OpenLess 开启更新提醒 | [Homebrew 更新提醒](guides/homebrew.md) |
 
-## 开发 OpenLess
+## 开发、构建与架构
 
-先读[架构与接口调用](architecture.md)定位模块，再按[全平台构建指南](../openless-all/README.zh.md)配置开发环境。
+先阅读 [架构与模块说明](architecture.md) 了解三层边界与数据流，再按 [开发者全平台构建指南](../openless-all/README.zh.md) 搭建本地环境。
 
-- **官方风格包**：[来源、升级保护与口述修正契约](development/official-style-packs.md)
-- **选区全文与原文保护**：[历史、剪贴板与安全写回契约](development/selection-originals.md)
-- **听写与模型**：[语音链路与服务渠道](development/speech.md) · [本地模型管理](development/local-models.md)
-- **录音翻译**：[同段 Shift 开关、次数与验收范围](development/shift-translation.md)
-- **长录音**：[超过 5 分钟的整段保留与中断恢复](development/long-recording.md)
-- **文字处理**：[问答与选区调用](architecture.md#问答与选区) · [转写后的自定义润色策略](development/polish-strategy.md) · [按输入应用选择风格包](development/app-style-routing.md)
-- **应用与模型目录**：[Agent 客户端、Harness 与模型研究表](research/agent-app-model-catalog.md) · [外部目录与分类接口](development/app-style-routing.md#分类目录-api)
-- **数据与安全**：[云同步与旧快照协议](development/cloud-sync.md) · [v1 扩展与跨版本保留](development/sync-v1-compatibility.md) · [远程输入协议](development/remote-input.md) · [WebView 内容安全策略](development/webview-security.md)
-- **联网搜索**：[免费聚合、DeepSeek 混合搜索与验收边界](development/web-search.md)
-- **宿主与排查**：[Linux 宿主接口与日志](development/linux.md) · [Windows 无响应诊断](development/windows-diagnostics.md)
-- **构建与发布**：[发布规范](../RELEASING.zh.md) · [自动检查、签名与分发](development/delivery.md)
-- **维护资料**：[架构图图源](images/client-diagrams/README.md) · [AOCI Code 索引](aoci-code.md) · [第三方组件署名与许可](ATTRIBUTION.md)
+| 主题 | 文档入口 |
+| --- | --- |
+| 三层架构、全平台客户端形态、验收进度与模块/子文档索引 | [架构、全平台形态与模块索引](architecture.md) · [客户端架构图与 Mermaid 源码](images/client-diagrams/README.md) |
+| 开发者全平台构建指南（macOS / Windows / Linux / Android / HarmonyOS / iOS） | [中文全平台构建指南](../openless-all/README.zh.md) · [English Build Guide](../openless-all/README.md) |
+| 命令与事件兼容基线 | [命令与事件兼容基线 JSON](linux-egui-command-event-baseline.json) |
+| iOS 原生应用、键盘扩展、构建与签名指南 | [iOS 中文构建指南](../openless-all/ios/README.zh.md) · [iOS English Guide](../openless-all/ios/README.md) |
+| Android 构建与输入法说明 | [Android 中文说明](../openless-all/android/README.zh.md) · [Android English Guide](../openless-all/android/README.md) |
+| 移动端共享输入法核心（Android / HarmonyOS） | [Mobile IME 中文说明](../openless-all/app/mobile-ime/README.zh.md) · [Mobile IME English](../openless-all/app/mobile-ime/README.md) |
 
-## 查未完成工作
+## 发布、署名与许可
 
-[开发需求](requirements.md)汇总仍需实现、确认或真机验收的工作。云同步的[协议草案](cloud-sync-agreement/agreement-draft.zh-CN.md)、[摘要草案](cloud-sync-agreement/user-summary.zh-CN.md)和[事实依据](cloud-sync-agreement/facts-and-legal-review.md)供发布前审查。
+| 主题 | 文档入口 |
+| --- | --- |
+| 维护者发布流程、版本同步闸门、签名与更新清单 | [中文发布清单](../RELEASING.zh.md) · [English Release Checklist](../RELEASING.md) |
+| 第三方 UI 组件与 Open Runde 字体署名 | [组件与字体署名说明](ATTRIBUTION.md) |
+| 开源许可证（OpenLess 2.0 为 AGPL-3.0-only；已发布 1.x 为 MIT） | [LICENSE](../LICENSE) |

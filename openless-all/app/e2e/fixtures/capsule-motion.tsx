@@ -215,7 +215,6 @@ const { InsertFallbackCard } = await import('../../src/features/capsule/InsertFa
 const { OpenLessPill } = await import('../../src/features/capsule/OpenLessCapsule');
 const { CapsuleTranslationBadge, CapsuleTranscriptOverlay } =
   await import('../../src/features/capsule/LiveTranscriptPill');
-const { QaPanel } = await import('../../src/features/qa/QaPanel');
 const { Capsule } = await import('../../src/features/capsule/Capsule');
 if (themeSync) {
   localStorage.setItem('ol.theme', 'light');
@@ -284,22 +283,6 @@ createRoot(document.getElementById('root')!).render(
       }}
     >
       <Capsule os={params.get('os') === 'mac' ? 'mac' : undefined} />
-    </div>
-  ) : qa ? (
-    <div
-      id="native-host"
-      style={{
-        position: 'absolute',
-        width: 480,
-        height: 80,
-        bottom: 8,
-        left: '50%',
-        transform: 'translateX(-50%)',
-      }}
-    >
-      <AppViewport scale={false}>
-        <QaPanel />
-      </AppViewport>
     </div>
   ) : (
     <AppViewport scale={false}>

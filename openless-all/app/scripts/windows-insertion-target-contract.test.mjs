@@ -24,7 +24,7 @@ const unicodeFallback = adapters.match(
 )?.[0];
 assert.match(
   unicodeFallback ?? '',
-  /matches!\(status, crate::types::InsertStatus::Inserted \| crate::types::InsertStatus::PasteSent\)/,
+  /matches!\(\s*status,\s*crate::types::InsertStatus::Inserted \| crate::types::InsertStatus::PasteSent\s*\)/,
   'partially dispatched Unicode input must remain uncertain instead of becoming copy-only fallback',
 );
 

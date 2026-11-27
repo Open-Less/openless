@@ -4,8 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compareVersions } from './homebrew-openless-notify.mjs';
-import { installReminder } from './install-homebrew-openless-reminder.mjs';
+import { compareVersions } from '../../macos/scripts/homebrew-openless-notify.mjs';
+import { installReminder } from '../../macos/scripts/install-homebrew-openless-reminder.mjs';
 
 for (const [available, current, expected] of [
   ['1.3.18', '2.0.0-beta-a.beta.6+build.20261015-be', -1],

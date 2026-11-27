@@ -93,6 +93,8 @@ pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;
 pub mod style_packs;
+#[cfg(test)]
+mod intent_style_tests;
 pub mod testing;
 pub mod types;
 pub mod usage_ledger;
@@ -109,8 +111,8 @@ mod shortcut_types;
 /// Version of the public host-facing DTO/event/lifecycle contract.
 ///
 /// This is independent from the application release version.  Increment the
-/// major component for a breaking host contract change and document the
-/// migration in `docs/development/linux.md`.
+/// major component for a breaking host contract change and update
+/// `openless-all/app/contract/backend-2.0.json`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{
@@ -240,7 +242,7 @@ pub mod contract {
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
     AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
-    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
+    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget, DictationStyleTarget,
     LessComputerHotkeyAction, LessComputerVoiceFinish, LessComputerVoiceOptions,
     LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult, QaVoiceCaptureSession,
     StartupSnapshot, VoiceTranscriptionSession,
@@ -275,7 +277,7 @@ pub use credentials::{
 pub use dictation_context::{
     build_asr_prompt, eligible_polish_context_turns, DictationAudioSource, DictationContext,
     DictationInsertionContext, DictationOutputTarget, DictationPolishContext,
-    DictationStartOptions, DictationStopOptions, PolishHistoryTurn, ProviderInvocation,
+    DictationStartOptions, DictationStopOptions, DictationStyleSelection, PolishHistoryTurn, ProviderInvocation,
     RecordingPlan, ASR_PROMPT_CHAR_BUDGET,
 };
 pub use dictation_engine::{PipelineDictationEngine, PolishFailurePolicy};

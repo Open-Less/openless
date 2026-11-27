@@ -17,7 +17,6 @@ use openless_core::{
 };
 use tokio::sync::Notify;
 
-
 #[derive(Default)]
 struct DelayedCredentials {
     store: InMemoryCredentialStore,
@@ -73,7 +72,6 @@ impl CredentialStore for DelayedCredentials {
     }
 }
 
-
 struct Focus {
     current: &'static str,
     captured: Vec<&'static str>,
@@ -84,9 +82,26 @@ struct Focus {
     position: Option<(u64, u64)>,
 }
 
+#[derive(Default)]
+struct StartupBarrier {
+    armed: AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+
+impl StartupBarrier {
+    async fn wait_if_armed(&self) {
+        if self.armed.swap(false, Ordering::AcqRel) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
 struct FocusContextAdapter {
     focus: Arc<Mutex<Focus>>,
     target: &'static str,
+    barrier: Arc<StartupBarrier>,
 }
 
 impl HostContextAdapter for FocusContextAdapter {
@@ -119,7 +134,9 @@ impl HostContextAdapter for FocusContextAdapter {
             .context_captured
             .push(self.target);
         let front_app = self.target.to_string();
+        let barrier = self.barrier.clone();
         Box::pin(async move {
+            barrier.wait_if_armed().await;
             Ok(HostContextCapture {
                 front_app: Some(front_app),
                 cursor_context: None,
@@ -128,29 +145,58 @@ impl HostContextAdapter for FocusContextAdapter {
     }
 }
 
-struct FocusInserter { focus: Arc<Mutex<Focus>>, target: Option<&'static str> }
+struct FocusInserter {
+    focus: Arc<Mutex<Focus>>,
+    target: Option<&'static str>,
+    barrier: Arc<StartupBarrier>,
+    preparation: Arc<StartupBarrier>,
+}
 impl TextInserter for FocusInserter {
-    fn defer_preparation_until_stop(&self) -> bool { true }
+    fn defer_preparation_until_stop(&self) -> bool {
+        !self.preparation.armed.load(Ordering::Acquire)
+    }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
         let mut focus = self.focus.lock().unwrap();
         let target = focus.current;
         focus.captured.push(target);
         Some(CapturedTextTarget {
-            inserter: Arc::new(Self { focus: self.focus.clone(), target: Some(target) }),
-            host_context: Arc::new(FocusContextAdapter { focus: self.focus.clone(), target }),
+            inserter: Arc::new(Self {
+                focus: self.focus.clone(),
+                target: Some(target),
+                barrier: self.barrier.clone(),
+                preparation: self.preparation.clone(),
+            }),
+            host_context: Arc::new(FocusContextAdapter {
+                focus: self.focus.clone(),
+                target,
+                barrier: self.barrier.clone(),
+            }),
         })
     }
-    fn begin(&self, _: SessionId, context: Arc<DictationContext>)
-        -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
+    fn begin(
+        &self,
+        _: SessionId,
+        context: Arc<DictationContext>,
+    ) -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
         let _ = context;
         let mut focus = self.focus.lock().unwrap();
         let target = self.target.unwrap_or(focus.current);
         focus.prepared.push(target);
-        let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession { focus: self.focus.clone(), target });
-        Box::pin(async move { Ok(session) })
+        let session: Arc<dyn TextInsertionSession> = Arc::new(FocusSession {
+            focus: self.focus.clone(),
+            target,
+        });
+        let preparation = self.preparation.clone();
+        Box::pin(async move {
+            preparation.wait_if_armed().await;
+            Ok(session)
+        })
     }
 }
-struct FocusSession { focus: Arc<Mutex<Focus>>, target: &'static str }
+struct FocusSession {
+    focus: Arc<Mutex<Focus>>,
+    target: &'static str,
+}
 impl TextInsertionSession for FocusSession {
     fn write(&self, _: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
         panic!("ordinary dictation must not stream into the target")
@@ -169,13 +215,17 @@ impl TextInsertionSession for FocusSession {
         focus.delivered.push((self.target, text));
         Box::pin(async { Ok(InsertOutcome::Inserted) })
     }
-    fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> { Box::pin(async { Ok(()) }) }
+    fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 struct Fixture {
     backend: Arc<OpenLessBackend>,
     credentials: Arc<DelayedCredentials>,
     focus: Arc<Mutex<Focus>>,
+    host_capture: Arc<StartupBarrier>,
+    preparation: Arc<StartupBarrier>,
     directory: std::path::PathBuf,
 }
 
@@ -203,6 +253,8 @@ impl Fixture {
         )
         .unwrap();
         let credentials = Arc::new(DelayedCredentials::default());
+        let host_capture = Arc::new(StartupBarrier::default());
+        let preparation = Arc::new(StartupBarrier::default());
         let focus = Arc::new(Mutex::new(Focus {
             current: "A",
             captured: Vec::new(),
@@ -219,6 +271,8 @@ impl Fixture {
         dependencies.text_inserter = Arc::new(FocusInserter {
             focus: focus.clone(),
             target: None,
+            barrier: host_capture.clone(),
+            preparation: preparation.clone(),
         });
         let backend = Arc::new(
             OpenLessBackend::new(
@@ -235,6 +289,8 @@ impl Fixture {
             backend,
             credentials,
             focus,
+            host_capture,
+            preparation,
             directory,
         }
     }
@@ -244,6 +300,412 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+#[tokio::test]
+async fn skip_auto_style_capture_explicit_translation_and_history_use_actual_style() {
+    for (skip, explicit) in [(false, false), (true, false), (false, true), (true, true)] {
+        let engine = FixtureDictationEngine::successful("spoken", "polished");
+        let fixture = Fixture::with_engine(|_| Arc::new(engine.clone())).await;
+        fixture.credentials.waited.store(true, Ordering::Release);
+        fixture.focus.lock().unwrap().current = "VS Code";
+        let backend = &fixture.backend;
+        let polish = backend.create_style_pack(StylePack {
+            name: "polish".into(), prompt: "frozen polish".into(), ..Default::default()
+        }).unwrap();
+        let automatic = backend.create_style_pack(StylePack {
+            name: "automatic".into(), prompt: "frozen automatic".into(), ..Default::default()
+        }).unwrap();
+        backend.activate_style_pack(&polish.id).unwrap();
+        backend.set_app_style_assignment(AppStyleAssignment::Category {
+            category: "coding".into(), style_pack_id: Some(automatic.id.clone()),
+        }).unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
+        backend.update_settings(prefs, openless_core::SettingsUpdateOptions::STRICT,
+            &openless_core::NoopSettingsRuntime).unwrap();
+        let id = backend.start_dictation_with_options(DictationStartOptions {
+            skip_auto_style: skip,
+            style_pack_id: explicit.then(|| "builtin.formal".into()),
+            translation_requested: true,
+            ..Default::default()
+        }).await.unwrap();
+        let expected = if skip { polish.id.as_str() } else if explicit { "builtin.formal" } else { automatic.id.as_str() };
+        let target = backend.dictation_style_target().unwrap();
+        assert_eq!(target.style_pack_id.as_deref(), Some(expected));
+        assert_eq!(target.skip_auto_style, skip);
+        assert!(target.available_styles.iter().any(|pack| pack.id == polish.id));
+        assert!(backend.snapshot().dictation.translation_active);
+        backend.stop_dictation_session(id).await.unwrap();
+        let history = backend.list_history().unwrap();
+        assert_eq!(history[0].style_pack_id.as_deref(), Some(expected));
+        assert!(history[0].translation_active);
+    }
+}
+
+#[tokio::test]
+async fn skip_auto_style_unchanged_sessions_support_engines_without_context_updates() {
+    use openless_core::{DictationEngine, EngineFailure, EngineProgressSink, EngineResult};
+    use openless_core::testing::FixtureEngineAction;
+
+    struct StartOnlyEngine(FixtureDictationEngine);
+    impl DictationEngine for StartOnlyEngine {
+        fn start(
+            &self, id: SessionId, context: Arc<DictationContext>, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.0.start(id, context, progress)
+        }
+        fn finish(
+            &self, id: SessionId, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+            self.0.finish(id, progress)
+        }
+        fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.0.cancel(id)
+        }
+        // Intentionally inherit the production trait's Unsupported update_context.
+    }
+
+    let engine = FixtureDictationEngine::successful("spoken", "polished");
+    let fixture = Fixture::with_engine(|_| Arc::new(StartOnlyEngine(engine.clone()))).await;
+    fixture.credentials.waited.store(true, Ordering::Release);
+    for initial_skip in [false, true, false] {
+        let id = fixture.backend.start_dictation_with_options(DictationStartOptions {
+            skip_auto_style: initial_skip,
+            ..Default::default()
+        }).await.unwrap();
+        assert_eq!(fixture.backend.snapshot().dictation.skip_auto_style, initial_skip);
+        let result = fixture.backend.stop_dictation_session(id).await.unwrap();
+        assert_eq!(result.session_id, id);
+        assert_eq!(result.polished_text, "polished");
+        assert_eq!(engine.actions().iter().rev().take(2).cloned().collect::<Vec<_>>(),
+            [FixtureEngineAction::Finish(id), FixtureEngineAction::Start(id)]);
+        let history = fixture.backend.list_history().unwrap();
+        assert!(history.iter().any(|row| row.id == id.to_string() && row.error_code.is_none()));
+    }
+    assert_eq!(engine.contexts().len(), 3, "unchanged sessions must never request context updates");
+    fixture.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn skip_auto_style_sync_consumes_only_changes_in_the_engine_start_snapshot() {
+    use openless_core::{DictationEngine, DictationPhase, EngineFailure, EngineProgressSink, EngineResult};
+    use openless_core::testing::FixtureEngineAction;
+    use std::time::Duration;
+
+    struct GatedStartEngine {
+        inner: FixtureDictationEngine,
+        barrier: Arc<StartupBarrier>,
+    }
+    impl DictationEngine for GatedStartEngine {
+        fn start(
+            &self, id: SessionId, context: Arc<DictationContext>, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            let starting = self.inner.start(id, context, progress);
+            let barrier = self.barrier.clone();
+            Box::pin(async move {
+                barrier.wait_if_armed().await;
+                starting.await
+            })
+        }
+        fn finish(
+            &self, id: SessionId, progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+            self.inner.finish(id, progress)
+        }
+        fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.inner.cancel(id)
+        }
+        fn update_context(
+            &self, id: SessionId, context: Arc<DictationContext>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.inner.update_context(id, context)
+        }
+    }
+
+    for initial_skip in [false, true] {
+        for stage in ["host", "credentials", "insertion", "engine", "recording"] {
+            let engine = FixtureDictationEngine::successful("spoken", "polished");
+            let engine_start = Arc::new(StartupBarrier::default());
+            engine_start.armed.store(stage == "engine", Ordering::Release);
+            let fixture = Fixture::with_engine(|_| Arc::new(GatedStartEngine {
+                inner: engine.clone(), barrier: engine_start.clone(),
+            })).await;
+            fixture.credentials.waited.store(stage != "credentials", Ordering::Release);
+            fixture.host_capture.armed.store(stage == "host", Ordering::Release);
+            fixture.preparation.armed.store(stage == "insertion", Ordering::Release);
+            fixture.backend.activate_style_pack("builtin.light").unwrap();
+            let starting = tokio::spawn({
+                let backend = fixture.backend.clone();
+                async move {
+                    backend.start_dictation_with_options(DictationStartOptions {
+                        skip_auto_style: initial_skip,
+                        style_pack_id: Some("builtin.formal".into()),
+                        ..Default::default()
+                    }).await
+                }
+            });
+            let barrier = match stage {
+                "host" => Some((&fixture.host_capture.entered, &fixture.host_capture.release)),
+                "credentials" => Some((fixture.credentials.entered.as_ref(), fixture.credentials.release.as_ref())),
+                "insertion" => Some((&fixture.preparation.entered, &fixture.preparation.release)),
+                "engine" => Some((&engine_start.entered, &engine_start.release)),
+                _ => None,
+            };
+            let mut starting = Some(starting);
+            if let Some((entered, _)) = barrier {
+                tokio::time::timeout(Duration::from_secs(2), entered.notified()).await.unwrap();
+                assert_eq!(fixture.backend.snapshot().dictation.phase, DictationPhase::Starting);
+                assert!(!starting.as_ref().unwrap().is_finished());
+            } else {
+                starting.take().unwrap().await.unwrap().unwrap();
+                assert_eq!(fixture.backend.snapshot().dictation.phase, DictationPhase::Recording);
+            }
+            let id = fixture.backend.snapshot().dictation.session_id.unwrap();
+            let early = matches!(stage, "host" | "credentials");
+            if early || stage == "insertion" {
+                assert!(engine.contexts().is_empty(), "engine must not have its snapshot at {stage}");
+            } else {
+                assert_eq!(engine.contexts().len(), 1);
+            }
+            fixture.backend.toggle_dictation_style_for_session(id).unwrap();
+            if let Some((_, release)) = barrier {
+                release.notify_one();
+                assert_eq!(tokio::time::timeout(Duration::from_secs(2), starting.take().unwrap())
+                    .await.unwrap().unwrap().unwrap(), id);
+            }
+            let expected = if initial_skip { "builtin.formal" } else { "builtin.light" };
+            let initial = if initial_skip { "builtin.light" } else { "builtin.formal" };
+            assert_eq!(engine.contexts()[0].polish.style_pack_id,
+                if early { expected } else { initial });
+            fixture.backend.stop_dictation_session(id).await.unwrap();
+            let mut expected_actions = vec![FixtureEngineAction::Start(id)];
+            if !early {
+                expected_actions.push(FixtureEngineAction::UpdateContext(id));
+            }
+            expected_actions.push(FixtureEngineAction::Finish(id));
+            assert_eq!(engine.actions(), expected_actions, "stage={stage}, initial_skip={initial_skip}");
+            assert_eq!(engine.contexts().last().unwrap().polish.style_pack_id, expected);
+            assert_eq!(fixture.backend.list_history().unwrap()[0].style_pack_id.as_deref(), Some(expected));
+
+            // A consumed update must not dirty a successor, and a stale request
+            // cannot alter its current choice or engine snapshot.
+            let next = fixture.backend.start_dictation().await.unwrap();
+            assert!(fixture.backend.toggle_dictation_style_for_session(id).is_err());
+            fixture.backend.stop_dictation_session(next).await.unwrap();
+            assert_eq!(engine.actions().iter().rev().take(2).cloned().collect::<Vec<_>>(),
+                [FixtureEngineAction::Finish(next), FixtureEngineAction::Start(next)]);
+            fixture.backend.shutdown().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn skip_auto_style_initial_choice_survives_host_and_credential_awaits() {
+    use openless_core::{BackendEventKind, DictationPhase, DictationStyleSelection as Selection};
+    use std::time::Duration;
+
+    for initial_skip in [true, false] {
+        for explicit in [false, true] {
+            for hotkey in [false, true] {
+                let engine = FixtureDictationEngine::successful("spoken", "polished");
+                let fixture = Fixture::with_engine(|_| Arc::new(engine.clone())).await;
+                fixture.focus.lock().unwrap().current = "VS Code";
+                fixture.host_capture.armed.store(true, Ordering::Release);
+                fixture.credentials.write(
+                    CredentialKey::new(CredentialNamespace::Llm, Some("ark".into()), "ark.api_key").unwrap(),
+                    SecretValue::new("fixture-key"),
+                ).await.unwrap();
+                let backend = &fixture.backend;
+                let polish = backend.create_style_pack(StylePack {
+                    name: "polish".into(), prompt: "frozen polish".into(), ..Default::default()
+                }).unwrap();
+                let automatic = backend.create_style_pack(StylePack {
+                    name: "automatic".into(), prompt: "frozen automatic".into(), ..Default::default()
+                }).unwrap();
+                backend.activate_style_pack(&polish.id).unwrap();
+                backend.set_app_style_assignment(AppStyleAssignment::Category {
+                    category: "coding".into(), style_pack_id: Some(automatic.id.clone()),
+                }).unwrap();
+                let mut prefs = backend.get_preferences();
+                prefs.translation_target_language = "English".into();
+                prefs.working_languages = vec!["简体中文".into()];
+                backend.update_settings(prefs, openless_core::SettingsUpdateOptions::STRICT,
+                    &openless_core::NoopSettingsRuntime).unwrap();
+                let mut events = backend.subscribe();
+                let starting = tokio::spawn({
+                    let backend = backend.clone();
+                    async move {
+                        let options = DictationStartOptions {
+                            skip_auto_style: initial_skip,
+                            style_pack_id: explicit.then(|| "builtin.formal".into()),
+                            ..Default::default()
+                        };
+                        if hotkey {
+                            match backend.dispatch_dictation_hotkey_edge_with_options(
+                                DictationHotkeyEdge::Pressed {
+                                    press_id: 1, at: std::time::Instant::now(),
+                                },
+                                options,
+                            ).await? {
+                                CliDispatchOutcome::DictationStarted(id) => Ok(id),
+                                other => panic!("expected started session, got {other:?}"),
+                            }
+                        } else {
+                            backend.start_dictation_with_options(options).await
+                        }
+                    }
+                });
+                // These signals originate inside the real capture/provider futures.
+                // No state is fabricated, and the engine cannot start past either gate.
+                tokio::time::timeout(Duration::from_secs(2), fixture.host_capture.entered.notified())
+                    .await.unwrap();
+                let snapshot = backend.snapshot().dictation;
+                let id = snapshot.session_id.unwrap();
+                assert_eq!(snapshot.phase, DictationPhase::Starting);
+                assert_eq!(snapshot.skip_auto_style, initial_skip);
+                let initial = if initial_skip { Selection::SkipAuto } else { Selection::Automatic };
+                let target = backend.dictation_style_target().unwrap();
+                assert_eq!(target.selection, initial);
+                assert_eq!(target.skip_auto_style, initial_skip);
+                assert!(target.style_pack_id.is_none());
+                assert!(!starting.is_finished());
+                assert!(engine.contexts().is_empty());
+                let mut published_starting = false;
+                while let Ok(event) = events.try_recv() {
+                    match event.kind {
+                        BackendEventKind::DictationStateChanged(state)
+                            if state.phase == DictationPhase::Starting => {
+                            assert_eq!(state.session_id, Some(id));
+                            assert_eq!(state.skip_auto_style, initial_skip);
+                            published_starting = true;
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(published_starting, "first Starting feedback must show the initial choice");
+
+                let expected = if initial_skip { Selection::Automatic } else { Selection::SkipAuto };
+                assert_eq!(backend.toggle_dictation_style_for_session(id).unwrap().selection, expected);
+                assert_eq!(backend.snapshot().dictation.skip_auto_style, !initial_skip);
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                fixture.host_capture.release.notify_one();
+                tokio::time::timeout(Duration::from_secs(2), fixture.credentials.entered.notified())
+                    .await.unwrap();
+                assert_eq!(backend.dictation_style_target().unwrap().selection, expected);
+                assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Starting);
+                assert!(engine.contexts().is_empty());
+                // Absolute requests and toggles must apply in call order, including
+                // across separate startup awaits. A stale session must not change it.
+                assert!(backend.update_dictation_style(SessionId::new(), initial.clone()).is_err());
+                assert_eq!(backend.update_dictation_style(id, initial.clone()).unwrap().selection, initial);
+                assert_eq!(backend.toggle_dictation_style_for_session(id).unwrap().selection, expected);
+                fixture.credentials.release.notify_one();
+                assert_eq!(tokio::time::timeout(Duration::from_secs(2), starting)
+                    .await.unwrap().unwrap().unwrap(), id);
+                let expected_id = if expected == Selection::SkipAuto {
+                    polish.id.as_str()
+                } else if explicit {
+                    "builtin.formal"
+                } else {
+                    automatic.id.as_str()
+                };
+                let target = backend.dictation_style_target().unwrap();
+                assert_eq!(target.selection, expected);
+                assert_eq!(target.style_pack_id.as_deref(), Some(expected_id));
+                assert!(backend.snapshot().dictation.translation_active);
+                backend.stop_dictation_session(id).await.unwrap();
+                let contexts = engine.contexts();
+                assert!(!contexts.is_empty());
+                assert!(contexts.iter().all(|context| {
+                    context.polish.style_pack_id == expected_id
+                        && context.polish.translation_active
+                }));
+                let history = backend.list_history().unwrap();
+                assert_eq!(history[0].style_pack_id.as_deref(), Some(expected_id));
+                assert!(history[0].translation_active);
+                // The next ordinary session starts from its own default intent.
+                let next = backend.start_dictation().await.unwrap();
+                assert_eq!(backend.dictation_style_target().unwrap().selection, Selection::Automatic);
+                assert!(!backend.snapshot().dictation.translation_active);
+                assert!(backend.toggle_dictation_style_for_session(id).is_err());
+                backend.cancel_dictation(Some(next)).await.unwrap();
+                backend.shutdown().await.unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn skip_auto_style_starting_toggle_and_picker_keep_frozen_alternatives() {
+    use openless_core::DictationStyleSelection as Selection;
+    let engine = FixtureDictationEngine::successful("spoken", "polished");
+    let fixture = Fixture::with_engine(|_| Arc::new(engine.clone())).await;
+    fixture.focus.lock().unwrap().current = "VS Code";
+    fixture.credentials.write(
+        CredentialKey::new(CredentialNamespace::Llm, Some("ark".into()), "ark.api_key").unwrap(),
+        SecretValue::new("fixture-key"),
+    ).await.unwrap();
+    let backend = &fixture.backend;
+    let polish = backend.create_style_pack(StylePack {
+        name: "polish".into(), prompt: "frozen polish".into(), ..Default::default()
+    }).unwrap();
+    let automatic = backend.create_style_pack(StylePack {
+        name: "automatic".into(), prompt: "frozen automatic".into(), ..Default::default()
+    }).unwrap();
+    backend.activate_style_pack(&polish.id).unwrap();
+    backend.set_app_style_assignment(AppStyleAssignment::Category {
+        category: "coding".into(), style_pack_id: Some(automatic.id.clone()),
+    }).unwrap();
+    let starting = tokio::spawn(start(backend.clone(), 0));
+    fixture.credentials.entered.notified().await;
+    let id = backend.snapshot().dictation.session_id.unwrap();
+    backend.toggle_dictation_style_for_session(id).unwrap();
+    fixture.credentials.release.notify_one();
+    assert_eq!(starting.await.unwrap().unwrap(), id);
+    assert_eq!(backend.dictation_style_target().unwrap().style_pack_id, Some(polish.id.clone()));
+    backend.activate_style_pack("builtin.raw").unwrap();
+    let mut edited = polish.clone();
+    edited.prompt = "edited after capture".into();
+    backend.update_style_pack(edited).unwrap();
+    let restored = backend.toggle_dictation_style_for_session(id).unwrap();
+    assert!(!restored.skip_auto_style);
+    assert_eq!(restored.style_pack_id, Some(automatic.id.clone()));
+    let selected = backend.update_dictation_style(id, Selection::StylePack {
+        style_pack_id: polish.id.clone(),
+    }).unwrap();
+    assert_eq!(selected.style_pack_name.as_deref(), Some("polish"));
+    let wire = serde_json::to_value(selected).unwrap();
+    assert_eq!(wire["selection"]["mode"], "stylePack");
+    assert_eq!(wire["selection"]["stylePackId"], polish.id);
+    assert_eq!(wire["skipAutoStyle"], true);
+    assert!(backend.update_dictation_style(id, Selection::StylePack { style_pack_id: "missing".into() }).is_err());
+    assert!(backend.update_dictation_style(SessionId::new(), Selection::Automatic).is_err());
+    backend.stop_dictation_session(id).await.unwrap();
+    let contexts = engine.contexts();
+    assert!(contexts.last().unwrap().polish.style_system_prompt.contains("frozen polish"));
+    assert!(!contexts.last().unwrap().polish.style_system_prompt.contains("edited after capture"));
+    assert_eq!(backend.list_history().unwrap()[0].style_pack_id, Some(polish.id));
+    assert!(backend.toggle_dictation_style_for_session(id).is_err());
+    let next = backend.start_dictation().await.unwrap();
+    assert_eq!(backend.dictation_style_target().unwrap().selection, Selection::Automatic);
+    assert!(backend.toggle_dictation_style_for_session(id).is_err());
+    backend.cancel_dictation(Some(next)).await.unwrap();
+}
+
+#[tokio::test]
+async fn skip_auto_style_without_app_assignment_keeps_the_same_polish() {
+    let engine = FixtureDictationEngine::successful("spoken", "polished");
+    let fixture = Fixture::with_engine(|_| Arc::new(engine.clone())).await;
+    fixture.credentials.waited.store(true, Ordering::Release);
+    let id = fixture.backend.start_dictation().await.unwrap();
+    let before = engine.contexts()[0].polish.clone();
+    let updated = fixture.backend.toggle_dictation_style_for_session(id).unwrap();
+    assert!(updated.skip_auto_style);
+    assert_eq!(updated.style_pack_id.as_deref(), Some(before.style_pack_id.as_str()));
+    fixture.backend.stop_dictation_session(id).await.unwrap();
+    assert_eq!(engine.contexts().last().unwrap().polish, before);
 }
 
 async fn start(backend: Arc<OpenLessBackend>, route: u8) -> Result<SessionId, BackendError> {
@@ -333,7 +795,7 @@ async fn no_insertion_skips_target_capture_and_native_preparation() {
 }
 
 #[tokio::test]
-async fn ordinary_delayed_result_allows_stable_live_caret_and_ordered_sessions() {
+async fn skip_auto_style_parallel_segments_keep_live_caret_and_independent_styles() {
     use openless_core::{DictationEngine, EngineFailure, EngineProgressSink, EngineResult};
 
     struct DelayedResult {
@@ -343,25 +805,42 @@ async fn ordinary_delayed_result_allows_stable_live_caret_and_ordered_sessions()
         release: Arc<Notify>,
     }
     impl DictationEngine for DelayedResult {
-        fn start(&self, id: SessionId, context: Arc<DictationContext>, progress: Arc<dyn EngineProgressSink>)
-            -> BoxFuture<'static, Result<(), BackendError>> {
+        fn start(
+            &self,
+            id: SessionId,
+            context: Arc<DictationContext>,
+            progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
             self.inner.start(id, context, progress)
         }
         fn stop_recording(&self, _: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
             Box::pin(async { Ok(true) })
         }
-        fn finish(&self, id: SessionId, progress: Arc<dyn EngineProgressSink>)
-            -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+        fn finish(
+            &self,
+            id: SessionId,
+            progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
             let first = !self.finishing.swap(true, Ordering::AcqRel);
             let entered = self.entered.clone();
             let release = self.release.clone();
             let finishing = self.inner.finish(id, progress);
             Box::pin(async move {
-                if first { entered.notify_one(); release.notified().await; }
+                if first {
+                    entered.notify_one();
+                    release.notified().await;
+                }
                 finishing.await
             })
         }
-        fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> { self.inner.cancel(id) }
+        fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.inner.cancel(id)
+        }
+        fn update_context(
+            &self, id: SessionId, context: Arc<DictationContext>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.inner.update_context(id, context)
+        }
     }
 
     for (initial, moved, next_capture) in [
@@ -374,18 +853,38 @@ async fn ordinary_delayed_result_allows_stable_live_caret_and_ordered_sessions()
         let release = Arc::new(Notify::new());
         let engine = Arc::new(DelayedResult {
             inner: FixtureDictationEngine::successful("spoken", "retained result"),
-            finishing: AtomicBool::new(false), entered: entered.clone(), release: release.clone(),
+            finishing: AtomicBool::new(false),
+            entered: entered.clone(),
+            release: release.clone(),
         });
         let fixture = Fixture::with_position_engine(|_| engine, true).await;
         fixture.credentials.waited.store(true, Ordering::Release);
         fixture.focus.lock().unwrap().position = initial;
         let first = fixture.backend.start_dictation().await.unwrap();
-        let stopping = tokio::spawn({ let backend = fixture.backend.clone(); async move { backend.stop_dictation_session(first).await } });
-        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified()).await.unwrap();
+        fixture.backend.update_dictation_style(first, openless_core::DictationStyleSelection::StylePack {
+            style_pack_id: "builtin.formal".into(),
+        }).unwrap();
+        let stopping = tokio::spawn({
+            let backend = fixture.backend.clone();
+            async move { backend.stop_dictation_session(first).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
         fixture.focus.lock().unwrap().position = moved;
         let second = if next_capture {
             fixture.focus.lock().unwrap().current = "B";
-            Some(fixture.backend.start_dictation().await.unwrap())
+            let second = fixture.backend.start_dictation_with_options(DictationStartOptions {
+                skip_auto_style: true,
+                ..Default::default()
+            }).await.unwrap();
+            assert_eq!(fixture.backend.dictation_style_target().unwrap().selection,
+                openless_core::DictationStyleSelection::SkipAuto);
+            fixture.backend.update_dictation_style(second, openless_core::DictationStyleSelection::StylePack {
+                style_pack_id: "builtin.light".into(),
+            }).unwrap();
+            assert!(fixture.backend.toggle_dictation_style_for_session(first).is_err());
+            Some(second)
         } else {
             None
         };
@@ -393,16 +892,37 @@ async fn ordinary_delayed_result_allows_stable_live_caret_and_ordered_sessions()
         let result = stopping.await.unwrap().unwrap();
         assert_eq!(result.session_id, first);
         assert_eq!(fixture.focus.lock().unwrap().delivered.len(), 1);
-        assert_eq!(fixture.focus.lock().unwrap().delivered_positions,
-            moved.into_iter().collect::<Vec<_>>());
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered_positions,
+            moved.into_iter().collect::<Vec<_>>()
+        );
         if let Some(second) = second {
-            assert_eq!(fixture.backend.snapshot().dictation.session_id, Some(second));
-            fixture.backend.stop_dictation_session(second).await.unwrap();
-            assert_eq!(fixture.focus.lock().unwrap().delivered, [
-                ("A", "retained result".into()), ("B", "retained result".into()),
-            ]);
+            assert_eq!(
+                fixture.backend.snapshot().dictation.session_id,
+                Some(second)
+            );
+            fixture
+                .backend
+                .stop_dictation_session(second)
+                .await
+                .unwrap();
+            let history = fixture.backend.list_history().unwrap();
+            assert_eq!(history.iter().find(|row| row.id == first.to_string()).unwrap().style_pack_id.as_deref(), Some("builtin.formal"));
+            assert_eq!(history.iter().find(|row| row.id == second.to_string()).unwrap().style_pack_id.as_deref(), Some("builtin.light"));
+            assert_eq!(
+                fixture.focus.lock().unwrap().delivered,
+                [
+                    ("A", "retained result".into()),
+                    ("B", "retained result".into()),
+                ]
+            );
         }
-        assert!(fixture.backend.list_history().unwrap().iter().all(|row| row.error_code.is_none()));
+        assert!(fixture
+            .backend
+            .list_history()
+            .unwrap()
+            .iter()
+            .all(|row| row.error_code.is_none()));
     }
 }
 
@@ -444,7 +964,7 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             assert_eq!(self.owner.swap(number, Ordering::SeqCst), 0);
             let owner = self.owner.clone();
             Box::pin(async move {
-                consumer.consume_pcm_chunk(&[number as u8, 1]);
+                consumer.consume_pcm_chunk(&[number as u8, 1].repeat(1_600));
                 consumer.consume_pcm_chunk(&[number as u8, 2]);
                 Ok(Box::new(Recording {
                     owner,
@@ -616,13 +1136,27 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
         };
 
         let epoch = std::time::Instant::now() - std::time::Duration::from_secs(1);
-        let first = match backend.dispatch_dictation_hotkey_edge_with_options(
-            DictationHotkeyEdge::Pressed { press_id: 101, at: epoch }, options.clone()).await.unwrap() {
-                CliDispatchOutcome::DictationStarted(id) => id, other => panic!("{other:?}"),
-            };
-        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
-            press_id: 101, at: epoch + std::time::Duration::from_millis(40),
-        }).await.unwrap();
+        let first = match backend
+            .dispatch_dictation_hotkey_edge_with_options(
+                DictationHotkeyEdge::Pressed {
+                    press_id: 101,
+                    at: epoch,
+                },
+                options.clone(),
+            )
+            .await
+            .unwrap()
+        {
+            CliDispatchOutcome::DictationStarted(id) => id,
+            other => panic!("{other:?}"),
+        };
+        backend
+            .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+                press_id: 101,
+                at: epoch + std::time::Duration::from_millis(40),
+            })
+            .await
+            .unwrap();
         backend
             .toggle_dictation_translation_for_session(first)
             .unwrap();
@@ -631,18 +1165,47 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             .unwrap();
         let stopping = tokio::spawn({
             let backend = backend.clone();
-            async move { backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Pressed { press_id: 102, at: epoch + std::time::Duration::from_secs(1) }).await }
+            async move {
+                backend
+                    .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Pressed {
+                        press_id: 102,
+                        at: epoch + std::time::Duration::from_secs(1),
+                    })
+                    .await
+            }
         });
         tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified())
             .await
             .unwrap();
         assert_eq!(owner.load(Ordering::SeqCst), 0);
-        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id: 102, at: epoch + std::time::Duration::from_millis(1040) }).await.unwrap();
-        let second = match backend.dispatch_dictation_hotkey_edge_with_options(
-            DictationHotkeyEdge::Pressed { press_id: 103, at: epoch + std::time::Duration::from_millis(1100) }, options).await.unwrap() {
-                CliDispatchOutcome::DictationStarted(id) => id, other => panic!("rapid successor was lost: {other:?}"),
-            };
-        backend.dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id: 103, at: epoch + std::time::Duration::from_millis(1140) }).await.unwrap();
+        backend
+            .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+                press_id: 102,
+                at: epoch + std::time::Duration::from_millis(1040),
+            })
+            .await
+            .unwrap();
+        let second = match backend
+            .dispatch_dictation_hotkey_edge_with_options(
+                DictationHotkeyEdge::Pressed {
+                    press_id: 103,
+                    at: epoch + std::time::Duration::from_millis(1100),
+                },
+                options,
+            )
+            .await
+            .unwrap()
+        {
+            CliDispatchOutcome::DictationStarted(id) => id,
+            other => panic!("rapid successor was lost: {other:?}"),
+        };
+        backend
+            .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+                press_id: 103,
+                at: epoch + std::time::Duration::from_millis(1140),
+            })
+            .await
+            .unwrap();
         backend
             .toggle_dictation_translation_for_session(second)
             .unwrap();
@@ -650,9 +1213,11 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             .toggle_dictation_translation_for_session(first)
             .is_err());
         assert_eq!(owner.load(Ordering::SeqCst), 2);
+        let mut expected_second_prefix = [2u8, 1].repeat(1_600);
+        expected_second_prefix.extend_from_slice(&[2, 2]);
         assert_eq!(
             *sessions.lock().unwrap()[1].1.pcm.lock().unwrap(),
-            [2, 1, 2, 2]
+            expected_second_prefix
         );
         release.notify_one();
         let first_result = tokio::time::timeout(std::time::Duration::from_secs(3), stopping)
@@ -660,7 +1225,9 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             .unwrap()
             .unwrap()
             .unwrap();
-        assert!(matches!(first_result, CliDispatchOutcome::DictationCompleted(ref result) if result.inserted == DictationInsertStatus::Inserted));
+        assert!(
+            matches!(first_result, CliDispatchOutcome::DictationCompleted(ref result) if result.inserted == DictationInsertStatus::Inserted)
+        );
         assert_eq!(
             fixture.focus.lock().unwrap().delivered,
             [("VS Code", "polished-first".into())]
@@ -678,11 +1245,24 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
             "finishing A must not stop B's microphone"
         );
 
-        if move_second { fixture.focus.lock().unwrap().position = Some((88, 0)); }
-        assert_eq!(backend.stop_dictation_session(second).await.unwrap().inserted, DictationInsertStatus::Inserted);
-        assert_eq!(fixture.focus.lock().unwrap().delivered, [
-            ("VS Code", "polished-first".into()), ("VS Code", "translated-second".into())
-        ]);
+        if move_second {
+            fixture.focus.lock().unwrap().position = Some((88, 0));
+        }
+        assert_eq!(
+            backend
+                .stop_dictation_session(second)
+                .await
+                .unwrap()
+                .inserted,
+            DictationInsertStatus::Inserted
+        );
+        assert_eq!(
+            fixture.focus.lock().unwrap().delivered,
+            [
+                ("VS Code", "polished-first".into()),
+                ("VS Code", "translated-second".into())
+            ]
+        );
         assert_eq!(owner.load(Ordering::SeqCst), 0);
         {
             let sessions = sessions.lock().unwrap();
@@ -690,8 +1270,12 @@ async fn overlapping_pipeline_preserves_audio_modes_and_confirmed_target_progres
                 sessions.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
                 [first, second]
             );
-            assert_eq!(*sessions[0].1.pcm.lock().unwrap(), [1, 1, 1, 2, 1, 3]);
-            assert_eq!(*sessions[1].1.pcm.lock().unwrap(), [2, 1, 2, 2, 2, 3]);
+            let mut expected_first = [1u8, 1].repeat(1_600);
+            expected_first.extend_from_slice(&[1, 2, 1, 3]);
+            let mut expected_second = [2u8, 1].repeat(1_600);
+            expected_second.extend_from_slice(&[2, 2, 2, 3]);
+            assert_eq!(*sessions[0].1.pcm.lock().unwrap(), expected_first);
+            assert_eq!(*sessions[1].1.pcm.lock().unwrap(), expected_second);
         }
         assert_eq!(
             *calls.lock().unwrap(),
@@ -747,10 +1331,22 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
                 "polished"
             };
             let output = if system.contains(openless_core::POLISH_TRANSLATE_TGT_MARKER) {
-                format!("{}\n{output}\n{}\n{output}", openless_core::POLISH_TRANSLATE_SRC_MARKER, openless_core::POLISH_TRANSLATE_TGT_MARKER)
-            } else { output.to_owned() };
+                format!(
+                    "{}\n{output}\n{}\n{output}",
+                    openless_core::POLISH_TRANSLATE_SRC_MARKER,
+                    openless_core::POLISH_TRANSLATE_TGT_MARKER
+                )
+            } else {
+                output.to_owned()
+            };
             let (mime, response) = if payload["stream"] == true {
-                ("text/event-stream", format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"content":output},"finish_reason":null}]})))
+                (
+                    "text/event-stream",
+                    format!(
+                        "data: {}\n\ndata: [DONE]\n\n",
+                        serde_json::json!({"choices":[{"delta":{"content":output},"finish_reason":null}]})
+                    ),
+                )
             } else {
                 (
                     "application/json",
@@ -766,11 +1362,11 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
 
     let fixture = Fixture::with_engine(|credentials| {
         Arc::new(PipelineDictationEngine::new(
-            Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
-            Arc::new(FixtureTranscriptionEngine::successful(
-                USER_EXAMPLE,
-                500,
+            Arc::new(FixtureAudioRecorder::new(
+                vec![[1, 0, 2, 0].repeat(800)],
+                vec![],
             )),
+            Arc::new(FixtureTranscriptionEngine::successful(USER_EXAMPLE, 500)),
             Arc::new(SharedCloudTextPolisher::new(credentials)),
         ))
     })
@@ -834,9 +1430,24 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
         assert_eq!(system.matches("当前应用：").count(), 1);
         assert!(!system.contains("# 输入场景参考"));
         assert!(system.find("本次输入场景：").unwrap() < system.find(marker).unwrap());
-        assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains(USER_EXAMPLE));
-        assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
-        assert!(system.find(marker).unwrap() < system.find(openless_core::DICTATION_REVISION_RULES).unwrap());
+        assert!(
+            payload["messages"].as_array().unwrap().last().unwrap()["content"]
+                .as_str()
+                .unwrap()
+                .contains(USER_EXAMPLE)
+        );
+        assert_eq!(
+            system
+                .matches(openless_core::DICTATION_REVISION_RULES)
+                .count(),
+            1
+        );
+        assert!(
+            system.find(marker).unwrap()
+                < system
+                    .find(openless_core::DICTATION_REVISION_RULES)
+                    .unwrap()
+        );
         if marker == "CODING-STYLE" {
             assert!(payload["messages"][0]["content"]
                 .as_str()
@@ -868,7 +1479,8 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
     assert_eq!(result.polished_text, "polished");
     let first_payload = payloads.try_recv().unwrap();
     let first_system = first_payload["messages"][0]["content"].as_str().unwrap();
-    assert!(first_system.starts_with("当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"));
+    assert!(first_system
+        .starts_with("当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"));
     assert!(first_system.contains("应用主要用途：fixture editor context"));
     assert!(first_system.contains("当前输入位置：代码编辑区（可信控件标签）"));
     expect_request(first_payload, "CODING-STYLE");
@@ -896,21 +1508,29 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
         (None, current.id.as_str(), "MANUAL-STYLE"),
         (Some(mail.id.clone()), mail.id.as_str(), "MAIL-STYLE"),
     ] {
-        backend.start_dictation_with_options(DictationStartOptions {
-            front_app: Some("Caller supplied context".into()),
-            style_pack_id,
-            ..Default::default()
-        }).await.unwrap();
+        backend
+            .start_dictation_with_options(DictationStartOptions {
+                front_app: Some("Caller supplied context".into()),
+                style_pack_id,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         let result = backend.stop_dictation().await.unwrap();
         let payload = payloads.try_recv().unwrap();
         let system = payload["messages"][0]["content"].as_str().unwrap();
-        assert!(system.starts_with("当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"));
+        assert!(system.starts_with(
+            "当前应用：VS Code\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程"
+        ));
         assert!(system.contains("当前输入位置：代码编辑区（可信控件标签）"));
         assert!(!system.contains("CHAT-STYLE"));
         assert!(!system.contains("CODING-STYLE"));
         expect_request(payload, marker);
         let history = backend.list_history().unwrap();
-        let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.id == result.session_id.to_string())
+            .unwrap();
         assert_eq!(entry.style_pack_id.as_deref(), Some(expected_pack));
     }
 
@@ -947,23 +1567,42 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
 
     // User membership changes affect the next capture, not an in-flight snapshot.
     fixture.focus.lock().unwrap().current = "VS Code";
-    backend.set_app_style_assignment(AppStyleAssignment::Membership {
-        member_id: "catalog:vscode".into(), category: Some("email".into()),
-    }).unwrap();
-    backend.start_dictation_with_options(DictationStartOptions {
-        style_pack_id: Some(current.id.clone()), ..Default::default()
-    }).await.unwrap();
-    backend.set_app_style_assignment(AppStyleAssignment::Membership {
-        member_id: "catalog:vscode".into(), category: Some("coding".into()),
-    }).unwrap();
+    backend
+        .set_app_style_assignment(AppStyleAssignment::Membership {
+            member_id: "catalog:vscode".into(),
+            category: Some("email".into()),
+        })
+        .unwrap();
+    backend
+        .start_dictation_with_options(DictationStartOptions {
+            style_pack_id: Some(current.id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    backend
+        .set_app_style_assignment(AppStyleAssignment::Membership {
+            member_id: "catalog:vscode".into(),
+            category: Some("coding".into()),
+        })
+        .unwrap();
     backend.stop_dictation().await.unwrap();
     let payload = payloads.try_recv().unwrap();
-    assert!(payload["messages"][0]["content"].as_str().unwrap().contains("应用分类：邮件"));
+    assert!(payload["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("应用分类：邮件"));
     expect_request(payload, "MANUAL-STYLE");
 
     let mut preferences = backend.get_preferences();
     preferences.cursor_context_enabled = false;
-    backend.update_settings(preferences, openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT, &openless_core::NoopSettingsRuntime).unwrap();
+    backend
+        .update_settings(
+            preferences,
+            openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+            &openless_core::NoopSettingsRuntime,
+        )
+        .unwrap();
     backend.start_dictation().await.unwrap();
     backend.stop_dictation().await.unwrap();
     let payload = payloads.try_recv().unwrap();
@@ -1080,29 +1719,57 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
         .contains("fixture coding context"));
     while payloads.try_recv().is_ok() {}
     // A real opted-in profile must not turn canonical Raw into a polish request.
-    let profile = backend.repositories().expression_profile.lock().unwrap().as_ref().unwrap().clone();
+    let profile = backend
+        .repositories()
+        .expression_profile
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .clone();
     for index in 0..10 {
-        profile.record(uuid::Uuid::new_v4(), 100 + index % 4,
-            openless_core::expression_observation::ExpressionSignal {
-                line_breaks: 1, exclamations: 0, terminal_punctuation: 0,
-            }).unwrap();
+        profile
+            .record(
+                uuid::Uuid::new_v4(),
+                100 + index % 4,
+                openless_core::expression_observation::ExpressionSignal {
+                    line_breaks: 1,
+                    exclamations: 0,
+                    terminal_punctuation: 0,
+                },
+            )
+            .unwrap();
     }
     let frozen_expression = openless_core::expression_observation::prompt_instructions(
-        &profile.stable_directions().unwrap()).unwrap();
+        &profile.stable_directions().unwrap(),
+    )
+    .unwrap();
     let mut preferences = backend.get_preferences();
     preferences.expression_learning_enabled = true;
-    backend.update_settings(preferences, openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
-        &openless_core::NoopSettingsRuntime).unwrap();
-    backend.start_dictation_with_options(DictationStartOptions {
-        translation_requested: true, ..Default::default()
-    }).await.unwrap();
+    backend
+        .update_settings(
+            preferences,
+            openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+            &openless_core::NoopSettingsRuntime,
+        )
+        .unwrap();
+    backend
+        .start_dictation_with_options(DictationStartOptions {
+            translation_requested: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     backend.stop_dictation().await.unwrap();
     let translated = payloads.try_recv().unwrap();
     let translated_system = translated["messages"][0]["content"].as_str().unwrap();
     assert!(translated_system.starts_with("当前应用："));
     assert!(translated_system.contains(openless_core::POLISH_TRANSLATE_TGT_MARKER));
     assert!(!translated_system.contains(&frozen_expression));
-    assert!(payloads.try_recv().is_err(), "translation must issue exactly one request");
+    assert!(
+        payloads.try_recv().is_err(),
+        "translation must issue exactly one request"
+    );
     for live in [true, false] {
         backend
             .start_dictation_with_options(DictationStartOptions {
@@ -1113,7 +1780,9 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
             .unwrap();
         let result = if live {
             let id = backend.snapshot().dictation.session_id.unwrap();
-            backend.toggle_dictation_translation_for_session(id).unwrap();
+            backend
+                .toggle_dictation_translation_for_session(id)
+                .unwrap();
             backend.stop_dictation().await.unwrap()
         } else {
             backend
@@ -1134,14 +1803,23 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
             &("VS Code", USER_EXAMPLE.into())
         );
         let history = backend.list_history().unwrap();
-        let entry = history.iter().find(|entry| entry.id == result.session_id.to_string()).unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.id == result.session_id.to_string())
+            .unwrap();
         assert!(!entry.translation_active);
         assert_eq!(entry.style_pack_id.as_deref(), Some("builtin.raw"));
         assert_eq!(entry.final_text, USER_EXAMPLE);
     }
     backend.start_dictation().await.unwrap();
-    assert_eq!(backend.stop_dictation().await.unwrap().polished_text, USER_EXAMPLE);
-    assert!(payloads.try_recv().is_err(), "profile must not turn canonical Raw into a request");
+    assert_eq!(
+        backend.stop_dictation().await.unwrap().polished_text,
+        USER_EXAMPLE
+    );
+    assert!(
+        payloads.try_recv().is_err(),
+        "profile must not turn canonical Raw into a request"
+    );
     let custom_raw = backend
         .create_style_pack(StylePack {
             name: "CUSTOM-RAW".into(),
@@ -1156,32 +1834,63 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
             style_pack_id: Some(custom_raw.id),
         })
         .unwrap();
-    let id = backend.start_dictation_with_options(DictationStartOptions {
-        translation_requested: true, ..Default::default()
-    }).await.unwrap();
-    backend.toggle_dictation_translation_for_session(id).unwrap();
+    let id = backend
+        .start_dictation_with_options(DictationStartOptions {
+            translation_requested: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    backend
+        .toggle_dictation_translation_for_session(id)
+        .unwrap();
     assert_eq!(
         backend.stop_dictation().await.unwrap().polished_text,
         "polished"
     );
     let custom_payload = payloads.try_recv().unwrap();
-    assert!(custom_payload["messages"][0]["content"].as_str().unwrap().contains(&frozen_expression));
+    assert!(custom_payload["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains(&frozen_expression));
     expect_request(custom_payload, "CUSTOM-RAW");
-    assert!(payloads.try_recv().is_err(), "custom Raw must issue exactly one request");
+    assert!(
+        payloads.try_recv().is_err(),
+        "custom Raw must issue exactly one request"
+    );
 
     // Translation suppresses expression guidance; cancelling restores this capture's profile.
-    let id = backend.start_dictation_with_options(DictationStartOptions {
-        style_pack_id: Some(coding.id.clone()), translation_requested: true,
-        ..Default::default()
-    }).await.unwrap();
+    let id = backend
+        .start_dictation_with_options(DictationStartOptions {
+            style_pack_id: Some(coding.id.clone()),
+            translation_requested: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     backend.clear_expression_profile().unwrap();
-    backend.toggle_dictation_translation_for_session(id).unwrap();
+    backend
+        .toggle_dictation_translation_for_session(id)
+        .unwrap();
     backend.stop_dictation().await.unwrap();
     let restored = payloads.try_recv().unwrap();
-    assert!(restored["messages"][0]["content"].as_str().unwrap().contains(&frozen_expression));
-    assert_eq!(restored["messages"][0]["content"].as_str().unwrap().matches(&frozen_expression).count(), 1);
+    assert!(restored["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains(&frozen_expression));
+    assert_eq!(
+        restored["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .matches(&frozen_expression)
+            .count(),
+        1
+    );
     expect_request(restored, "CODING-STYLE");
-    assert!(payloads.try_recv().is_err(), "restored ordinary polish must issue exactly one request");
+    assert!(
+        payloads.try_recv().is_err(),
+        "restored ordinary polish must issue exactly one request"
+    );
 
     backend
         .set_app_style_assignment(AppStyleAssignment::App {
@@ -1217,40 +1926,77 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
         std::fs::read_to_string(fixture.directory.join("app-style-routing.json")).unwrap();
     assert!(!local_file.contains(USER_EXAMPLE));
     assert!(!local_file.contains("polished"));
-    let mut alias = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
+    let mut alias = backend
+        .get_style_pack(openless_core::BUILTIN_INTENT_ID)
+        .unwrap();
     alias.id = "fixture.official-alias".into();
     alias.kind = openless_core::StylePackKind::Imported;
     let alias = backend.create_style_pack(alias).unwrap();
     // Exercise the production start -> ASR -> request serialization path.
     // Fixture outputs only prove routing/serialization, never model semantics.
-    for id in ["builtin.light", "builtin.structured", "builtin.formal", openless_core::BUILTIN_INTENT_ID, &alias.id, &current.id] {
+    for id in [
+        "builtin.light",
+        "builtin.structured",
+        "builtin.formal",
+        openless_core::BUILTIN_INTENT_ID,
+        &alias.id,
+        &current.id,
+    ] {
         for translation_requested in [false, true] {
-            backend.start_dictation_with_options(DictationStartOptions {
-                style_pack_id: Some(id.into()),
-                translation_requested,
-                ..Default::default()
-            }).await.unwrap();
+            backend
+                .start_dictation_with_options(DictationStartOptions {
+                    style_pack_id: Some(id.into()),
+                    translation_requested,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
             let result = backend.stop_dictation().await.unwrap();
             let history = backend.list_history().unwrap();
-            assert_eq!(history.iter().find(|row| row.id == result.session_id.to_string())
-                .unwrap().style_pack_id.as_deref(), Some(id));
+            assert_eq!(
+                history
+                    .iter()
+                    .find(|row| row.id == result.session_id.to_string())
+                    .unwrap()
+                    .style_pack_id
+                    .as_deref(),
+                Some(id)
+            );
             let payload = payloads.try_recv().unwrap();
             let system = payload["messages"][0]["content"].as_str().unwrap();
             assert!(system.starts_with("当前应用：VS Code"));
             let pack = backend.get_style_pack(id).unwrap();
-            assert!(system.find("本次输入场景：").unwrap() < system.find(pack.prompt.split("{{HOTWORDS}}").next().unwrap().trim()).unwrap());
-            assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1, "{id}, translation={translation_requested}");
+            assert!(
+                system.find("本次输入场景：").unwrap()
+                    < system
+                        .find(pack.prompt.split("{{HOTWORDS}}").next().unwrap().trim())
+                        .unwrap()
+            );
+            assert_eq!(
+                system
+                    .matches(openless_core::DICTATION_REVISION_RULES)
+                    .count(),
+                1,
+                "{id}, translation={translation_requested}"
+            );
             if id == openless_core::BUILTIN_INTENT_ID || id == alias.id {
-                assert!(pack.prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
-                assert_eq!(pack.version, "1.3.0");
+                assert!(pack
+                    .prompt
+                    .ends_with(openless_core::DICTATION_REVISION_RULES));
+                assert_eq!(pack.version, "1.4.0");
                 assert_eq!(pack.prompt, pack.selection_prompt);
                 let body = openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[]);
                 assert_eq!(system.matches(body.as_str()).count(), 1);
-                assert!(system.contains("同一个整体问题中分别表达目标"));
+                assert!(system.contains("内部确认最终意思"));
                 assert!(!system.contains("输出会原样替换该选区"));
                 assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
             }
-            assert!(payload["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains(USER_EXAMPLE));
+            assert!(
+                payload["messages"].as_array().unwrap().last().unwrap()["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains(USER_EXAMPLE)
+            );
             if translation_requested {
                 assert!(system.contains("[[OPENLESS_TRANSLATION]]"));
             }

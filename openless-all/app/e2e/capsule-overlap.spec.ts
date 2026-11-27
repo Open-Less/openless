@@ -30,7 +30,8 @@ test('processing lobe stays joined to recording through transcript, menu and job
     const upper = (await lobe.boundingBox())!;
     expect(upper.height).toBeCloseTo(22, 1);
     expect(lower.y).toBeCloseTo(anchor!.y, 1);
-    expect(upper.x + upper.width / 2 - (lower.x + lower.width / 2)).toBeCloseTo(0, 1);
+    // WebKit rounds centered, text-sized boxes to fractional CSS pixels.
+    expect(Math.abs(upper.x + upper.width / 2 - (lower.x + lower.width / 2))).toBeLessThanOrEqual(0.5);
     expect(upper.y + upper.height - lower.y).toBeCloseTo(4, 1);
   };
   await expect(lobe).toContainText('处理中');
@@ -213,7 +214,7 @@ test('processing foreground publishes the settled rear hit region and cancels on
   const foreground = page.locator('.ol-default-capsule');
   const r = (await rear.boundingBox())!, f = (await foreground.boundingBox())!;
   expect(r.height).toBeCloseTo(22, 1);
-  expect(r.x + r.width / 2).toBeCloseTo(f.x + f.width / 2, 1);
+  expect(Math.abs(r.x + r.width / 2 - (f.x + f.width / 2))).toBeLessThanOrEqual(0.5);
   expect(r.y + r.height - f.y).toBeCloseTo(4, 1);
   await rear.click({ position: { x: r.width / 2, y: 8 } });
   await expect.poll(() => page.evaluate(() => (window as any).fixture.dictationActionArgs.at(-1)))

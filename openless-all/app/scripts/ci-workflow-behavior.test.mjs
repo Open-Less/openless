@@ -326,7 +326,9 @@ try {
     const jar = join(test.sdk, 'sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar');
     mkdirSync(dirname(jar), { recursive: true });
     writeFileSync(jar, 'fake');
-    const script = fileURLToPath(new URL('./sign-harmony-hap.py', import.meta.url));
+    const script = fileURLToPath(
+      new URL('../../harmony/scripts/sign-harmony-hap.py', import.meta.url),
+    );
     const source = `
 import contextlib, io, json, os, runpy, sys
 from types import SimpleNamespace

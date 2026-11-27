@@ -1,4 +1,4 @@
-import { normalizeAndroidOverlayTrigger } from '../../android/frontend/lib/androidTypes';
+import { normalizeAndroidOverlayTrigger } from '../../../android/frontend/lib/androidTypes';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(message);

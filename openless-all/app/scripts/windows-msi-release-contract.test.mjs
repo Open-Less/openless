@@ -118,7 +118,7 @@ assert.equal(smokeTooling.env.GH_TOKEN, '${{ github.token }}');
 assert.equal(smokeTooling.uses, undefined);
 assert.match(
   smokeTooling.run,
-  /\$scriptPath = 'openless-all\/app\/scripts\/windows-ime-install-smoke\.ps1'/,
+  /\$scriptPath = 'openless-all\/windows\/scripts\/windows-ime-install-smoke\.ps1'/,
 );
 assert.match(smokeTooling.run, /gh api "repos\/\$env:GITHUB_REPOSITORY\/contents\/\$scriptPath"/);
 assert.match(smokeTooling.run, /--method GET -f "ref=\$env:TOOLING_SHA" --jq '\.content'/);
@@ -146,9 +146,12 @@ for (const kind of ['nsis', 'msi']) {
   assert.match(smoke.run, new RegExp(kind.toUpperCase() + ' installer smoke failed'));
 }
 assert.doesNotMatch(smoke.run, /continue-on-error|SkipUninstall|exit 0/);
-const smokeSource = readFileSync(new URL('windows-ime-install-smoke.ps1', import.meta.url), 'utf8');
+const smokeSource = readFileSync(
+  new URL('../../windows/scripts/windows-ime-install-smoke.ps1', import.meta.url),
+  'utf8',
+);
 const wixSource = readFileSync(
-  new URL('../src-tauri/wix/openless-ime.wxs', import.meta.url),
+  new URL('../../windows/wix/openless-ime.wxs', import.meta.url),
   'utf8',
 );
 assert.match(
@@ -193,7 +196,9 @@ if (process.platform === 'win32') {
       '-ExecutionPolicy',
       'Bypass',
       '-File',
-      fileURLToPath(new URL('windows-ime-install-smoke.test.ps1', import.meta.url)),
+      fileURLToPath(
+        new URL('../../windows/scripts/windows-ime-install-smoke.test.ps1', import.meta.url),
+      ),
     ],
     { encoding: 'utf8' },
   );

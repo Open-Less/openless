@@ -44,6 +44,7 @@ pub enum DictationOutputTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationStartOptions {
     pub translation_requested: bool,
+    pub skip_auto_style: bool,
     pub audio_source: DictationAudioSource,
     pub insert_text: bool,
     pub output_target: DictationOutputTarget,
@@ -56,6 +57,7 @@ impl Default for DictationStartOptions {
     fn default() -> Self {
         Self {
             translation_requested: false,
+            skip_auto_style: false,
             audio_source: DictationAudioSource::Microphone,
             insert_text: true,
             output_target: DictationOutputTarget::ForegroundApp,
@@ -125,6 +127,7 @@ impl DictationProviderInvocations {
 pub struct DictationPolishContext {
     pub mode: PolishMode,
     pub style_pack_id: String,
+    pub style_pack_name: String,
     pub style_system_prompt: String,
     /// Frozen target metadata, composed only at request time; never part of Raw identity.
     pub input_scene_prefix: Option<String>,
@@ -206,6 +209,9 @@ pub struct RecordingPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationContext {
+    /// Owned start-time alternatives. Later preference, routing and pack edits
+    /// cannot change either side of the toggle or a submitted parallel segment.
+    pub(crate) style_choices: DictationStyleChoices,
     pub(crate) input_app: Option<crate::app_style_routing::InputApp>,
     /// Annotated built-in Raw prompt, captured before any later prompt changes.
     pub(crate) raw_passthrough_prompt: Option<String>,
@@ -235,6 +241,27 @@ pub struct DictationContext {
     pub omni: ProviderInvocation,
     pub polish: DictationPolishContext,
     pub insertion: DictationInsertionContext,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum DictationStyleSelection {
+    #[default]
+    Automatic,
+    SkipAuto,
+    StylePack {
+        #[serde(rename = "stylePackId")]
+        style_pack_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DictationStyleChoices {
+    pub automatic: StylePack,
+    pub polish: StylePack,
+    pub available: Vec<StylePack>,
+    pub automatic_prior_turns: Vec<PolishHistoryTurn>,
+    pub selection: DictationStyleSelection,
 }
 
 impl Default for DictationContext {
@@ -342,7 +369,15 @@ impl DictationContext {
         let debug_keep_processed =
             preferences.record_audio_for_debug && (preferences.debug_archive_processed || debug_both_off);
         let debug_keep_raw = preferences.record_audio_for_debug && preferences.debug_archive_raw;
+        let automatic_prior_turns = prior_turns.clone();
         Self {
+            style_choices: DictationStyleChoices {
+                automatic: style_pack.clone(),
+                polish: style_pack.clone(),
+                available: vec![style_pack.clone()],
+                automatic_prior_turns,
+                selection: DictationStyleSelection::Automatic,
+            },
             input_app: None,
             audio_source: options.audio_source,
             output_target: options.output_target,
@@ -405,6 +440,7 @@ impl DictationContext {
                 input_scene_prefix: None,
                 mode: style_pack.base_mode,
                 style_pack_id: style_pack.id.clone(),
+                style_pack_name: style_pack.name.clone(),
                 style_system_prompt: crate::style_packs::dictation_style_prompt(style_pack),
                 hotwords,
                 working_languages: preferences.working_languages.clone(),
@@ -471,6 +507,36 @@ impl DictationContext {
         let mut next = self.clone();
         next.recording.capture_generation = generation;
         next
+    }
+
+    pub(crate) fn with_style_selection(
+        &self,
+        selection: DictationStyleSelection,
+    ) -> Result<Self, crate::BackendError> {
+        let pack = match &selection {
+            DictationStyleSelection::Automatic => &self.style_choices.automatic,
+            DictationStyleSelection::SkipAuto => &self.style_choices.polish,
+            DictationStyleSelection::StylePack { style_pack_id } => self.style_choices.available
+                .iter().find(|pack| pack.id == *style_pack_id && pack.enabled)
+                .ok_or_else(|| crate::BackendError::new(crate::BackendErrorCode::InvalidArgument,
+                    "style is not available in this recording"))?,
+        };
+        let mut updated = self.clone();
+        updated.style_choices.selection = selection;
+        updated.polish.mode = pack.base_mode;
+        updated.polish.style_pack_id = pack.id.clone();
+        updated.polish.style_pack_name = pack.name.clone();
+        updated.polish.style_system_prompt = crate::style_packs::dictation_style_prompt(pack);
+        // History turns belong to the original style. Never feed them into
+        // a newly selected style or re-read mutable history mid-recording.
+        updated.polish.prior_turns = if pack.id == self.style_choices.automatic.id {
+            self.style_choices.automatic_prior_turns.clone()
+        } else { Vec::new() };
+        if updated.unconfigured_llm_raw.is_some() {
+            updated.unconfigured_llm_raw = Some((updated.polish.mode, updated.polish.style_system_prompt.clone()));
+        }
+        updated.restore_or_apply_unconfigured_llm_raw();
+        Ok(updated)
     }
 
     pub fn with_output_target(&self, target: DictationOutputTarget) -> Self {

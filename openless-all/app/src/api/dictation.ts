@@ -21,11 +21,17 @@ export function reportMainCaptionTrace(sessionId: string, sequence: number, stag
   return invokeOrPreview<void>('report_main_caption_trace', { sessionId, sequence, stage }, () => {});
 }
 
+export interface CapsuleProcessingJob {
+  sessionId: string;
+  translationActive?: boolean;
+}
+
 export function getCapsuleAuxiliarySnapshot() {
   return invokeOrPreview<{
     suggestions: PendingCorrection[];
     fallback: InsertFallbackCardPayload | null;
-  }>('get_capsule_auxiliary_snapshot', undefined, () => ({ suggestions: [], fallback: null }));
+    processing: CapsuleProcessingJob[];
+  }>('get_capsule_auxiliary_snapshot', undefined, () => ({ suggestions: [], fallback: null, processing: [] }));
 }
 
 export function createCapsuleSubscriptions() {
@@ -35,6 +41,8 @@ export function createCapsuleSubscriptions() {
     dispose: events.dispose,
     state: (onPayload: (payload: CapsulePayload) => void) =>
       events.listen('capsule:state', onPayload, 'window'),
+    jobs: (onPayload: (payload: CapsuleProcessingJob[]) => void) =>
+      events.listen('dictation:jobs', onPayload, 'app'),
     transcript: (onPayload: (payload: BackendEvent) => void) =>
       events.listen('backend:event', onPayload, 'app'),
     preferences: (onPayload: (payload: UserPreferences) => void) =>

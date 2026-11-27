@@ -474,9 +474,9 @@ pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
 
 pub const BUILTIN_INTENT_ID: &str = "openless.intent-reconstruction";
 
-// Immutable upstream payload: also the comparison baseline for safe adoption.
+// Immutable shipped payloads authorize safe adoption; never edit these snapshots.
 pub(crate) fn original_intent_pack() -> StylePack {
-    serde_json::from_str(include_str!("builtin_styles/intent-reconstruction-v1.json"))
+    serde_json::from_str(include_str!("builtin_styles/releases/intent-reconstruction-1.0.0.json"))
         .expect("bundled upstream style pack")
 }
 
@@ -491,15 +491,26 @@ pub(crate) fn released_intent_v1_2_pack() -> StylePack {
     pack
 }
 
-/// Both ordinary operations read one canonical authored body. The operation-specific
-/// envelopes and translation protocols remain in the existing request composer.
-pub fn builtin_intent_pack() -> StylePack {
+pub(crate) fn released_intent_v1_3_pack() -> StylePack {
     let mut pack = original_intent_pack();
     pack.kind = StylePackKind::Builtin;
     pack.version = "1.3.0".into();
-    let body = include_str!("builtin_styles/intent-reconstruction-shared-v1.md").trim_end();
+    let body = include_str!("builtin_styles/releases/intent-reconstruction-1.3.0.md").trim_end();
     pack.prompt = format!("{body}\n\n{DICTATION_REVISION_RULES}");
     pack.selection_prompt = pack.prompt.clone();
+    pack
+}
+
+/// The authored slots share one body, verified against the editable Markdown source.
+/// Runtime revision rules are appended once; dynamic data stays in the composer.
+pub fn builtin_intent_pack() -> StylePack {
+    let mut pack: StylePack =
+        serde_json::from_str(include_str!("builtin_styles/intent-reconstruction-v1.json"))
+            .expect("bundled current style pack");
+    pack.kind = StylePackKind::Builtin;
+    pack.prompt.push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
+    pack.selection_prompt
+        .push_str(&format!("\n\n{DICTATION_REVISION_RULES}"));
     pack
 }
 
@@ -581,6 +592,7 @@ pub(crate) fn is_known_intent_release(pack: &StylePack) -> bool {
         original_intent_pack(),
         released_intent_v1_1_pack(),
         released_intent_v1_2_pack(),
+        released_intent_v1_3_pack(),
         builtin_intent_pack(),
     ]
     .iter()

@@ -15,7 +15,7 @@
     "android": "tauri-mobile",
     "linux": "egui",
     "coreCallModel": "in-process typed Rust calls",
-    "workspaceIsolation": "root workspace contains openless-core and openless-linux-egui only; Tauri and backend compatibility tests use independent manifests and lockfiles"
+    "workspaceIsolation": "app workspace contains the shared Core/DSP/capsule crates, native-capsule, and the external linux/egui and harmony/rust members; Tauri and backend compatibility tests use independent manifests and lockfiles"
   },
   "commands": [
     "accept_pending_correction",
