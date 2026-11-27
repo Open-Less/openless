@@ -451,6 +451,7 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                     .map(|status| status.locale)
                     .unwrap_or_else(|_| inner.backend.config().locale.clone());
                 let message = match error.message.as_str() {
+                    "selectionPolishWriteUnconfirmed" => crate::selection::uncertain_write_message(&locale),
                     "selectionPolishNoSelection" | "selected text must not be empty" => {
                         "未选中内容"
                     }

@@ -25,6 +25,8 @@ mod clipboard_capture;
 mod target_position;
 #[path = "selection/direct_delivery.rs"]
 mod direct_delivery;
+#[path = "selection/bound_native.rs"]
+pub(crate) mod bound_native;
 #[cfg(target_os = "windows")]
 use clipboard_capture::ClipboardPollOutcome;
 
@@ -93,6 +95,7 @@ struct MacosSelectionTarget {
     front_app_pid: Option<i32>,
     dictation_window: Option<u32>,
     dictation_element: Option<std::sync::Arc<macos_ax::FocusedElement>>,
+    dictation_ax_window: Option<std::sync::Arc<macos_ax::FocusedElement>>,
 }
 
 /// Result of the final target/selection revalidation immediately before a
@@ -412,6 +415,8 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
             (None, Some(bundle)) => Some(bundle.to_string()),
             (None, None) => None,
         };
+        let element = macos_ax::capture_focused_element();
+        let ax_window = element.as_ref().and_then(|element| element.window());
         return SelectionInsertionTarget {
             dictation_position: std::sync::Arc::new(parking_lot::Mutex::new(crate::host_document::focused_input_position())),
             macos: Some(MacosSelectionTarget {
@@ -420,7 +425,8 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
                 bundle_id,
                 front_app_pid,
                 dictation_window: front_app_pid.and_then(macos_front_window_id),
-                dictation_element: macos_ax::capture_focused_element(),
+                dictation_element: element,
+                dictation_ax_window: ax_window,
             }),
             ..Default::default()
         };
@@ -570,7 +576,7 @@ pub(crate) fn selection_result_fallback(
 
 #[path = "selection/recovery_notice.rs"]
 mod recovery_notice;
-pub(crate) use recovery_notice::{capacity_failure_message, original_recovery_message};
+pub(crate) use recovery_notice::{capacity_failure_message, original_recovery_message, uncertain_write_message};
 
 /// Final native handoff. Successful selection writes never touch the clipboard.
 pub(crate) fn insert_selection_result(
@@ -585,16 +591,31 @@ pub(crate) fn insert_selection_result(
             let _delivery = crate::insertion::clipboard_delivery::lock();
             crate::host_document::replace_selection_direct(source_text, text, || {
                 selection_insertion_target_is_current(target)
-            })
+            }, target)
             .map(|()| openless_core::InsertOutcome::Inserted)
             .map_err(|reason| {
                 openless_core::BackendError::new(
-                    openless_core::BackendErrorCode::Platform,
+                    if reason == "selectionPolishWriteUnconfirmed" {
+                        openless_core::BackendErrorCode::OutcomeUnknown
+                    } else {
+                        openless_core::BackendErrorCode::Platform
+                    },
                     reason,
                 )
             })
         },
-        |_| selection_result_fallback(target, text),
+        |mut error| {
+            let fallback = selection_result_fallback(target, text);
+            if error.code == openless_core::BackendErrorCode::OutcomeUnknown {
+                error.details = Some(serde_json::json!({
+                    "original_saved": true,
+                    "result_copied": matches!(fallback, Ok(openless_core::InsertOutcome::CopiedFallback)),
+                }));
+                Err(error)
+            } else {
+                fallback
+            }
+        },
     )
 }
 
@@ -718,8 +739,57 @@ fn macos_target_is_current(target: &MacosSelectionTarget, pid: i32) -> bool {
                 && target
                     .dictation_element
                     .as_ref()
-                    .is_some_and(|element| element.is_current())
+                    .is_some_and(|element| {
+                        element.is_current() && target.dictation_ax_window.as_ref()
+                            .is_some_and(|window| element.belongs_to_window(window))
+                    })
         })
+}
+
+/// Host-private, non-Send borrow. Arc owners remain in SelectionInsertionTarget;
+/// neither Core, IPC nor a P5 caller can replace the borrowed native objects.
+#[cfg(target_os = "macos")]
+pub(crate) struct FrozenMacosTarget<'a> {
+    owner: &'a SelectionInsertionTarget,
+    control: &'a macos_ax::FocusedElement,
+    window: &'a macos_ax::FocusedElement,
+    pid: i32,
+    window_id: u32,
+    range: Option<(u64, u64)>,
+    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(target_os = "macos")]
+impl FrozenMacosTarget<'_> {
+    /// SAFETY: refs are borrowed only for the synchronous owner callback. The
+    /// caller must not release, retain, return or store them outside that callback.
+    pub(crate) unsafe fn ax_objects(&self) -> (*mut std::ffi::c_void, *mut std::ffi::c_void) {
+        (self.control.raw(), self.window.raw())
+    }
+    pub(crate) fn process_id(&self) -> i32 { self.pid }
+    pub(crate) fn window_id(&self) -> u32 { self.window_id }
+    pub(crate) fn range(&self) -> Option<(u64, u64)> { self.range }
+    pub(crate) fn is_current(&self) -> bool { native_input_target_is_current(self.owner) }
+}
+
+/// Only host_document should expose operations over this borrow: its read seam
+/// additionally enforces permissions/security and before/after identity fences.
+#[cfg(target_os = "macos")]
+pub(crate) fn borrow_frozen_macos_target<R>(
+    target: &SelectionInsertionTarget,
+    operation: impl for<'a> FnOnce(&FrozenMacosTarget<'a>) -> Result<R, String>,
+) -> Result<R, String> {
+    let captured = target.macos.as_ref().ok_or("selectionPolishTargetUnavailable")?;
+    let lease = FrozenMacosTarget {
+        owner: target,
+        control: captured.dictation_element.as_deref().ok_or("selectionPolishTargetUnavailable")?,
+        window: captured.dictation_ax_window.as_deref().ok_or("selectionPolishTargetUnavailable")?,
+        pid: captured.front_app_pid.ok_or("selectionPolishTargetUnavailable")?,
+        window_id: captured.dictation_window.ok_or("selectionPolishTargetUnavailable")?,
+        range: *target.dictation_position.lock(),
+        _thread_bound: std::marker::PhantomData,
+    };
+    operation(&lease)
 }
 
 /// Whether the target snapshot is sufficient to start a Selection Polish
@@ -1467,6 +1537,7 @@ mod macos_ax {
     extern "C" {
         fn AXUIElementCreateSystemWide() -> AxUiElementRef;
         fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
+        fn AXUIElementGetTypeID() -> usize;
         fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, seconds: f32) -> AxError;
         fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
         fn AXUIElementCopyAttributeValue(
@@ -1513,6 +1584,16 @@ mod macos_ax {
         }
     }
     impl FocusedElement {
+        pub(super) fn raw(&self) -> *mut c_void { self.0 as *mut c_void }
+        pub(super) fn window(&self) -> Option<std::sync::Arc<Self>> {
+            unsafe {
+                let value = element_attribute(self.0 as AxUiElementRef, b"AXWindow\0")?;
+                Some(std::sync::Arc::new(Self(value as usize)))
+            }
+        }
+        pub(super) fn belongs_to_window(&self, window: &Self) -> bool {
+            self.window().is_some_and(|current| current.same_as(window))
+        }
         pub(super) fn identity_hash(&self) -> usize {
             unsafe { CFHash(self.0 as CFTypeRef) }
         }
@@ -1530,7 +1611,7 @@ mod macos_ax {
             let system = AXUIElementCreateSystemWide();
             if system.is_null() { return None; }
             AXUIElementSetMessagingTimeout(system, 0.2);
-            let element = attribute(system, b"AXFocusedUIElement\0");
+            let element = element_attribute(system, b"AXFocusedUIElement\0");
             CFRelease(system as CFTypeRef);
             element.map(|element| std::sync::Arc::new(FocusedElement(element as usize)))
         }
@@ -1572,7 +1653,10 @@ mod macos_ax {
             let err = AXUIElementCopyAttributeValue(system, focused_attr, &mut focused);
             CFRelease(system as CFTypeRef);
             CFRelease(focused_attr);
-            if err != AX_ERROR_SUCCESS || focused.is_null() {
+            if err != AX_ERROR_SUCCESS || focused.is_null()
+                || CFGetTypeID(focused) != AXUIElementGetTypeID()
+            {
+                if !focused.is_null() { CFRelease(focused); }
                 CFRelease(selected_attr);
                 return None;
             }
@@ -1618,6 +1702,16 @@ mod macos_ax {
             if !value.is_null() {
                 CFRelease(value);
             }
+            None
+        }
+    }
+    unsafe fn element_attribute(element: AxUiElementRef, name: &'static [u8]) -> Option<CFTypeRef> {
+        let value = attribute(element, name)?;
+        if CFGetTypeID(value) == AXUIElementGetTypeID() {
+            AXUIElementSetMessagingTimeout(value as AxUiElementRef, 0.2);
+            Some(value)
+        } else {
+            CFRelease(value);
             None
         }
     }
@@ -1669,7 +1763,7 @@ mod macos_ax {
                 return Ok(None);
             }
             let _ = AXUIElementSetMessagingTimeout(system, 0.12);
-            let focused = attribute(system, b"AXFocusedUIElement\0");
+            let focused = element_attribute(system, b"AXFocusedUIElement\0");
             let Some(focused) = focused else {
                 CFRelease(system as CFTypeRef);
                 return Ok(None);
@@ -1732,7 +1826,7 @@ mod macos_ax {
                         break;
                     }
                 }
-                let Some(parent) = attribute(current as AxUiElementRef, b"AXParent\0") else {
+                let Some(parent) = element_attribute(current as AxUiElementRef, b"AXParent\0") else {
                     break;
                 };
                 if parent == current {

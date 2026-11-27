@@ -1180,6 +1180,31 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
 }
 
 #[tokio::test]
+async fn uncertain_native_write_preserves_both_texts_and_cannot_return_to_retryable_preview() {
+    let runtime = RecordingSelectionRuntime::new(" \toriginal\n ").with_apply_error(
+        BackendError::new(BackendErrorCode::OutcomeUnknown, "selectionPolishWriteUnconfirmed"),
+    );
+    let (backend, directory) = backend_with_selection(runtime);
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+    write_preferences(&backend, preferences);
+    backend.start().await.unwrap();
+    let id = backend.services().selection.begin_polish(SelectionPolishRequest {
+        selected_text: None, mode: PolishMode::Formal, instruction: None,
+    }).await.unwrap();
+    let error = backend.services().selection.confirm(id, None).await.unwrap_err();
+    assert_eq!(error.code, BackendErrorCode::OutcomeUnknown);
+    assert_eq!(backend.services().selection.snapshot().await.unwrap().phase, SelectionPhase::Failed);
+    let history = backend.list_history().unwrap();
+    assert_eq!(history[0].raw_transcript, " \toriginal\n ");
+    assert_eq!(history[0].final_text, "polished preview");
+    assert_eq!(history[0].error_code.as_deref(), Some("selectionPolishWriteUnconfirmed"));
+    assert!(backend.services().selection.confirm(id, None).await.is_err());
+    backend.shutdown().await.unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
 async fn cancelling_a_preview_preserves_one_original_and_the_existing_result() {
     let original = format!(" \t{} CANCEL_MIDDLE {}\n ", "字".repeat(9000), "尾".repeat(9000));
     let runtime = RecordingSelectionRuntime::new(&original);
