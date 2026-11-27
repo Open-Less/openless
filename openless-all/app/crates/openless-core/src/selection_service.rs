@@ -10,7 +10,7 @@ use crate::dictation_context::{
     DictationContext, DictationProviderInvocations, DictationStartOptions, ProviderInvocation,
 };
 use crate::domains::{
-    SelectionApi, SelectionCapture, SelectionPhase, SelectionPolishRequest,
+    SelectionApi, SelectionCapture, SelectionCaptureAuthorization, SelectionPhase, SelectionPolishRequest,
     SelectionRuntimeAdapter, SelectionSnapshot,
 };
 use crate::errors::{BackendError, BackendErrorCode};
@@ -30,6 +30,7 @@ use crate::{
 #[derive(Clone, Default)]
 struct SelectionState {
     snapshot: SelectionSnapshot,
+    capture_authorization: Option<SelectionCaptureAuthorization>,
     source_app: Option<String>,
     context: Option<Arc<DictationContext>>,
     started_at: Option<std::time::Instant>,
@@ -37,6 +38,14 @@ struct SelectionState {
     polish_ms: Option<u64>,
     llm_used: bool,
     reverting: bool,
+}
+
+impl SelectionState {
+    fn revoke_capture_authorization(&self) {
+        if let Some(authorization) = &self.capture_authorization {
+            authorization.revoke();
+        }
+    }
 }
 
 struct SelectionServiceInner {
@@ -139,7 +148,9 @@ impl SelectionServiceInner {
         }
     }
 
-    fn begin(&self, request: &SelectionPolishRequest) -> Result<SessionId, BackendError> {
+    fn begin(&self, request: &SelectionPolishRequest)
+        -> Result<(SessionId, SelectionCaptureAuthorization), BackendError>
+    {
         let mut state = self.state.write().expect("selection state lock poisoned");
         if matches!(
             state.snapshot.phase,
@@ -150,7 +161,10 @@ impl SelectionServiceInner {
                 "a selection session is already active",
             ));
         }
+        state.revoke_capture_authorization();
         let session_id = SessionId::new();
+        let authorization = SelectionCaptureAuthorization::new(session_id);
+        state.capture_authorization = Some(authorization.clone());
         state.snapshot = SelectionSnapshot {
             phase: SelectionPhase::Capturing,
             session_id: Some(session_id),
@@ -173,7 +187,7 @@ impl SelectionServiceInner {
             Some(session_id),
             BackendEventKind::SelectionStateChanged(snapshot),
         );
-        Ok(session_id)
+        Ok((session_id, authorization))
     }
 
     fn ensure_active(state: &SelectionState, session_id: SessionId) -> Result<(), BackendError> {
@@ -463,6 +477,7 @@ impl SelectionServiceInner {
         let mut state = self.state.write().expect("selection state lock poisoned");
         Self::ensure_active(&state, session_id)?;
         state.snapshot.insert_outcome = Some(outcome);
+        state.revoke_capture_authorization();
         state.snapshot.phase = SelectionPhase::Completed;
         // Completion makes a new capture admissible. Freeze all history fields
         // before publishing it so a successor cannot replace this turn's text.
@@ -612,6 +627,7 @@ impl SelectionServiceInner {
             ) {
                 log::warn!("failed to settle selection history: {error}");
             }
+            state.revoke_capture_authorization();
             state.snapshot.phase = SelectionPhase::Failed;
             let snapshot = state.snapshot.clone();
             drop(state);
@@ -655,6 +671,9 @@ impl SelectionServiceInner {
             ) {
                 log::warn!("failed to settle uncertain selection history: {persistence_error}");
             }
+        }
+        if settled {
+            state.revoke_capture_authorization();
         }
         state.snapshot.phase = if settled {
             SelectionPhase::Failed
@@ -761,11 +780,11 @@ impl SelectionApi for SelectionService {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
             let _runtime = inner.begin_runtime_work()?;
-            let session_id = inner.begin(&request)?;
+            let (session_id, authorization) = inner.begin(&request)?;
             let result = async {
                 let capture = inner
                     .runtime
-                    .capture(session_id, request.selected_text.clone())
+                    .capture_authorized(session_id, request.selected_text.clone(), authorization)
                     .await?;
                 inner.set_capture(session_id, &capture, request.mode)?;
                 inner
@@ -943,6 +962,10 @@ impl SelectionApi for SelectionService {
                 if state.snapshot.phase == SelectionPhase::Cancelled {
                     return Ok(());
                 }
+                // Revoke even if the host has not received capture(A) yet.
+                // This is a local atomic store, never an adapter callback under
+                // the Core state lock. B cannot become active before it.
+                state.revoke_capture_authorization();
                 if matches!(
                     state.snapshot.phase,
                     SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
