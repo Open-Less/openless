@@ -151,7 +151,11 @@ assert.doesNotMatch(
   /run:\s*>-[ ]*\n\s*#/,
   'a folded run scalar must not start with a comment; it comments out the command',
 );
-assert.match(workflow, /node \.\.\/harmony\/scripts\/upload-appgallery\.mjs \\/);
+assert.match(
+  workflow,
+  /if \[ -f \.\.\/harmony\/scripts\/upload-appgallery\.mjs \]; then\n\s+upload_script=\.\.\/harmony\/scripts\/upload-appgallery\.mjs\n\s*elif \[ -f scripts\/upload-appgallery\.mjs \]; then\n\s+upload_script=scripts\/upload-appgallery\.mjs\n\s*else\n\s+echo "::error::Missing source input:[^\n]+\n\s+exit 1\n\s*fi\n\s+node "\$upload_script" \\/,
+  'upload must execute the guarded source-tree script in the literal run block',
+);
 
 // Both destinations are wired.
 assert.match(workflow, /gh release upload/);

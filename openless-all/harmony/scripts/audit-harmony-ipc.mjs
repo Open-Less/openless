@@ -67,5 +67,5 @@ if (process.argv.includes('--check')) {
   fs.writeFileSync(reportPath, serialized);
 }
 console.log(
-  `Harmony IPC: ${report.wired}/${report.total} wired; ${report.missing} unimplemented. Report: harmony/ipc-audit.json`,
+  `Harmony IPC: ${report.wired}/${report.total} wired; ${report.missing} unimplemented. Report: ../harmony/ipc-audit.json`,
 );

@@ -25,11 +25,58 @@ if ($appRoot -match "\s") {
   try {
     $inputs = @(& git -c core.quotePath=false ls-files --cached --others --exclude-standard -- .)
     if ($LASTEXITCODE -ne 0) { throw "Cannot enumerate platform mirror inputs" }
+    $inputs = @($inputs | Where-Object {
+      if ([string]::IsNullOrWhiteSpace($_)) { return $false }
+      $src = Join-Path $allRoot $_
+      Test-Path -LiteralPath $src -PathType Leaf
+    } | Sort-Object -Unique)
+    $mirrorBase = [IO.Path]::GetFullPath($MirrorRoot).TrimEnd('\', '/')
+    $mirrorPrefix = $mirrorBase + [IO.Path]::DirectorySeparatorChar
+    $manifestPath = Join-Path $MirrorRoot ".openless-mirror-manifest.txt"
+    function Resolve-MirrorInput([string]$relative) {
+      $destination = [IO.Path]::GetFullPath((Join-Path $mirrorBase $relative))
+      if (-not $destination.StartsWith($mirrorPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Mirror input escapes mirror root: $relative"
+      }
+      # Never treat reusable dependencies or build outputs as source inputs,
+      # even if an interrupted/old manifest happens to contain one.
+      if ($relative -match '(^|[\\/])(node_modules|target|dist|\.artifacts)([\\/]|$)') {
+        throw "Mirror input points to a protected cache: $relative"
+      }
+      # Refuse junctions/symlinks before copying or removing through them.
+      $ancestor = $destination
+      while ($ancestor -ne $mirrorBase) {
+        if (Test-Path -LiteralPath $ancestor) {
+          if ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Mirror input traverses a reparse point: $relative"
+          }
+        }
+        $ancestor = Split-Path $ancestor -Parent
+      }
+      return $destination
+    }
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+      foreach ($previous in [IO.File]::ReadAllLines($manifestPath, [Text.Encoding]::UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($previous) -or $inputs -contains $previous) { continue }
+        $stale = Resolve-MirrorInput $previous
+        if (Test-Path -LiteralPath $stale -PathType Leaf) {
+          Remove-Item -LiteralPath $stale -Force
+        }
+        $parent = Split-Path $stale -Parent
+        while ($parent -ne $mirrorBase -and (Test-Path -LiteralPath $parent -PathType Container)) {
+          if (@(Get-ChildItem -LiteralPath $parent -Force).Count -ne 0) { break }
+          Remove-Item -LiteralPath $parent -Force
+          $parent = Split-Path $parent -Parent
+        }
+      }
+    }
     foreach ($relative in $inputs) {
+      $null = Resolve-MirrorInput $relative
       $destination = Join-Path $MirrorRoot $relative
       New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
       Copy-Item -LiteralPath (Join-Path $allRoot $relative) -Destination $destination -Force
     }
+    [IO.File]::WriteAllLines($manifestPath, [string[]]$inputs, [Text.UTF8Encoding]::new($false))
   } finally {
     Pop-Location
   }

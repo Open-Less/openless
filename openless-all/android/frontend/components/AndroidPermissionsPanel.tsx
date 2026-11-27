@@ -156,10 +156,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     migratedLegacyTrigger.current = true;
     void updatePrefs((current) =>
       current.androidOverlayTrigger === 'keyboard'
-        ? {
-            ...current,
-            androidOverlayTrigger: normalizeAndroidOverlayTrigger('keyboard'),
-          }
+        ? { ...current, androidOverlayTrigger: normalizeAndroidOverlayTrigger('keyboard') }
         : current,
     ).catch(() => undefined);
   }, [androidPrefs?.androidOverlayTrigger, updatePrefs]);
@@ -172,10 +169,9 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
 
   const saveAndroidOverlaySize = async (value: number, revision: number) => {
     setActionError(false);
-    await updatePrefs((current) => ({
-      ...current,
-      androidOverlaySizeDp: value,
-    })).catch(() => undefined);
+    await updatePrefs((current) => ({ ...current, androidOverlaySizeDp: value })).catch(
+      () => undefined,
+    );
     finishSizeDraft(revision);
   };
 
@@ -487,28 +483,14 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 ariaLabel={t('settings.permissions.androidInsertStrategyLabel')}
                 disabled={!androidPrefs}
                 value={androidPrefs?.androidInsertStrategy ?? 'accessibility'}
-                onChange={(value) =>
-                  void updateAndroidPref('androidInsertStrategy', value as AndroidInsertStrategy)
-                }
+                onChange={(value) => void updateAndroidPref('androidInsertStrategy', value as AndroidInsertStrategy)}
                 style={selectStyle}
                 options={[
-                  {
-                    value: 'accessibility',
-                    label: t('settings.permissions.androidInsertStrategy.accessibility'),
-                  },
-                  {
-                    value: 'clipboard',
-                    label: t('settings.permissions.androidInsertStrategy.clipboard'),
-                  },
+                  { value: 'accessibility', label: t('settings.permissions.androidInsertStrategy.accessibility') },
+                  { value: 'clipboard', label: t('settings.permissions.androidInsertStrategy.clipboard') },
                 ]}
               />
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--ol-ink-4)',
-                  textAlign: hintAlign,
-                }}
-              >
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t(
                   `settings.permissions.androidInsertStrategyHint.${androidPrefs?.androidInsertStrategy ?? 'accessibility'}`,
                 )}
@@ -529,48 +511,21 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 ariaLabel={t('settings.permissions.androidOverlayTriggerLabel')}
                 disabled={!androidPrefs}
                 value={androidPrefs?.androidOverlayTrigger ?? 'background'}
-                onChange={(value) =>
-                  void updateAndroidPref('androidOverlayTrigger', value as AndroidOverlayTrigger)
-                }
+                onChange={(value) => void updateAndroidPref('androidOverlayTrigger', value as AndroidOverlayTrigger)}
                 style={selectStyle}
                 options={[
-                  {
-                    value: 'background',
-                    label: t('settings.permissions.androidOverlayTrigger.background'),
-                  },
-                  {
-                    value: 'keyboard',
-                    label: t('settings.permissions.androidOverlayTrigger.keyboard'),
-                    disabled: true,
-                  },
-                  {
-                    value: 'always',
-                    label: t('settings.permissions.androidOverlayTrigger.always'),
-                  },
-                  {
-                    value: 'never',
-                    label: t('settings.permissions.androidOverlayTrigger.never'),
-                  },
+                  { value: 'background', label: t('settings.permissions.androidOverlayTrigger.background') },
+                  { value: 'keyboard', label: t('settings.permissions.androidOverlayTrigger.keyboard'), disabled: true },
+                  { value: 'always', label: t('settings.permissions.androidOverlayTrigger.always') },
+                  { value: 'never', label: t('settings.permissions.androidOverlayTrigger.never') },
                 ]}
               />
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--ol-ink-4)',
-                  textAlign: hintAlign,
-                }}
-              >
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t(
                   `settings.permissions.androidOverlayTriggerHint.${androidPrefs?.androidOverlayTrigger ?? 'background'}`,
                 )}
               </span>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--ol-ink-4)',
-                  textAlign: hintAlign,
-                }}
-              >
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t('settings.permissions.androidOverlayTriggerDisabled.keyboard')}
               </span>
             </div>
@@ -589,31 +544,14 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                 ariaLabel={t('settings.permissions.androidOverlayActivationModeLabel')}
                 disabled={!androidPrefs}
                 value={androidPrefs?.androidOverlayActivationMode ?? 'tap'}
-                onChange={(value) =>
-                  void updateAndroidPref(
-                    'androidOverlayActivationMode',
-                    value as AndroidOverlayActivationMode,
-                  )
-                }
+                onChange={(value) => void updateAndroidPref('androidOverlayActivationMode', value as AndroidOverlayActivationMode)}
                 style={selectStyle}
                 options={[
-                  {
-                    value: 'tap',
-                    label: t('settings.permissions.androidOverlayActivationMode.tap'),
-                  },
-                  {
-                    value: 'long_press',
-                    label: t('settings.permissions.androidOverlayActivationMode.long_press'),
-                  },
+                  { value: 'tap', label: t('settings.permissions.androidOverlayActivationMode.tap') },
+                  { value: 'long_press', label: t('settings.permissions.androidOverlayActivationMode.long_press') },
                 ]}
               />
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--ol-ink-4)',
-                  textAlign: hintAlign,
-                }}
-              >
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t(
                   `settings.permissions.androidOverlayActivationModeHint.${androidPrefs?.androidOverlayActivationMode ?? 'tap'}`,
                 )}
@@ -641,12 +579,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
               {(['up', 'down', 'left', 'right'] as const).map((direction) => (
                 <label
                   key={direction}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                    minWidth: 0,
-                  }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}
                 >
                   <span style={{ fontSize: 11, color: 'var(--ol-ink-3)' }}>
                     {t(
@@ -655,40 +588,21 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                     )}
                   </span>
                   <SelectLite
-                    ariaLabel={t(
-                      `settings.permissions.androidOverlayGestureDirection.${direction}`,
-                      direction,
-                    )}
+                    ariaLabel={t(`settings.permissions.androidOverlayGestureDirection.${direction}`, direction)}
                     disabled={!androidPrefs}
                     value={androidPrefs?.androidOverlayGestureActions?.[direction] ?? 'none'}
                     onChange={(value) => {
                       const action = value as AndroidOverlayGestureAction;
                       void updateAndroidPref('androidOverlayGestureActions', (current) => ({
                         ...(current.androidOverlayGestureActions ?? {
-                          up: 'cancel',
-                          down: 'none',
-                          left: 'translation',
-                          right: 'none',
+                          up: 'cancel', down: 'none', left: 'translation', right: 'none',
                         }),
                         [direction]: action,
                       }));
                     }}
                     style={selectStyle}
-                    options={(
-                      [
-                        'none',
-                        'quick_note',
-                        'translation',
-                        'style_pack',
-                        'cancel',
-                        'voice_edit',
-                      ] as const
-                    ).map((action) => ({
-                      value: action,
-                      label: t(
-                        `settings.permissions.androidOverlayGestureAction.${action}`,
-                        action,
-                      ),
+                    options={(['none', 'quick_note', 'translation', 'style_pack', 'cancel', 'voice_edit'] as const).map((action) => ({
+                      value: action, label: t(`settings.permissions.androidOverlayGestureAction.${action}`, action),
                     }))}
                   />
                 </label>
@@ -736,13 +650,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
                   {sizeDraft ?? androidPrefs?.androidOverlaySizeDp ?? 72} dp
                 </span>
               </div>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--ol-ink-4)',
-                  textAlign: hintAlign,
-                }}
-              >
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: hintAlign }}>
                 {t('settings.permissions.androidOverlaySizeHint')}
               </span>
             </div>
@@ -786,16 +694,12 @@ function AndroidAccessibilityStatusPill({ status }: { status: AndroidAccessibili
 
 function resolveShizukuMessage(t: TFunction, key: string | null | undefined): string {
   if (!key) return '';
-  return t(`settings.permissions.androidShizukuMessages.${key}`, {
-    defaultValue: key,
-  });
+  return t(`settings.permissions.androidShizukuMessages.${key}`, { defaultValue: key });
 }
 
 function resolveAccessibilityMessage(t: TFunction, key: string | null | undefined): string {
   if (!key) return '';
-  return t(`settings.permissions.androidAccessibilityMessages.${key}`, {
-    defaultValue: '',
-  });
+  return t(`settings.permissions.androidAccessibilityMessages.${key}`, { defaultValue: '' });
 }
 
 function AndroidShizukuStatusPill({ status }: { status: AndroidShizukuStatus | null }) {

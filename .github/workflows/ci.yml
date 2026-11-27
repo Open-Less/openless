@@ -16,6 +16,7 @@ on:
     branches: [main, beta]
   pull_request:
     branches: [main, beta]
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       live_acceptance:
@@ -704,8 +705,7 @@ jobs:
         # The report is committed so the ArkTS coverage is reviewable; a stale
         # report hides commands that the Harmony host does not implement yet.
         run: |
-          node ../harmony/scripts/audit-harmony-ipc.mjs
-          git diff --exit-code harmony/ipc-audit.json
+          node ../harmony/scripts/audit-harmony-ipc.mjs --check
       - name: Harmony ArkTS contracts
         run: |
           node scripts/harmony-entry-startup.test.mjs
@@ -747,11 +747,60 @@ jobs:
           # AppGallery needs a numeric versionName, so the packaging script keeps
           # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
           version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
-          version_code=$(cat linux-egui/package-revision)
+          version_code=$(cat ../linux/egui/package-revision)
           bash ../harmony/scripts/verify-harmony-hap.sh \
             target/harmony-packages/OpenLess_harmony_arm64.hap \
             "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
             "$version_name" "$version_code" --allow-unsigned
+
+  # Linux automation stays paused by default; this label enables validation only.
+  linux-validation:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: ./.github/actions/setup-linux-dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+          key: linux-validation
+          save-if: false
+      - name: Validate locked workspace metadata
+        run: |
+          cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path Cargo.toml >/dev/null
+          cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path ../linux/egui/Cargo.toml >/dev/null
+      - name: Test, lint and build the Linux host
+        run: |
+          cargo test --locked -p openless-linux-egui
+          cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings
+          cargo build --locked --release -p openless-linux-egui
+      - name: Build and test the Fcitx5 plugin
+        run: |
+          cmake -S ../linux/fcitx5-plugin -B ../linux/fcitx5-plugin/build
+          cmake --build ../linux/fcitx5-plugin/build -j
+          ctest --test-dir ../linux/fcitx5-plugin/build --output-on-failure
+      - name: Package and verify locally
+        run: |
+          set -euo pipefail
+          APP_VERSION=$(node -p "require('./package.json').version")
+          REVISION=$(cat ../linux/egui/package-revision)
+          export OPENLESS_LINUX_VERSION="${APP_VERSION%%+*}-${REVISION}"
+          bash ../linux/scripts/package-linux-egui.sh
+          bash ../linux/scripts/verify-linux-egui-packages.sh
 
   native-capsule:
     # The capsule crates compile into the desktop shells. They get their own macOS + Windows

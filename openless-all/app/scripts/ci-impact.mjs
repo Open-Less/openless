@@ -263,6 +263,8 @@ function classify(file, context) {
   if (workflowOrTooling(file)) return ALL;
   if (iosProject(file)) return new Set(['ios', 'ios-device']);
   if (nativeResource(file)) return ALL;
+  // Harmony packaging and verification read versionCode from this revision.
+  if (file === 'openless-all/linux/egui/package-revision') return new Set(['linux', 'harmony']);
   if (file.startsWith('openless-all/app/mobile-ime/')) return new Set(['android', 'harmony']);
   if (file.startsWith('openless-all/windows/') || file.startsWith('openless-all/macos/'))
     return ALL;

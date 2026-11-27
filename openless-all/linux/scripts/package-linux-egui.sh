@@ -4,7 +4,7 @@ set -euo pipefail
 APP_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../app" && pwd)
 VERSION=${OPENLESS_LINUX_VERSION:?OPENLESS_LINUX_VERSION is required}
 # Never silently publish an unnumbered or stale package that apt treats as a
-# downgrade. Each candidate explicitly advances linux-egui/package-revision.
+# downgrade. Each candidate explicitly advances linux/egui/package-revision.
 REVISION=$(< "$APP_ROOT/../linux/egui/package-revision")
 [[ "$REVISION" =~ ^[1-9][0-9]*$ ]] || {
   echo 'invalid Linux package revision' >&2
@@ -42,7 +42,7 @@ require_file() {
   [ -s "$1" ] || {
     echo "missing or empty $1" >&2
     case "$1" in
-      */linux-fcitx5-plugin/build/*) echo "  build it with: (cd scripts/linux-fcitx5-plugin && cmake -S . -B build && cmake --build build)" >&2 ;;
+      */linux/fcitx5-plugin/build/*) echo "  build it with: (cd ../linux/fcitx5-plugin && cmake -S . -B build && cmake --build build)" >&2 ;;
       */release/openless-linux-egui) echo "  build it with: cargo build --release -p openless-linux-egui" >&2 ;;
     esac
     exit 1
