@@ -245,28 +245,26 @@ fn intent_stable_prefix_survives_hotwords_context_translation_and_custom_slots()
     );
 }
 
-/// No endpoint or key is selected implicitly; copy settings from the user's existing
-/// channel into a private config. Normal test runs never enter this function.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComparisonConfig {
+    channel_id: String,
+    provider_type: String,
+    model: String,
+    thinking_enabled: bool,
+    baseline: String,
+    credentials: std::collections::BTreeMap<String, String>,
+}
+
+/// Normal test runs never enter the approved official-channel comparison.
 #[tokio::test]
 #[ignore = "real configured-channel requests; approval and private config required"]
 async fn intent_live_configured_channel_comparison() {
-    use crate::credentials::{CredentialKey, CredentialNamespace, CredentialStore};
-    use crate::ports::TextPolisher;
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct Config {
-        channel_id: String,
-        provider_type: String,
-        model: String,
-        thinking_enabled: bool,
-        baseline: String,
-        credentials: std::collections::BTreeMap<String, String>,
-    }
     assert_eq!(
         std::env::var("OPENLESS_INTENT_COMPARISON_APPROVED").as_deref(),
         Ok("yes")
     );
-    let config: Config = serde_json::from_slice(
+    let config: ComparisonConfig = serde_json::from_slice(
         &std::fs::read(
             std::env::var("OPENLESS_INTENT_COMPARISON_CONFIG").expect("private config path"),
         )
@@ -294,11 +292,25 @@ async fn intent_live_configured_channel_comparison() {
             .is_some_and(|endpoint| !endpoint.trim().is_empty()),
         "copy the existing channel endpoint explicitly; no implicit provider default"
     );
-    let old = match config.baseline.as_str() {
-        "1.0.0" => original_intent_pack(),
-        "1.3.0" => released_intent_v1_3_pack(),
-        _ => panic!("baseline must be 1.0.0 or 1.3.0"),
-    };
+    assert_eq!(config.provider_type, "deepseek");
+    assert_eq!(config.model, crate::deepseek_suite::MODEL);
+    assert!(!config.thinking_enabled);
+    assert_eq!(config.baseline, "1.3.0");
+    assert_eq!(
+        config.credentials.get(crate::credentials::LLM_ENDPOINT_ACCOUNT).map(String::as_str),
+        Some(crate::deepseek_suite::ENDPOINT),
+    );
+    let report = crate::polish::live_acceptance::intent_scope(
+        run_intent_comparison(&config, &output_path),
+    ).await;
+    assert_eq!(report["executionStatus"], "completed", "comparison stopped; safe report retained");
+}
+
+// The same loop is exercised against a local HTTP fixture by the non-live tests.
+async fn run_intent_comparison(config: &ComparisonConfig, output_path: &str) -> Value {
+    use crate::credentials::{CredentialKey, CredentialNamespace, CredentialStore};
+    use crate::ports::TextPolisher;
+    let old = released_intent_v1_3_pack();
     let new = builtin_intent_pack();
     let evaluation = evaluation();
     let store = std::sync::Arc::new(crate::InMemoryCredentialStore::default());
@@ -327,6 +339,8 @@ async fn intent_live_configured_channel_comparison() {
         "schemaVersion": 1, "channelId": config.channel_id, "providerType": config.provider_type,
         "requestedModel": config.model, "thinkingEnabled": config.thinking_enabled,
         "baselineVersion": old.version, "candidateVersion": new.version,
+        "executionStatus": "running",
+        "transport": {"state": "running"},
         "provenance": evaluation.provenance, "semanticReview": "pending human review",
         "cases": evaluation.cases.iter().map(|case| json!({
             "id": case.id, "input": case.input, "operation": case.operation,
@@ -344,7 +358,7 @@ async fn intent_live_configured_channel_comparison() {
     file.write_all(&serde_json::to_vec_pretty(&report).unwrap())
         .unwrap();
     drop(file);
-    for (index, case) in evaluation.cases.iter().enumerate() {
+    'cases: for (index, case) in evaluation.cases.iter().enumerate() {
         for (side, pack) in [("old", &old), ("new", &new)] {
             let mut context = case_context(pack, case);
             context.llm = crate::ProviderInvocation::for_provider(&config.provider_type);
@@ -367,12 +381,198 @@ async fn intent_live_configured_channel_comparison() {
                 }),
                 Err(error) => json!({"errorCode": format!("{:?}", error.code)}),
             };
-            std::fs::write(&output_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
-            assert!(
-                result.is_ok(),
-                "{} {side}: channel failed; partial report retained",
-                case.id
-            );
+            let mut counts = crate::polish::live_acceptance::intent_counts();
+            counts["state"] = json!("running");
+            report["transport"] = counts;
+            std::fs::write(output_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+            if result.is_err() {
+                report["executionStatus"] = json!("failed");
+                break 'cases;
+            }
         }
     }
+    if report["executionStatus"] == "running" {
+        report["executionStatus"] = json!("completed");
+    }
+    let mut counts = crate::polish::live_acceptance::intent_counts();
+    counts["state"] = json!("final");
+    report["transport"] = counts;
+    std::fs::write(output_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    report
+}
+
+// These are local HTTP fixtures, never provider calls. They use the exact loop,
+// production assembly, translation fallback and common send boundary above.
+async fn comparison_mock(fallback: bool, failure: Option<(usize, bool)>) -> (Value, usize) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let (stop, mut stopping) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let mut seen = 0;
+        loop {
+            let accepted = tokio::select! {
+                _ = &mut stopping => break,
+                accepted = listener.accept() => accepted.unwrap(),
+            };
+            let mut socket = accepted.0;
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                if count == 0 { break; }
+                request.extend_from_slice(&buffer[..count]);
+                if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let length = headers.lines().find_map(|line| {
+                        line.to_ascii_lowercase().strip_prefix("content-length:")
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    }).unwrap();
+                    if request.len() >= end + 4 + length { break; }
+                }
+            }
+            seen += 1;
+            if failure == Some((seen, true)) {
+                // A request/read error that the production retry arm would retry.
+                drop(socket);
+                continue;
+            }
+            let content = if fallback {
+                "fixture output"
+            } else {
+                "[[OPENLESS_POLISHED_SOURCE]]\n源文。\n[[OPENLESS_TRANSLATION]]\nTranslation."
+            };
+            let event = json!({"choices":[{"delta":{"content":content}}]});
+            let body = format!("data: {event}\n\ndata: [DONE]\n\n");
+            let status = if failure == Some((seen, false)) { 500 } else { 200 };
+            let response = format!(
+                "HTTP/1.1 {status} fixture\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+        seen
+    });
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let scratch = Scratch(std::env::temp_dir().join(format!("intent-mock-{}", uuid::Uuid::new_v4())));
+    std::fs::create_dir(&scratch.0).unwrap();
+    let output = scratch.0.join("results.json");
+    let config = ComparisonConfig {
+        channel_id: "fixture".into(), provider_type: "deepseek".into(),
+        model: crate::deepseek_suite::MODEL.into(), thinking_enabled: false, baseline: "1.3.0".into(),
+        credentials: [
+            ("ark.api_key".into(), "fixture-key".into()),
+            ("ark.endpoint".into(), endpoint),
+        ].into_iter().collect(),
+    };
+    let report = crate::polish::live_acceptance::intent_scope(
+        run_intent_comparison(&config, output.to_str().unwrap()),
+    ).await;
+    stop.send(()).unwrap();
+    (report, server.await.unwrap())
+}
+
+#[tokio::test]
+async fn intent_comparison_http_loop_32_and_36() {
+    for (fallback, expected) in [(false, 32), (true, 36)] {
+        let (report, seen) = comparison_mock(fallback, None).await;
+        assert_eq!(report["executionStatus"], "completed");
+        assert_eq!(seen, expected);
+        assert_eq!(report["transport"]["attemptedSends"], expected);
+        assert_eq!(report["transport"]["fallbackSends"], if fallback { 4 } else { 0 });
+        assert_eq!(report["transport"]["state"], "final");
+    }
+}
+
+#[tokio::test]
+async fn intent_comparison_http_loop_stops_on_first_error() {
+    for (fallback, failure, expected_fallbacks) in [
+        (false, (1, true), 0), (false, (1, false), 0),
+        (true, (24, false), 1), (true, (24, true), 1),
+    ] {
+        let (report, seen) = comparison_mock(fallback, Some(failure)).await;
+        assert_eq!(report["executionStatus"], "failed");
+        assert_eq!(seen, failure.0);
+        assert_eq!(report["transport"]["attemptedSends"], failure.0);
+        assert_eq!(report["transport"]["fallbackSends"], expected_fallbacks);
+    }
+}
+
+#[tokio::test]
+async fn intent_comparison_transport_budget_and_redirects() {
+    use crate::polish::{live_acceptance as probe, send_with_transient_retry as send};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    probe::intent_scope(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for _ in 0..36 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0_u8; 4096];
+                socket.read(&mut buffer).await.unwrap();
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            }
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept()).await.is_err());
+        });
+        let client = probe::intent_client(&url, 1);
+        for _ in 0..36 { send(client.post(&url)).await.unwrap(); }
+        assert!(send(client.post(&url)).await.is_err());
+        assert_eq!(probe::intent_counts()["attemptedSends"], 36);
+        server.await.unwrap();
+    }).await;
+    probe::intent_scope(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let redirect = format!("{url}/must-not-follow");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 4096];
+            socket.read(&mut buffer).await.unwrap();
+            socket.write_all(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {redirect}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept()).await.is_err());
+        });
+        let client = probe::intent_client(&url, 1);
+        assert_eq!(send(client.post(&url)).await.unwrap().status(), 307);
+        assert!(send(client.post(&url)).await.is_err());
+        assert_eq!(probe::intent_counts()["attemptedSends"], 1);
+        server.await.unwrap();
+    }).await;
+}
+
+#[tokio::test]
+async fn intent_comparison_transport_connect_request_and_timeout_stop() {
+    use crate::polish::{live_acceptance as probe, send_with_transient_retry as send};
+    // A closed port (connect) and invalid URI (request building) cannot retry.
+    for invalid_uri in [false, true] {
+        probe::intent_scope(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            drop(listener);
+            let client = probe::intent_client(&url, 1);
+            assert!(send(client.post(if invalid_uri { "http://[" } else { &url })).await.is_err());
+            assert!(send(client.post(&url)).await.is_err());
+            assert_eq!(probe::intent_counts()["attemptedSends"], 1);
+        }).await;
+    }
+    probe::intent_scope(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let client = probe::intent_client(&url, 1);
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(20), send(client.post(&url)),
+        ).await.is_err());
+        assert!(send(client.post(&url)).await.is_err());
+        assert_eq!(probe::intent_counts()["attemptedSends"], 1);
+    }).await;
+}
+
+#[test]
+fn intent_comparison_legacy_limits_remain_independent() {
+    let probe = crate::polish::live_acceptance::legacy_limit;
+    assert_eq!(probe(false), 10);
+    assert_eq!(probe(true), 1);
+    assert!(!crate::polish::live_acceptance::intent_active());
 }

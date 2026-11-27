@@ -35,6 +35,9 @@ class IntentComparisonCiTests(unittest.TestCase):
         if result.returncode != 0:
             raise RuntimeError("existing OpenSSL required for offline dummy roundtrip")
         cls.certificate = cls.cert.read_text()
+        cls.fingerprint = ci.hashlib.sha256(
+            ci.openssl(["x509", "-in", str(cls.cert), "-outform", "DER"])
+        ).hexdigest()
 
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="openless-intent-ci-test-")
@@ -47,6 +50,7 @@ class IntentComparisonCiTests(unittest.TestCase):
     def raw(self):
         return {
             **ci.safe_report(self.evaluation),
+            "transport": {"state": "final", "attemptedSends": 32, "fallbackSends": 0},
             "credentials": {"key": SENTINEL},
             "cases": [
                 {
@@ -59,9 +63,12 @@ class IntentComparisonCiTests(unittest.TestCase):
             ],
         }
 
-    def execute(self, raw=None, returncode=0, exception=None, key=SENTINEL, certificate=None):
+    def execute(self, raw=None, returncode=0, exception=None, key=SENTINEL, certificate=None,
+                env_changes=None, checkout_sha="a" * 40):
         model_calls = []
         def fake_process(argv, **kwargs):
+            if argv == ["git", "rev-parse", "HEAD"]:
+                return subprocess.CompletedProcess(argv, 0, stdout=(checkout_sha + "\n").encode())
             if argv[0] != "/unused/test-binary":
                 return REAL_RUN(argv, **kwargs)
             model_calls.append(argv)
@@ -86,12 +93,20 @@ class IntentComparisonCiTests(unittest.TestCase):
                 (self.private / "results.json").write_text(json.dumps(raw))
             return subprocess.CompletedProcess(argv, returncode)
 
-        with patch.dict(os.environ, {
+        environment = {
             "DEEPSEEK_API_KEY": key, "GITHUB_TOKEN": SENTINEL, "GITHUB_SHA": "a" * 40,
+            "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REPOSITORY": ci.REPOSITORY,
+            "GITHUB_REF": "refs/heads/beta", "GITHUB_RUN_ID": "123456789", "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_ACTOR": "appergb", "GITHUB_ACTOR_ID": ci.AUTHORIZED_ACTOR_ID,
+            "INTENT_TRIGGERING_ACTOR": "appergb", "INTENT_WORKFLOW_SHA": "a" * 40,
+            "GITHUB_WORKFLOW_REF": ci.REPOSITORY + "/.github/workflows/ci.yml@refs/heads/beta",
+            "INTENT_EXPECTED_SOURCE_SHA": "a" * 40, "INTENT_RECIPIENT_SHA256": self.fingerprint,
             "INTENT_RECIPIENT_CERTIFICATE": (
                 self.certificate if certificate is None else certificate
             ),
-        }):
+        }
+        environment.update(env_changes or {})
+        with patch.dict(os.environ, environment):
             with patch.object(ci.subprocess, "run", side_effect=fake_process):
                 code = ci.run("/unused/test-binary", self.private, self.evidence)
         published = (self.evidence / "status.json").read_text()
@@ -110,6 +125,12 @@ class IntentComparisonCiTests(unittest.TestCase):
         )
         return code, json.loads(published), len(model_calls)
 
+    def decrypt(self, ciphertext, output, sha="a" * 40, run_id="123456789", fingerprint=None):
+        return ci.decrypt_review(
+            ciphertext, str(self.cert), str(self.key), str(output), sha, run_id,
+            self.fingerprint if fingerprint is None else fingerprint,
+        )
+
     def test_success_uploads_only_canonical_fixtures_and_status(self):
         code, report, calls = self.execute(self.raw())
         self.assertEqual((code, calls), (0, 1))
@@ -121,25 +142,92 @@ class IntentComparisonCiTests(unittest.TestCase):
         self.assertEqual(report["sourceSha"], "a" * 40)
         self.assertEqual(report["encryptedReview"], "available")
         output = Path(self.scratch.name) / "reviewed.json"
-        ci.decrypt_review(
-            self.evidence / "comparison.cms", str(self.cert), str(self.key), str(output)
-        )
+        self.decrypt(self.evidence / "comparison.cms", output)
         review = json.loads(output.read_text())
         self.assertEqual(review["cases"][0]["old"]["text"], "合成旧版正文。")
         self.assertEqual(review["cases"][0]["new"]["sourceText"], "合成源文。")
         self.assertNotIn(SENTINEL, output.read_text())
         self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        self.assertEqual(report["transport"], {
+            "state": "final", "attemptedSends": 32, "fallbackSends": 0,
+        })
+        self.assertEqual((report["runId"], report["runAttempt"]), ("123456789", 1))
 
     def test_missing_recipient_fails_before_any_model_process(self):
         code, report, calls = self.execute(certificate="")
         self.assertEqual((code, calls), (1, 0))
-        self.assertEqual(report["executionStatus"], "recipient_invalid_or_crypto_unavailable")
+        self.assertEqual(report["executionStatus"], "dispatch_or_recipient_unverified")
         self.assertFalse((self.evidence / "comparison.cms").exists())
+
+    def test_dispatch_sha_actor_attempt_and_recipient_fail_before_model(self):
+        changes = [
+            {"INTENT_EXPECTED_SOURCE_SHA": ""},
+            {"INTENT_EXPECTED_SOURCE_SHA": "a" * 39},
+            {"INTENT_EXPECTED_SOURCE_SHA": "A" * 40},
+            {"INTENT_EXPECTED_SOURCE_SHA": "a" * 40 + "\n"},
+            {"INTENT_EXPECTED_SOURCE_SHA": "b" * 40},
+            {"GITHUB_SHA": "b" * 40},
+            {"INTENT_WORKFLOW_SHA": "b" * 40},
+            {"GITHUB_REF": "refs/tags/beta"},
+            {"GITHUB_REF": "refs/heads/beta/child"},
+            {"GITHUB_REPOSITORY": "fork/openless"},
+            {"GITHUB_EVENT_NAME": "pull_request"},
+            {"GITHUB_WORKFLOW_REF": ci.REPOSITORY + "/.github/workflows/other.yml@refs/heads/beta"},
+            {"GITHUB_WORKFLOW_REF": ci.REPOSITORY + "/.github/workflows/ci.yml@refs/heads/main"},
+            {"GITHUB_ACTOR": "another-writer"},
+            {"GITHUB_ACTOR_ID": "0"},
+            {"INTENT_TRIGGERING_ACTOR": "another-writer"},
+            {"GITHUB_RUN_ATTEMPT": "2"},
+            {"GITHUB_RUN_ATTEMPT": "01"},
+            {"GITHUB_RUN_ID": ""},
+            {"INTENT_RECIPIENT_SHA256": ""},
+            {"INTENT_RECIPIENT_SHA256": "b" * 64},
+        ]
+        for index, change in enumerate(changes):
+            self.evidence = Path(self.scratch.name) / f"blocked-{index}"
+            code, report, calls = self.execute(self.raw(), env_changes=change)
+            self.assertEqual((code, calls), (1, 0), next(iter(change)))
+            self.assertEqual(report["executionStatus"], "dispatch_or_recipient_unverified")
+            self.assertEqual(report["transport"]["attemptedSends"], 0)
+            self.assertFalse((self.evidence / "comparison.cms").exists())
+
+    def test_checkout_drift_is_rejected_before_model(self):
+        code, report, calls = self.execute(self.raw(), checkout_sha="b" * 40)
+        self.assertEqual((code, calls), (1, 0))
+        self.assertEqual(report["executionStatus"], "dispatch_or_recipient_unverified")
+
+    def test_receipt_decrypt_is_bound_to_exact_run_sha_and_fingerprint(self):
+        self.execute(self.raw())
+        for index, binding in enumerate((
+            {"sha": "b" * 40}, {"run_id": "123456790"}, {"fingerprint": "b" * 64},
+        )):
+            output = Path(self.scratch.name) / f"wrong-receipt-{index}.json"
+            with self.assertRaises(ValueError):
+                self.decrypt(self.evidence / "comparison.cms", output, **binding)
+            self.assertFalse(output.exists())
+
+    def test_only_final_bounded_transport_counts_are_certified(self):
+        raw = self.raw()
+        raw["transport"] = {"state": "final", "attemptedSends": 36, "fallbackSends": 4}
+        code, report, _ = self.execute(raw)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["transport"], raw["transport"])
+        for index, (counts, returncode) in enumerate((
+            ({"state": "running", "attemptedSends": 3, "fallbackSends": 0}, 0),
+            ({"state": "final", "attemptedSends": 37, "fallbackSends": 4}, 0),
+            ({"state": "final", "attemptedSends": 36, "fallbackSends": 5}, 0),
+            ({"state": "final", "attemptedSends": 36, "fallbackSends": 4}, -9),
+        )):
+            self.evidence = Path(self.scratch.name) / f"unknown-{index}"
+            raw["transport"] = counts
+            code, report, _ = self.execute(raw, returncode=returncode)
+            self.assertEqual(code, 1)
+            self.assertEqual(report["transport"], {"state": "unknown"})
 
     def test_private_key_or_bad_certificate_is_rejected_before_model(self):
         code, report, calls = self.execute(certificate=self.key.read_text())
         self.assertEqual((code, calls), (1, 0))
-        self.assertEqual(report["executionStatus"], "recipient_invalid_or_crypto_unavailable")
+        self.assertEqual(report["executionStatus"], "dispatch_or_recipient_unverified")
 
     def test_malformed_public_certificate_is_rejected_before_model(self):
         code, _, calls = self.execute(
@@ -177,7 +265,7 @@ class IntentComparisonCiTests(unittest.TestCase):
         ciphertext.write_bytes(data)
         output = Path(self.scratch.name) / "must-not-exist.json"
         with self.assertRaises(ValueError):
-            ci.decrypt_review(ciphertext, str(self.cert), str(self.key), str(output))
+            self.decrypt(ciphertext, output)
         self.assertFalse(output.exists())
 
     def test_cms_uses_fresh_randomness(self):
@@ -200,7 +288,7 @@ class IntentComparisonCiTests(unittest.TestCase):
         output = self.private / "must-not-exist.json"
         with patch.object(ci, "openssl", wraps=ci.openssl) as operations:
             with self.assertRaises(ValueError):
-                ci.decrypt_review(cipher, str(self.cert), str(self.key), str(output))
+                self.decrypt(cipher, output)
         self.assertFalse(any("-decrypt" in call.args[0] for call in operations.call_args_list))
         self.assertFalse(output.exists())
 
@@ -226,6 +314,7 @@ class IntentComparisonCiTests(unittest.TestCase):
     def test_provider_failure_drops_error_and_retains_pending(self):
         raw = self.raw()
         raw["cases"][0]["new"] = {"errorCode": SENTINEL}
+        raw["transport"]["attemptedSends"] = 2
         for case in raw["cases"][1:]:
             case["old"] = case["new"] = None
         code, report, _ = self.execute(raw, returncode=101)
@@ -242,6 +331,7 @@ class IntentComparisonCiTests(unittest.TestCase):
         code, report, _ = self.execute(exception=subprocess.TimeoutExpired(SENTINEL, 900))
         self.assertEqual(code, 1)
         self.assertEqual(report["executionStatus"], "timed_out")
+        self.assertEqual(report["transport"], {"state": "unknown"})
 
     def test_invalid_report_never_publishes_raw_diagnostic(self):
         raw = self.raw()
@@ -289,6 +379,15 @@ class IntentComparisonCiTests(unittest.TestCase):
         self.assertIn("openless-intent-evidence/comparison.cms", live)
         self.assertNotIn("openless-intent-evidence/*.json", live)
         self.assertLess(live.index("preflight"), live.index("Build acceptance without credentials"))
+        self.assertIn("INTENT_WORKFLOW_SHA: ${{ github.workflow_sha }}", live)
+        self.assertIn("INTENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}", live)
+        self.assertIn("intent_expected_source_sha", text)
+        self.assertIn("intent_recipient_sha256", text)
+        self.assertNotIn("intent_allowed_actor", text)
+        self.assertLess(
+            live.index("Verify intent mock transport gates"),
+            live.index("Compare intent 1.3.0 and 1.4.0"),
+        )
         self.assertIn("CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target", live)
         self.assertIn('rm -rf "$RUNNER_TEMP/openless-live-target"', live)
         suite = SCRIPT.parent.parent / "crates/openless-core/src/deepseek_suite.rs"

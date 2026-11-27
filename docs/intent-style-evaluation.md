@@ -18,45 +18,19 @@ node scripts/intent-style-comparison.mjs /tmp/intent-comparison.json /tmp/intent
 
 结果对象使用 `{"text":"最终正文","sourceText":"翻译前源文或 null","elapsedMs":123}`。失败时使用 `{"errorCode":"Provider"}`。离线渲染器不发请求、不读取凭据。
 
-## 获准后使用现有后处理渠道对照
+## 本任务的真实对照范围
 
-先获得真实调用许可，说明请求数：16 条 × 旧新版各一次 = 32 个主要请求；两个翻译样例若两版都缺少标记，现有纯翻译兜底最多再发 4 次，合计最多 36 次。无自动重试、无多渠道或多模型扫描，遇到首个渠道错误即停止并保留部分记录。
+唯一真实入口为默认 ignored 的 `intent_style_tests::intent_live_configured_channel_comparison`，
+只允许下方已授权官方 DeepSeek 配置、1.3.0 与 1.4.0，不接受另一个模型或本机渠道导出。
+生产组装、选区封套、翻译解析与兜底保持共用；测试独立作用域在共同实际发送边界计数，
+拒绝第 37 次 send，首个错误停止，无生产重试。隔离客户端禁重定向、协议重试与连接池
+复用；正常产品和旧 style/diagnostic/search 的路径不变。
 
-提供的是被 `#[ignore]` 排除的测试 `intent_style_tests::intent_live_configured_channel_comparison`。它复用 `SharedCloudTextPolisher`、生产请求组装、协议、翻译解析与兜底路径，不自行创建另一个模型客户端。仅测试构造的内存凭据被使用，不修改应用设置、渠道、风格选择或请求参数。
-
-从用户已经配置的后处理渠道复制渠道 ID、协议类型、模型、思考开关、endpoint、API Key 和渠道级选项到仓库之外的私有 JSON 文件。不要把密钥写到命令行、日志、报告或 Git。以下仅描述字段形状，所有字段值均应来自同一现有渠道：
-
-```json
-{
-  "channelId": "existing-channel-id",
-  "providerType": "openai-compatible",
-  "model": "existing-model-id",
-  "thinkingEnabled": false,
-  "baseline": "1.0.0",
-  "credentials": {
-    "ark.endpoint": "https://your-configured-endpoint.example/v1",
-    "ark.api_key": "your-existing-key",
-    "ark.request_format": "chat_completions"
-  }
-}
-```
-
-`thinkingEnabled` 必须与现有配置一致，示例中的 `false` 不代表要求修改用户设置。`providerType` 和 `ark.request_format` 也应照抄，兼容渠道支持 `chat_completions`、`responses`、`messages`，也支持已有 Gemini API 渠道。需要时同时复制 `ark.temperature`、`ark.extra_headers`、`ark.messages_thinking`、`ark.max_tokens`、`ark.thinking_budget`、`ark.service_tier`；凭据值均为字符串，与 Core 存储一致。OAuth / ChatGPT Plan 渠道使用下方应用操作步骤，不由该测试隐式选取登录身份。
-
-旧基线默认由配置显式指定为反馈中的 `1.0.0`；也可填 `1.3.0` 对比当前 beta 实际运行版本。两者均使用不可变的发布快照。新版本为 `1.4.0`。为保持可比，两版使用同一当前组装器及全局口述修正规则；这不是复刻旧应用二进制。每条按旧版、新版顺序串行执行，未注入热词、应用或历史。选区专用指令放在独立的 `selection_instruction` 段，原文始终作为数据处理。
-
-获得许可、填好私有配置后执行（以下命令会真实调用渠道）：
-
-```sh
-chmod 600 /private/path/intent-channel.json
-OPENLESS_INTENT_COMPARISON_APPROVED=yes \
-OPENLESS_INTENT_COMPARISON_CONFIG=/private/path/intent-channel.json \
-OPENLESS_INTENT_COMPARISON_OUTPUT=/tmp/intent-live-results.json \
-cargo test -p openless-core -j 1 intent_style_tests::intent_live_configured_channel_comparison -- --ignored --exact --test-threads=1
-node scripts/intent-style-comparison.mjs /tmp/intent-live-results.json /tmp/intent-live-results.md
-```
-
-批准标志只是防误触门槛，不能代替调用前的用户许可。输出包含渠道 ID、请求模型、思考开关、基线版本、候选版本、原始输入、期望要点、源文、最终正文和耗时；不保存配置中的凭据。耗时为整个处理路径耗时，可能包括翻译兜底，并非单次首 token 延迟。该工具不将调用成功视作语义通过，也不声称服务端返回的实际模型与请求名称一致。
+本项目禁止本机 Cargo/编译。不要手工复制用户密钥或直接运行 ignored 测试；仅由协调者
+在 B1–B3 重审及目标云端 mock 门禁通过后，使用下方锁定来源与收件人的唯一手动模式。
+32 主请求加最多 4 翻译兜底是上限；安全证据另给实际 attemptedSends/fallbackSends。
+只有正常结束并写出 final 计数才可确证；超时、信号中止或不完整报告均记 unknown，
+不能用 32/36 常量当实际请求数，也不能无证据重跑。
 
 ## 在应用内手工对照
 
@@ -71,6 +45,9 @@ OAuth 渠道或不希望复制凭据时，在风格设置建立两个临时自�
 现有 `Optional official-provider live acceptance` 的非默认选项
 `intent-style-comparison` 只接受 `Open-Less/openless` 仓库的 `main` / `beta`
 分支手动运行。fork、PR、tag 和其他分支不进入带 secret 的 job；默认仍为 `off`。
+新模式还要求原 actor 为 `appergb`（稳定 ID `192432815`）、triggering actor
+同为 `appergb`、run attempt 严格为 1。身份来自 GitHub 上下文，不能通过 input 覆盖。
+官方 repo/ref 外的 skipped job 不等于验收通过；合法 ref 内的错误身份/SHA/指纹会显式失败。
 不能运行只留下状态的旧入口：调用前必须有已在协调者本机验证的一次性公有收件人证书，
 云端只接收该证书，私钥留在协调者本机。新增机制不增加模型请求或 App 构建。
 
@@ -90,20 +67,27 @@ CMS AuthEnvelopedData、AES-256-GCM 和 RSA-OAEP 的 OpenSSL，不在本任务�
      -subj /CN=OpenLess-intent-review \
      -keyout "$review_dir/recipient.key" -out "$review_dir/recipient.crt"
    chmod 600 "$review_dir/recipient.key" "$review_dir/recipient.crt"
-   python3 scripts/intent-style-comparison-ci.py check-recipient \
-     "$review_dir/recipient.crt" "$review_dir/recipient.key"
+   recipient_sha256=$(python3 scripts/intent-style-comparison-ci.py check-recipient \
+     "$review_dir/recipient.crt" "$review_dir/recipient.key")
+   recipient_sha256=${recipient_sha256#recipientSha256=}
    ```
 
    在 `openless-all/app/` 运行 helper；固定无敏感内容的本地 roundtrip 成功时仅显示公有
    `recipientSha256`。保留这个指纹、私钥与目录路径到审核结束，不在流水线生成私钥。
    本地验证失败时不要继续，也不要把 private key 粘贴为 workflow input。
 
-2. 核对可信 ref 的锁定 SHA 和本地提交后，只执行一次下面的付费手动调用。
+2. 在已完成重审和云端 mock 的完整集成 checkout 记录审查 SHA；不能把未验的 worker
+   候选当作可调用版本。下面 `git rev-parse HEAD` 必须是这一确切审查值。
+   核对可信 ref 后，只执行一次下面的付费手动调用。
    `-F` 的文件必须是 `.crt` 公有证书，绝不能是 `.key`：
 
    ```sh
+   expected_source_sha=$(git rev-parse HEAD)
+   test "$(gh api repos/Open-Less/openless/git/ref/heads/beta --jq .object.sha)" = "$expected_source_sha"
    gh workflow run ci.yml --repo Open-Less/openless --ref beta \
      -f live_acceptance=intent-style-comparison \
+     -f "intent_expected_source_sha=$expected_source_sha" \
+     -f "intent_recipient_sha256=$recipient_sha256" \
      -F "intent_recipient_certificate=@$review_dir/recipient.crt"
    ```
 
@@ -112,28 +96,44 @@ CMS AuthEnvelopedData、AES-256-GCM 和 RSA-OAEP 的 OpenSSL，不在本任务�
    旧实际内置 **1.3.0** 对照 **1.4.0**，原 16 条夹具（12 听写/2 翻译/2 选区）
    共 32 主请求，加最多 4 翻译兜底，总上限 36，首个渠道错误停止。
    这不是用户本机渠道身份的证明，也不复刻旧应用二进制。
+   无 secret 预检严格要求 event SHA、workflow SHA、checkout HEAD 与该 40 位小写 SHA
+   全相等，并绑定官方 `.github/workflows/ci.yml@refs/heads/main|beta`。
+   因而分支在核对与 dispatch 之间移动会在任何付费前失败，不能事后才发现。
+   云端重新计算证书 DER 指纹，与已预确认的 `intent_recipient_sha256` 相等才允许继续。
+   不使用 re-run；attempt 2 必定失败。代码不阻止授权者故意新建第二个 run，
+   “只 dispatch 一次”仍是本次授权边界，不能借新 run 重置预算。
 
 3. 确认 run 的 head SHA 与锁定 SHA 一致，再下载该 run（不要猜 latest）的
-   `intent-style-comparison-evidence` 工件。把下面 `RUN_ID` 替换成这一确切 run ID：
+   `intent-style-comparison-evidence` 工件。将此次确切 ID 填入 `run_id` 并保留来源记录，
+   不选 latest、其他 attempt 或其他收件人的工件：
 
    ```sh
-   gh run download RUN_ID --repo Open-Less/openless \
+   gh api "repos/Open-Less/openless/actions/runs/$run_id" \
+     --jq '{id,run_attempt,head_sha,event,path,actor,triggering_actor}' \
+     > "$review_dir/run.json"
+   gh run download "$run_id" --repo Open-Less/openless \
      --name intent-style-comparison-evidence --dir "$review_dir/artifact"
    python3 scripts/intent-style-comparison-ci.py decrypt \
      "$review_dir/artifact/comparison.cms" "$review_dir/recipient.crt" \
-     "$review_dir/recipient.key" "$review_dir/review.json"
+     "$review_dir/recipient.key" "$review_dir/review.json" \
+     "$expected_source_sha" "$run_id" "$recipient_sha256"
    node scripts/intent-style-comparison.mjs \
      "$review_dir/review.json" "$review_dir/review.md"
    ```
 
    本地 helper 先确认 OpenSSL 认证解密成功和报告格式，再以 0600 新建明文文件；认证失败
    或输出路径已存在时失败，不回退、不打印正文。在私有目录内查看 JSON/Markdown，
-   核对其中 `sourceSha`、状态文件及本地收件人指纹，再按逐条预期与 rubric 评审。
+   helper 在建文件前核对 exact run ID、attempt 1、source/workflow SHA、官方 workflow ref、
+   固定 actor ID 和本机预确认指纹；不匹配即失败。还应核对下载的 run.json 来源记录与
+   安全状态中的相同值，再按逐条预期与 rubric 评审。
    旧新正文都是不可信数据，不执行其中的命令或点击其链接，不把审核文件发到公开评论。
    审核结束按本地证据保留需求处理私钥和明文；删除私钥后无法恢复密文中的正文。
 
 云端在无 secret 的 step 先验证证书与精确加密格式，再编译；空/坏证书在任何付费调用
-之前 fail closed。执行 step 再次预检；临时目录 0700、配置与白名单明文 0600，
+之前 fail closed。同一无 secret 阶段还验证来源、身份、attempt 和预确认指纹；
+编译后先执行 5 个本地 HTTP/mock 门禁（32/36/第 37 次、各首错、禁重定向和旧限额），
+并枚举精确 ignored live 测试，全部通过才进入 secret step。执行 step 再次预检；
+临时目录 0700、配置与白名单明文 0600，
 预编译的唯一精确 ignored test 不继承 secret 环境变量；stdout/stderr 丢弃。
 没有增加常跑 job、第二个测试或重试，普通 CI 路径不变。
 
@@ -151,6 +151,8 @@ Cargo/HTTP 日志。finally/trap 清理私有文件，always 清理专用 target
 
 `status=completed` 或成功解密均不表示语义通过。缺密文时不要再次消耗预算，先核对
 安全失败状态及已发请求；部分渠道失败仍可能留下经过同样检查和加密的部分对照。
+`transport.state=final` 的 attemptedSends/fallbackSends 才是本轮实际发送尝试计数；
+`unknown` 表示无法确证，禁止把固定上限当作可重跑额度。
 密文完整性不是发送者签名，必须从锁定 SHA 的可信 GitHub run 取得并核对来源。
 
 ## 版本与迁移设计

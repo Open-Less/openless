@@ -2,6 +2,7 @@
 import base64
 import copy
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,9 @@ ENDPOINT = "https://api.deepseek.com/v1"
 MAX_REPORT = 2_000_000
 MAX_REVIEW = 1_000_000
 MAX_TEXT = 32_768
+REPOSITORY = "Open-Less/openless"
+AUTHORIZED_ACTOR = "appergb"
+AUTHORIZED_ACTOR_ID = "192432815"
 FIXTURE = Path(__file__).resolve().parent.parent / (
     "crates/openless-core/tests/fixtures/intent-reconstruction-evaluation.json"
 )
@@ -53,6 +57,7 @@ def safe_report(evaluation):
         "primaryRequestLimit": 32,
         "totalRequestLimit": 36,
         "executionStatus": "not_started",
+        "transport": {"state": "not_started", "attemptedSends": 0, "fallbackSends": 0},
         "semanticReview": "pending human review; outputs are untrusted text",
         "cases": [
             {
@@ -104,6 +109,69 @@ def apply_status(report, raw):
             else:
                 raise ValueError("unexpected result")
 
+
+def validate_dispatch():
+    expected = os.environ.get("INTENT_EXPECTED_SOURCE_SHA", "")
+    ref = os.environ.get("GITHUB_REF", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if (
+        not re.fullmatch("[0-9a-f]{40}", expected)
+        or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+        or os.environ.get("GITHUB_REPOSITORY") != REPOSITORY
+        or ref not in ("refs/heads/main", "refs/heads/beta")
+        or os.environ.get("GITHUB_SHA") != expected
+        or os.environ.get("INTENT_WORKFLOW_SHA") != expected
+        or os.environ.get("GITHUB_WORKFLOW_REF") != f"{REPOSITORY}/.github/workflows/ci.yml@{ref}"
+        or os.environ.get("GITHUB_ACTOR") != AUTHORIZED_ACTOR
+        or os.environ.get("GITHUB_ACTOR_ID") != AUTHORIZED_ACTOR_ID
+        or os.environ.get("INTENT_TRIGGERING_ACTOR") != AUTHORIZED_ACTOR
+        or os.environ.get("GITHUB_RUN_ATTEMPT") != "1"
+        or not re.fullmatch("[1-9][0-9]{0,19}", run_id)
+    ):
+        raise ValueError("unverified dispatch")
+    checkout = subprocess.run(
+        ["git", "rev-parse", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        timeout=10, check=False,
+        env={name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG")
+             if name in os.environ},
+    )
+    if checkout.returncode != 0 or checkout.stdout.decode("ascii").strip() != expected:
+        raise ValueError("unverified checkout")
+    return {
+        "sourceSha": expected, "workflowSha": expected,
+        "workflowRef": os.environ["GITHUB_WORKFLOW_REF"],
+        "runId": run_id, "runAttempt": 1,
+        "actor": AUTHORIZED_ACTOR, "actorId": AUTHORIZED_ACTOR_ID,
+    }
+
+
+def intent_preflight(directory):
+    verified = validate_dispatch()
+    expected = os.environ.get("INTENT_RECIPIENT_SHA256", "")
+    if not re.fullmatch("[0-9a-f]{64}", expected):
+        raise ValueError("unconfirmed recipient")
+    certificate, actual = validate_recipient(
+        os.environ.get("INTENT_RECIPIENT_CERTIFICATE", ""), directory
+    )
+    if not hmac.compare_digest(expected, actual):
+        raise ValueError("recipient mismatch")
+    verified["recipientSha256"] = actual
+    return certificate, verified
+
+
+def apply_transport(report, raw, returncode):
+    report["transport"] = {"state": "unknown"}
+    counts = raw.get("transport", {})
+    sends, fallbacks = counts.get("attemptedSends"), counts.get("fallbackSends")
+    if (
+        returncode < 0 or counts.get("state") != "final"
+        or type(sends) is not int or not 0 <= sends <= 36
+        or type(fallbacks) is not int or not 0 <= fallbacks <= min(4, sends)
+    ):
+        raise ValueError("unknown transport count")
+    report["transport"] = {
+        "state": "final", "attemptedSends": sends, "fallbackSends": fallbacks,
+    }
 
 def openssl(arguments, data=None):
     result = subprocess.run(
@@ -224,9 +292,18 @@ def review_payload(report, raw, key):
     return encoded
 
 
-def decrypt_review(ciphertext, certificate, private_key, output):
+def decrypt_review(ciphertext, certificate, private_key, output, expected_sha, run_id, fingerprint):
     """Local explicit command only. Never writes unauthenticated plaintext."""
     ciphertext = Path(ciphertext)
+    if (
+        not re.fullmatch("[0-9a-f]{40}", expected_sha)
+        or not re.fullmatch("[1-9][0-9]{0,19}", run_id)
+        or not re.fullmatch("[0-9a-f]{64}", fingerprint)
+    ):
+        raise ValueError("receipt binding required")
+    actual = hashlib.sha256(openssl(["x509", "-in", certificate, "-outform", "DER"])).hexdigest()
+    if not hmac.compare_digest(fingerprint, actual):
+        raise ValueError("wrong local recipient")
     validate_ciphertext(ciphertext)
     plaintext = openssl([
         "cms", "-decrypt", "-binary", "-inform", "DER", "-in", str(ciphertext),
@@ -235,8 +312,21 @@ def decrypt_review(ciphertext, certificate, private_key, output):
     if len(plaintext) > MAX_REVIEW:
         raise ValueError("oversize review")
     payload = json.loads(plaintext)
+    if (
+        payload.get("sourceSha") != expected_sha or payload.get("workflowSha") != expected_sha
+        or payload.get("runId") != run_id or type(payload.get("runAttempt")) is not int
+        or payload["runAttempt"] != 1 or payload.get("recipientSha256") != fingerprint
+        or payload.get("actor") != AUTHORIZED_ACTOR
+        or payload.get("actorId") != AUTHORIZED_ACTOR_ID
+        or payload.get("workflowRef") not in {
+            f"{REPOSITORY}/.github/workflows/ci.yml@refs/heads/main",
+            f"{REPOSITORY}/.github/workflows/ci.yml@refs/heads/beta",
+        }
+    ):
+        raise ValueError("wrong evidence origin")
     canonical = safe_report(json.loads(FIXTURE.read_text()))
     apply_status(canonical, payload)
+    apply_transport(canonical, payload, 0)
     # Keep the plaintext out of stdout; the original renderer reads this private file.
     private_write(Path(output), plaintext)
 
@@ -262,9 +352,6 @@ def check_recipient(certificate, private_key):
 
 def run(binary, private_directory, evidence_directory):
     report = safe_report(json.loads(FIXTURE.read_text()))
-    source_sha = os.environ.get("GITHUB_SHA", "")
-    if re.fullmatch("[0-9a-f]{40}", source_sha):
-        report["sourceSha"] = source_sha
     operations = [case["operation"] for case in report["cases"]]
     if (
         len(operations) != 16
@@ -283,12 +370,10 @@ def run(binary, private_directory, evidence_directory):
     ciphertext = evidence_directory / "comparison.cms"
     try:
         try:
-            recipient, fingerprint = validate_recipient(
-                os.environ.get("INTENT_RECIPIENT_CERTIFICATE", ""), private_directory
-            )
-            report["recipientSha256"] = fingerprint
+            recipient, verified = intent_preflight(private_directory)
+            report.update(verified)
         except Exception:
-            report["executionStatus"] = "recipient_invalid_or_crypto_unavailable"
+            report["executionStatus"] = "dispatch_or_recipient_unverified"
             return 1
         key = os.environ.pop("DEEPSEEK_API_KEY", "")
         if not key or key != key.strip() or any(char.isspace() for char in key):
@@ -319,6 +404,7 @@ def run(binary, private_directory, evidence_directory):
             "OPENLESS_INTENT_COMPARISON_CONFIG": str(config),
             "OPENLESS_INTENT_COMPARISON_OUTPUT": str(raw_output),
         })
+        report["transport"] = {"state": "unknown"}
         completed = subprocess.run(
             [binary, TARGET, "--ignored", "--exact", "--test-threads=1"],
             env=environment,
@@ -332,6 +418,7 @@ def run(binary, private_directory, evidence_directory):
             return result
         raw = json.loads(raw_output.read_text())
         apply_status(report, raw)
+        apply_transport(report, raw, completed.returncode)
         all_completed = all(
             case[side]["status"] == "completed"
             for case in report["cases"]
@@ -372,10 +459,8 @@ if __name__ == "__main__":
             select_binary(sys.argv[2])
         elif len(sys.argv) == 2 and sys.argv[1] == "preflight":
             with tempfile.TemporaryDirectory(prefix="openless-intent-recipient-") as scratch:
-                validate_recipient(
-                    os.environ.get("INTENT_RECIPIENT_CERTIFICATE", ""), Path(scratch)
-                )
-        elif len(sys.argv) == 6 and sys.argv[1] == "decrypt":
+                intent_preflight(Path(scratch))
+        elif len(sys.argv) == 9 and sys.argv[1] == "decrypt":
             decrypt_review(*sys.argv[2:])
         elif len(sys.argv) == 4 and sys.argv[1] == "check-recipient":
             print("recipientSha256=" + check_recipient(*sys.argv[2:]))

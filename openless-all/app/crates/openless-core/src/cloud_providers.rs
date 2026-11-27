@@ -1549,6 +1549,8 @@ async fn run_cloud_polish(
                     "[cloud-provider] polish+translate response missing markers; using plain translation"
                 );
                 // No target section was published, so fallback starts at offset zero.
+                #[cfg(test)]
+                let _intent_fallback = crate::polish::live_acceptance::intent_fallback();
                 let stream = PolishStreamPublisher::new(
                     Arc::clone(&partials),
                     Arc::clone(&cancellation),
