@@ -138,89 +138,31 @@ for (const command of [
 ]) {
   assert.ok(deviceCommands.includes(command), `retain device check: ${command}`);
 }
-assert.equal(ci.jobs['linux-egui-package'], undefined, 'Linux CI is paused');
-for (const name of ['check-linux-egui.yml', 'release-linux-egui.yml']) {
-  assert.equal(
-    existsSync(path(name)),
-    false,
-    `${name} must stay removed while Linux automation is paused`,
-  );
+// Linux 与其它平台一样直接写进 ci.yml / release-tauri.yml：
+// 不再有独立的 Linux 工作流文件。
+for (const name of ['check-linux.yml', 'release-linux.yml']) {
+  assert.equal(existsSync(path(name)), false, `${name} must stay removed: one workflow file per platform`);
 }
-assert.equal(ci.jobs.changes.outputs.linux, undefined);
-const linux = ci.jobs['linux-validation'];
-assert.equal(
-  linux.if,
-  "github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')",
-);
-assert.equal(linux['runs-on'], 'ubuntu-latest');
-assert.equal(linux['timeout-minutes'], 45);
-assert.equal(linux.defaults.run['working-directory'], 'openless-all/app');
-assert.deepEqual(linux.permissions, { contents: 'read' });
-assert.ok(ci.on.pull_request.types.includes('labeled'), 'adding the opt-in label must trigger CI');
-assert.ok(linux.steps.some((s) => s.uses === './.github/actions/setup-linux-dependencies'));
-assert.equal(
-  linux.steps.find((s) => s.uses === 'actions/setup-node@v4').with['node-version'],
-  '22',
-);
-assert.equal(
-  linux.steps.find((s) => s.uses === 'dtolnay/rust-toolchain@stable').with.components,
-  'clippy',
-);
-assert.deepEqual(linux.steps.find((s) => s.uses === 'swatinem/rust-cache@v2').with, {
-  workspaces: 'openless-all/app -> target',
-  key: 'linux-validation',
-  'save-if': false,
-});
-assert.ok(linux.steps.every((s) => !/upload|release|publish/.test(s.uses ?? '')));
-const linuxCommands = linux.steps.map((s) => s.run ?? '').join('\n');
-for (const command of [
-  'cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path Cargo.toml >/dev/null',
-  'cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path ../linux/egui/Cargo.toml >/dev/null',
-  'cargo test --locked -p openless-linux-egui',
-  'cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings',
-  'cargo build --locked --release -p openless-linux-egui',
-  'cmake -S ../linux/fcitx5-plugin -B ../linux/fcitx5-plugin/build',
-  'cmake --build ../linux/fcitx5-plugin/build -j',
-  'ctest --test-dir ../linux/fcitx5-plugin/build --output-on-failure',
-  'export OPENLESS_LINUX_VERSION="${APP_VERSION%%+*}-${REVISION}"',
-  'bash ../linux/scripts/package-linux-egui.sh',
-  'bash ../linux/scripts/verify-linux-egui-packages.sh',
-])
-  assert.ok(linuxCommands.includes(command), `Linux validation retains ${command}`);
-assert.doesNotMatch(linuxCommands, /gh release|gh api|upload-artifact|curl|wget/);
-// Evaluate the exact guard over default push/PR and explicit opt-in cases.
-for (const event of ['push', 'pull_request', 'workflow_dispatch']) {
-  for (const labels of [[], ['unrelated'], ['ci:validate-linux']]) {
-    const expression = linux.if
-      .replace('github.event_name', JSON.stringify(event))
-      .replace(
-        "contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')",
-        String(labels.includes('ci:validate-linux')),
-      );
-    assert.equal(
-      vm.runInNewContext(expression),
-      event === 'pull_request' && labels.includes('ci:validate-linux'),
-    );
-  }
-}
-assert.equal(
-  ci.jobs['windows-frontend'],
-  undefined,
-  'do not launch a duplicate Windows frontend VM',
-);
+assert.ok(ci.jobs['linux-check'], 'Linux checks live in ci.yml');
+assert.ok(ci.jobs['linux-package'], 'Linux packaging lives in ci.yml');
+assert.equal(ci.jobs.changes.outputs.linux, '${{ steps.detect.outputs.linux }}');
+// Windows 平台契约复用 cross-platform 的同一个 VM（不再启动第二个 Windows runner）。
+assert.equal(ci.jobs['windows-frontend'], undefined, 'no duplicate Windows frontend VM');
 const stable = ci.jobs['cross-platform'];
 const windowsContracts = stable.steps.find(
   (s) => s.name === 'Run the platform-sensitive contracts',
 );
 assert.equal(windowsContracts.if, "runner.os == 'Windows'");
-assert.equal(windowsContracts.run, 'node scripts/frontend-test-runner.mjs --platform-only windows');
+assert.equal(
+  windowsContracts.run,
+  'node scripts/frontend-test-runner.mjs --platform-only windows',
+);
 const frontend = stable.steps.find((s) => s.name === 'Build the frontend for the Tauri context');
 assert.equal(frontend.if, "runner.os == 'Windows'");
-assert.ok(stable.steps.indexOf(frontend) < stable.steps.indexOf(windowsContracts));
 assert.ok(
-  stable.steps.indexOf(windowsContracts) <
+  stable.steps.indexOf(frontend) <
     stable.steps.findIndex((s) => s.name === 'Compile Rust backend unit tests (Windows)'),
-  'fail fast on contract errors',
+  'build the frontend before compiling the Tauri lib',
 );
 assert.equal(
   stable.steps.find((s) => s.name === 'Check Windows prerequisites').if,

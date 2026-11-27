@@ -66,7 +66,7 @@ export function Corrections() {
               className="ol-correction-add ol-col-2"
               onClick={() => void onAddCorrectionRule()}
               disabled={busy}
-              style={mobile ? { justifySelf: 'start' } : undefined}
+              style={{ justifySelf: mobile ? 'start' : 'end', width: 'max-content', maxWidth: '100%', justifyContent: 'center' }}
             >
               {t('common.add')}
             </Btn>

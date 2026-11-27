@@ -6,6 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { AndroidPermissionsPanel } from '@android/components/AndroidPermissionsPanel';
 import { Icon } from '../../components/Icon';
 import {
+  getLinuxInputPluginStatus,
+  type LinuxInputPluginStatus,
   checkAccessibilityPermission,
   checkMicrophonePermission,
   openSystemSettings,
@@ -18,6 +20,7 @@ import { getHotkeyStatus, getWindowsImeStatus } from '../../api/hotkeys';
 import type { NetworkCheckResult } from '../../api/input';
 import { emitSaved } from '../../lib/savedEvent';
 import { getPlatformCapabilities } from '../../runtime/platform';
+import { isLinuxHost } from '../../runtime/environment';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
 import {
   checkAndroidMicrophoneAccess,
@@ -39,7 +42,20 @@ import { SettingRow } from '../../ui/controls/SettingRow';
 const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
 
 export function PermissionsSection() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const linux = isLinuxHost();
+  const zh = i18n.language.startsWith('zh');
+  const [plugin, setPlugin] = useState<LinuxInputPluginStatus | null>(null);
+  const [pluginBusy, setPluginBusy] = useState(false);
+  const [pluginError, setPluginError] = useState(false);
+  const refreshPlugin = async () => {
+    setPluginBusy(true);
+    setPluginError(false);
+    try { setPlugin(await getLinuxInputPluginStatus()); }
+    catch { setPluginError(true); }
+    finally { setPluginBusy(false); }
+  };
+  useEffect(() => { if (linux) void refreshPlugin(); }, [linux]);
   const active = useRef(false);
   const pendingPermissions = useRef<Promise<void> | null>(null);
   const recheckOnReturn = useRef(false);
@@ -105,7 +121,7 @@ export function PermissionsSection() {
     if (!platformCaps) return;
     active.current = true;
     void refreshPermissions();
-    if (platformCaps?.supportsDesktopHotkey === true) {
+    if (!linux && platformCaps?.supportsDesktopHotkey === true) {
       refreshHotkey();
     }
     if (platformCaps?.platform !== 'android') {
@@ -260,7 +276,27 @@ export function PermissionsSection() {
           </div>
         </SettingRow>
       )}
-      {platformCaps?.supportsDesktopHotkey === true && (
+      {linux && (
+        <SettingRow label={zh ? 'Fcitx5 输入法插件' : 'Fcitx5 input plugin'}>
+          <div style={permissionActionsStyle}>
+            <Pill tone={plugin?.insertionReady && plugin?.hotkeysReady ? 'default' : 'outline'}>
+              {pluginBusy ? t('settings.permissions.checking') : pluginError ? (zh ? '检查失败' : 'Check failed') :
+                plugin?.insertionReady && plugin?.hotkeysReady ? (zh ? '插入与快捷键可用' : 'Insertion and hotkeys ready') :
+                !plugin?.installed ? (zh ? '未安装' : 'Not installed') :
+                !plugin?.daemonRunning ? (zh ? 'Fcitx5 未运行' : 'Fcitx5 is not running') :
+                !plugin?.loaded ? (zh ? '插件未加载' : 'Plugin not loaded') : (zh ? '插件需要更新' : 'Plugin update required')}
+            </Pill>
+            <Btn size="sm" disabled={pluginBusy} onClick={() => void refreshPlugin()}>
+              {zh ? '重新检测' : 'Check again'}
+            </Btn>
+            <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', flexBasis: '100%' }}>
+              {zh ? '只读检测，不会启动、重载或切换输入法。快捷键依赖 Fcitx5 的输入上下文，并非桌面全局注册。' :
+                'Read-only check: never starts, reloads or switches your IME. Shortcuts depend on an Fcitx5 input context, not global desktop registration.'}
+            </span>
+          </div>
+        </SettingRow>
+      )}
+      {!linux && platformCaps?.supportsDesktopHotkey === true && (
         <SettingRow label={t('settings.permissions.hotkeyLabel')}>
           <div style={permissionActionsStyle}>
             {hotkey?.state === 'failed' && hotkey.message && (

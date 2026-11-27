@@ -14,10 +14,26 @@ body,
   overflow: hidden;
 }
 
-html[data-ol-platform='linux'],
-html[data-ol-platform='linux'] body,
-html[data-ol-platform='linux'] #root {
+/* Only the main Linux window paints a full-page surface. Auxiliary windows
+   share a translucent native surface; painting html/body/root hides its alpha. */
+html[data-ol-platform='linux']:not([data-ol-aux]),
+html[data-ol-platform='linux']:not([data-ol-aux]) body,
+html[data-ol-platform='linux']:not([data-ol-aux]) #root {
   background: var(--ol-surface);
+}
+
+html[data-ol-platform='linux'][data-ol-aux] {
+  /* Prevent the WebEngine canvas from supplying its default white/dark backing. */
+  color-scheme: only light;
+}
+
+/* Native Qt/GTK decorations already provide the outer window corners. The
+   continuous-corners rule must not round the web content beneath the titlebar. */
+html[data-ol-platform='linux']:not([data-ol-aux]) .ol-winchrome {
+  border-radius: 0 !important;
+  corner-shape: round !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
 html[data-ol-platform='android'],

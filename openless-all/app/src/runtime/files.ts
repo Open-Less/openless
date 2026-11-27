@@ -41,6 +41,9 @@ export async function selectDirectory(options: {
 }): Promise<string | null> {
   const { host } = getRuntimeEnvironment();
   if (host === 'preview' && options.previewPath !== undefined) return options.previewPath;
+  if (host === 'linux') {
+    return invokeOrPreview('pick_directory', { title: options.title }, () => null);
+  }
   if (host !== 'tauri') {
     // Harmony can accept a user-entered path but does not expose a directory picker.
     if (host === 'harmony') await requireBackendReady();

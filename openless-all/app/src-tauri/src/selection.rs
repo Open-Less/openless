@@ -11,7 +11,7 @@
 //! Prompt budgets for unrelated QA/cursor context remain at their own call sites.
 //!
 //! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架。
-//! Linux 桌面已改由 egui 前端（`openless-all/linux/egui`）承担，Tauri 版不再提供
+//! Linux 桌面已改由 Linux 原生宿主（`openless-all/linux/host`）承担，Tauri 版不再提供
 //! Linux 的选区读取路径。
 
 // 仅 macOS / Windows 的模拟复制路径用 sleep。

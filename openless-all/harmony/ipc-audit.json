@@ -516,6 +516,13 @@
       "implementation": "frontend mobile capability adapter"
     },
     {
+      "name": "get_ime_backend_status",
+      "calledFrom": [
+        "src/lib/ipc/hotkeys.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "get_input_app_icons",
       "calledFrom": [
         "src/lib/ipc/style-packs.ts"

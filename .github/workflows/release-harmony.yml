@@ -322,16 +322,7 @@ jobs:
           # AppGallery needs a numeric versionName, so the packaging script keeps
           # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
           version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
-          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
-          if [ -f ../linux/egui/package-revision ]; then
-            revision_file=../linux/egui/package-revision
-          elif [ -f linux-egui/package-revision ]; then
-            revision_file=linux-egui/package-revision
-          else
-            echo "::error::Missing source input: ../linux/egui/package-revision or linux-egui/package-revision" >&2
-            exit 1
-          fi
-          version_code=$(cat "$revision_file")
+          version_code=$(cat ../linux/host/package-revision)
           toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
           # The Release only carries the unsigned package; the store copy must
           # additionally prove its signature.

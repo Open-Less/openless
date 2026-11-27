@@ -40,7 +40,7 @@ const fixtures = [
   },
   {
     ref: 'refs/pull/102/merge',
-    key: 'v0-rust-build-linux-egui-Linux-x64-32c982f2-6e438e89',
+    key: 'v0-rust-build-linux-host-Linux-x64-32c982f2-6e438e89',
     size: 1_338_000_000,
     created: '2026-10-03T02:00:00Z',
   },

@@ -1831,6 +1831,13 @@ impl EncryptedSyncService {
         let baseline = self.baseline_documents(runtime)?;
         let merged = documents::diff_sync_documents(baseline.as_ref(), &local.documents, &remote)
             .map_err(document_error)?;
+        // Only style names are displayable metadata. Do not forward document
+        // values (credentials, prompts, history or icon contents) to the review UI.
+        let style_label = |docs: &ValidatedSyncDocuments, id: &str| -> Option<String> {
+            let doc = docs.documents().documents.iter().find(|doc|
+                doc.kind == DocumentKind::StylePacks && doc.id == id)?;
+            style_review_label(doc.kind, &doc.value)
+        };
         let conflicts = merged
             .conflicts()
             .iter()
@@ -1838,6 +1845,8 @@ impl EncryptedSyncService {
                 id: conflict.conflict_id.clone(),
                 kind: wire_name(&conflict.kind),
                 reason: wire_name(&conflict.reason),
+                local_label: style_label(&local.documents, &conflict.document_id),
+                cloud_label: style_label(&remote, &conflict.document_id),
             })
             .collect();
         let mut counts = BTreeMap::new();
@@ -2798,6 +2807,28 @@ fn wire_name(value: &impl Serialize) -> String {
 fn same_documents(left: &DocumentSet, right: &DocumentSet) -> bool {
     // Device/time metadata describes an export, not a user edit.
     left.documents == right.documents && left.tombstones == right.tombstones
+}
+
+fn style_review_label(kind: DocumentKind, value: &serde_json::Value) -> Option<String> {
+    if kind != DocumentKind::StylePacks { return None; }
+    let name = value.pointer("/pack/name")?.as_str()?;
+    let name: String = name.chars().filter(|c| !c.is_control()).take(100).collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+#[cfg(test)]
+mod conflict_labels_tests {
+    use super::*;
+    #[test]
+    fn review_only_exposes_bounded_style_names_not_document_contents() {
+        let value = serde_json::json!({ "pack": { "name": "My Style", "prompt": "PRIVATE PROMPT" }, "apiKey": "PRIVATE KEY", "icon": "PRIVATE ICON" });
+        assert_eq!(style_review_label(DocumentKind::StylePacks, &value).as_deref(), Some("My Style"));
+        assert!(style_review_label(DocumentKind::Channels, &value).is_none());
+        assert!(style_review_label(DocumentKind::History, &value).is_none());
+        let long = serde_json::json!({"pack": {"name": format!("\\n{}", "中".repeat(200))}});
+        assert_eq!(style_review_label(DocumentKind::StylePacks, &long).unwrap().chars().count(), 100);
+    }
 }
 
 fn definite_rejection(error: &crate::cloud_sync_e2ee_protocol::Error) -> bool {

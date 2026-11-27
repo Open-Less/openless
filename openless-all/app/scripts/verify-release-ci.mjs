@@ -21,7 +21,7 @@ export function verifyReleaseCi(report) {
     if (
       job.status === 'completed' &&
       job.conclusion === 'skipped' &&
-      job.name.endsWith(' / publish-linux-egui')
+      job.name.endsWith(' / publish-linux-host')
     )
       continue;
     throw new Error(`CI job did not pass: ${job.name}`);

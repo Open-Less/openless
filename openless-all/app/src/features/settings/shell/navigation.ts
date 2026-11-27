@@ -109,7 +109,9 @@ export function visibleGeneralPages(
   return GENERAL_PAGES.filter((page) => {
     if (page.id === 'translation') return platform == null || platform === 'desktop';
     if (page.id === 'askEntry') return unifiedAsk;
-    if (page.id === 'askHistory') return !unifiedAsk;
+    // This page controls the new Tauri Ask host's context/read permissions,
+    // not the legacy Core QA view. Linux has no such read adapter yet.
+    if (page.id === 'askHistory') return !unifiedAsk && os !== 'linux';
     if (page.id === 'phone') return platform === 'desktop';
     if (page.id === 'capsule') return platform == null || platform === 'desktop';
     return true;
@@ -119,7 +121,7 @@ export function visibleGeneralPages(
 export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
     if (page.id === 'intentRouting') return platform === 'desktop' && (os === 'mac' || os === 'win');
-    if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
+    if (page.id === 'liveInput') return platform === 'desktop' && os !== 'mac';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';
     if (page.id === 'debug')
       return platform === 'desktop' || platform === 'android' || platform === 'harmony';
@@ -127,12 +129,13 @@ export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS)
   });
 }
 
-// Native readers exist on macOS, Windows, and Android. Generic mobile and Harmony
-// have no cursor-context capture, so the toggle stays hidden there.
+// Native readers exist on macOS, Windows, Android and the Linux host (the fcitx5
+// plugin reports surrounding text). Generic mobile and Harmony have no cursor-context
+// capture, so the toggle stays hidden there.
 export function showsCursorContextControl(platform: PlatformKind | undefined, os: OS): boolean {
   if (platform === 'mobile' || platform === 'harmony' || os === 'harmony') return false;
   if (platform === 'android' || os === 'android') return true;
-  return os === 'mac' || os === 'win';
+  return os === 'mac' || os === 'win' || os === 'linux';
 }
 
 export interface SettingsNavigationItem {

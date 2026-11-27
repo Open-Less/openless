@@ -60,7 +60,12 @@ export function createInteractionController() {
 
   function startTimer(item: NotificationItem) {
     clearTimer(item.id);
-    const duration = item.durationMs ?? (isTransientSuccess(item) ? 3500 : 0);
+    // Ordinary errors/warnings are receipts, not permanent banners. Keep jobs,
+    // actionable notices and explicitly pinned messages until resolved/dismissed.
+    const duration = item.durationMs ?? (
+      item.progress || item.actionLabel || item.state === 'saving' ? 0 :
+      isTransientSuccess(item) ? 3500 : 8000
+    );
     if (duration > 0) {
       timers.set(
         item.id,

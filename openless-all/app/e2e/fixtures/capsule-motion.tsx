@@ -282,7 +282,9 @@ createRoot(document.getElementById('root')!).render(
         transform: 'translateX(-50%)',
       }}
     >
-      <Capsule os={params.get('os') === 'mac' ? 'mac' : undefined} />
+      <Capsule
+        os={params.get('os') === 'mac' ? 'mac' : params.get('os') === 'linux' ? 'linux' : undefined}
+      />
     </div>
   ) : (
     <AppViewport scale={false}>

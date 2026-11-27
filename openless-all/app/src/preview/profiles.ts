@@ -36,6 +36,7 @@ export const unavailableMobileCapabilities: PlatformCapabilities = {
 const viewports: Record<OS, PreviewProfile['viewport']> = {
   mac: { width: 1400, height: 900 },
   win: { width: 1240, height: 800 },
+  linux: { width: 1240, height: 800 },
   android: { width: 412, height: 892 },
   harmony: { width: 420, height: 900 },
 };
@@ -59,7 +60,7 @@ export function getPreviewProfile(os: OS = getRuntimeOS()): PreviewProfile {
       }
     : {
         ...unavailableMobileCapabilities,
-        platform: os,
+        platform: os === 'linux' ? 'desktop' : os,
         supportsInAppDictation: true,
         supportsOverlay: os === 'android',
         supportsAutoUpdate: os === 'android',

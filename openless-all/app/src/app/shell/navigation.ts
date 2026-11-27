@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { getShortcutPlatform } from '../../runtime/environment';
+import { getShortcutPlatform, isLinuxHost, isNativeDesktopHost } from '../../runtime/environment';
 
 export type AppTab =
   | 'overview'
+  | 'ask'
   | 'history'
   | 'usage'
   | 'vocab'
@@ -15,9 +16,10 @@ export type AppTab =
   | 'localAsr';
 
 export function isTabAvailable(tab: AppTab): boolean {
+  if (tab === 'ask') return isNativeDesktopHost();
   if (tab === 'appStyles') {
     const platform = getShortcutPlatform();
-    return platform.isMac || platform.isWindows;
+    return platform.isMac || platform.isWindows || isLinuxHost();
   }
   return true;
 }
@@ -46,6 +48,7 @@ export function useAppState(initialTab: AppTab = 'overview', initialSettings = f
 
 /** i18n key for a group's sub-item title: style → nav.polishMode, everything else nav.<id>. */
 export function subItemLabelKey(id: AppTab): string {
+  if (id === 'ask') return 'selectionAsk.title';
   if (id === 'style') return 'nav.polishMode';
   if (id === 'appStyles') return 'appStyles.title';
   return `nav.${id}`;
@@ -92,6 +95,7 @@ export const NAV_TREE: NavNode[] = [
     key: 'tools',
     icon: 'selectionAsk',
     children: [
+      { id: 'ask' },
       { id: 'corrections' },
       { id: 'translation' },
       { id: 'quickNote' },

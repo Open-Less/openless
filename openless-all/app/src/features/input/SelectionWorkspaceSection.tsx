@@ -7,6 +7,7 @@ import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { defaultSelectionPolishShortcut, getHotkeyStartStopLabel } from '../../lib/hotkey';
 import { openVoiceEditWindow } from '../../api/voice-edit';
 import { setSelectionPolishHotkey } from '../../api/hotkeys';
+import { listenHostEvent } from '../../lib/hostEventBus';
 import { getPlatformCapabilities } from '../../runtime/platform';
 import { useHotkeySettings } from '../../data/preferences';
 import { Card } from '../../ui/layout/Card';
@@ -19,6 +20,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [extraControlsOpen, setExtraControlsOpen] = useState(false);
+  const [voiceEditNotice, setVoiceEditNotice] = useState('');
   const [openPanelBusy, setOpenPanelBusy] = useState(false);
   const [openPanelError, setOpenPanelError] = useState('');
 
@@ -28,6 +30,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
     setOpenPanelError('');
     try {
       await openVoiceEditWindow();
+      if (platformCaps?.linuxHost) setVoiceEditNotice(t('voiceEditLinuxHint'));
     } catch (error) {
       setOpenPanelError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -38,6 +41,13 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
+
+  useEffect(() => {
+    if (!platformCaps?.linuxHost) return;
+    const show = listenHostEvent('voice-edit:show', () => setVoiceEditNotice(''));
+    const error = listenHostEvent('voice-edit:error', (message) => setOpenPanelError(String(message)));
+    return () => { show(); error(); };
+  }, [platformCaps?.linuxHost]);
 
   if (
     !prefs ||
@@ -75,7 +85,7 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
             />
             <button
               type="button"
-              disabled={!prefs.voiceEditEnabled || openPanelBusy}
+              disabled={!prefs.voiceEditEnabled || openPanelBusy || (platformCaps.linuxHost && !prefs.selectionPolishHotkey)}
               aria-busy={openPanelBusy}
               onClick={() => void openPanel()}
               style={{
@@ -90,8 +100,9 @@ export function SelectionWorkspaceSection({ showShortcut = true }: { showShortcu
                 opacity: prefs.voiceEditEnabled ? 1 : 0.5,
               }}
             >
-              {openPanelBusy ? t('common.loading') : t('voiceEdit.openPanel')}
+              {openPanelBusy ? t('common.loading') : platformCaps.linuxHost ? t('voiceEditLinuxArm') : t('voiceEdit.openPanel')}
             </button>
+            {voiceEditNotice && <span role="status">{voiceEditNotice}</span>}
             {openPanelError ? (
               <div role="alert" style={{ flexBasis: '100%', fontSize: 11, color: 'var(--ol-err)' }}>
                 {t('common.operationFailed')}: {openPanelError}

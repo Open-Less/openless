@@ -1,6 +1,6 @@
 import { getPreviewProfile, unavailableMobileCapabilities } from '../preview/profiles';
 import type { PlatformCapabilities, PlatformKind } from '../api/contracts';
-import { getRuntimeEnvironment } from './environment';
+import { getRuntimeEnvironment, isLinuxHost } from './environment';
 import { invokeOrPreview } from './transport';
 
 export type { PlatformCapabilities, PlatformKind };
@@ -15,6 +15,11 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
   if (environment.os === 'harmony') {
     return { ...unavailableMobileCapabilities, platform: 'harmony', supportsInAppDictation: true };
   }
+  if (environment.os === 'linux') {
+    return { ...unavailableMobileCapabilities, platform: 'desktop', linuxHost: true,
+      supportsDesktopHotkey: true, supportsOverlay: true, supportsTray: true,
+      supportsClipboardPasteInsertion: false, supportsAutoUpdate: true, supportsVoiceEdit: true };
+  }
   if (environment.os === 'android') {
     return { ...unavailableMobileCapabilities, platform: 'android', supportsInAppDictation: true };
   }
@@ -24,6 +29,7 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
 
 export function getPlatformCapabilities(): Promise<PlatformCapabilities> {
   if (cachedCapabilities) return Promise.resolve(cachedCapabilities);
+  if (isLinuxHost()) return Promise.resolve(cachedCapabilities = inferPlatformCapabilities());
   pendingCapabilities ??= invokeOrPreview(
     'get_platform_capabilities',
     undefined,

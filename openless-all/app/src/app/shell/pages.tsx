@@ -4,6 +4,7 @@ import { Overview } from '../../features/overview/Overview';
 import type { AppTab } from './navigation';
 
 const loaders = {
+  ask: () => import('../../features/qa/AskTool').then((module) => ({ default: module.AskTool })),
   appStyles: () =>
     import('../../features/style-packs/AppStyleRouting').then((module) => ({
       default: module.AppStyleRouting,
@@ -35,6 +36,7 @@ const pages: Partial<Record<AppTab, ComponentType>> = {
   // History is a primary destination on both desktop and mobile.
   history: History,
   usage: lazy(loaders.usage),
+  ask: lazy(loaders.ask),
   vocab: lazy(loaders.vocab),
   style: lazy(loaders.style),
   appStyles: lazy(loaders.appStyles),

@@ -244,7 +244,7 @@ for (const name of readdirSync(workflowDir).filter((path) => path.endsWith('.yml
 }
 const ciSource = readFileSync(resolve(workflowDir, 'ci.yml'), 'utf8');
 for (const [good, bad] of [
-  ['cat ../linux/egui/package-revision', 'cat linux-egui/package-revision'],
+  ['cat ../linux/host/package-revision', 'cat linux-egui/package-revision'],
   [
     'node ../harmony/scripts/audit-harmony-ipc.mjs --check',
     'git diff --exit-code harmony/ipc-audit.json',

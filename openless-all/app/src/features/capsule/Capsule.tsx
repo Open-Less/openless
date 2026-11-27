@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { collectCapsuleInputRegions } from '../../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getRuntimeOS, isTauriHost, type OS } from '../../runtime/environment';
+import { getRuntimeOS, isNativeDesktopHost, type OS } from '../../runtime/environment';
 import { createCapsuleRegionPublisher } from '../../runtime/windows/capsuleInput';
 import { warmUpSiriShaders } from './SiriGL';
 import { useReducedMotion } from '../../lib/motion';
@@ -232,7 +232,8 @@ function ClassicCapsule({
   const reduced = useReducedMotion();
   // The top floating translation badge reflects only the current foreground session,
   // never background processing jobs (which show their own status on the rear satellite).
-  const translating = translation && (state === 'recording' || state === 'transcribing' || state === 'polishing');
+  const translating =
+    translation && (state === 'recording' || state === 'transcribing' || state === 'polishing');
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
@@ -337,7 +338,7 @@ const INSERT_DEMO_CHUNKS = [
 const INSERT_DEMO_GAPS_MS = [420, 560, 640, 540, 280];
 
 function getPreviewCapsulePayload() {
-  if (isTauriHost() || typeof window === 'undefined') {
+  if (isNativeDesktopHost() || typeof window === 'undefined') {
     return {
       state: 'idle' as CapsuleState,
       level: 0,
@@ -376,7 +377,7 @@ interface CapsuleProps {
 export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const { t } = useTranslation();
   const os = forcedOs ?? getRuntimeOS();
-  const isTauri = isTauriHost();
+  const isTauri = isNativeDesktopHost();
   const [publishInputRegions] = useState(createCapsuleRegionPublisher);
   const preview = useMemo(() => getPreviewCapsulePayload(), []);
   const reducedMotion = useReducedMotion();
@@ -789,7 +790,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   }, [transcriptVisible]);
 
   useEffect(() => {
-    if (!isTauri || os !== 'mac') return;
+    if (!isTauri || (os !== 'mac' && os !== 'linux')) return;
     let stopped = false;
     let frame = 0;
     let last = '';
@@ -855,7 +856,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   }, [isTauri, os, state, leaving, insertFallback, suggestions.length, publishInputRegions]);
 
   useEffect(() => {
-    if (!isTauri || os !== 'mac') return;
+    if (!isTauri || (os !== 'mac' && os !== 'linux')) return;
     return () => {
       void publishInputRegions([]).catch((error) =>
         console.warn('[capsule] input region cleanup failed', error),
@@ -956,30 +957,31 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         willChange: isClassic ? 'auto' : 'transform, opacity',
       }}
     >
-      {displayedSatellite && (() => {
-        const satelliteLabel = displayedSatellite.translationActive
-          ? t('capsule.translating')
-          : t('capsule.transcribing');
-        return (
-          <button
-            className="ol-processing-satellite"
-            style={{ bottom: hostMetrics.bottomInset + 28 }}
-            data-session-id={displayedSatellite.sessionId}
-            data-translation={displayedSatellite.translationActive}
-            data-leaving={displayedSatellite.leaving}
-            data-capsule-interactive
-            disabled={displayedSatellite.leaving}
-            aria-label={`${satelliteLabel} · ${displayedSatellite.count} · ${t('common.cancel')}`}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => void cancelDictation(displayedSatellite.sessionId)}
-          >
-            <span className="ol-processing-satellite-label" aria-hidden="true">
-              {satelliteLabel}
-              {displayedSatellite.count > 1 ? ` · ${displayedSatellite.count}` : ''}
-            </span>
-          </button>
-        );
-      })()}
+      {displayedSatellite &&
+        (() => {
+          const satelliteLabel = displayedSatellite.translationActive
+            ? t('capsule.translating')
+            : t('capsule.transcribing');
+          return (
+            <button
+              className="ol-processing-satellite"
+              style={{ bottom: hostMetrics.bottomInset + 28 }}
+              data-session-id={displayedSatellite.sessionId}
+              data-translation={displayedSatellite.translationActive}
+              data-leaving={displayedSatellite.leaving}
+              data-capsule-interactive
+              disabled={displayedSatellite.leaving}
+              aria-label={`${satelliteLabel} · ${displayedSatellite.count} · ${t('common.cancel')}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => void cancelDictation(displayedSatellite.sessionId)}
+            >
+              <span className="ol-processing-satellite-label" aria-hidden="true">
+                {satelliteLabel}
+                {displayedSatellite.count > 1 ? ` · ${displayedSatellite.count}` : ''}
+              </span>
+            </button>
+          );
+        })()}
       {!renderedSelectionPolish &&
         (isClassic ? (
           <ClassicCapsule

@@ -143,6 +143,7 @@ export {
   getHotkeyStatus,
   getHotkeyCapability,
   getWindowsImeStatus,
+  getImeBackendStatus,
   validateComboHotkey,
   setComboHotkey,
   validateShortcutBinding,
@@ -156,6 +157,7 @@ export {
   setStylePackHotkeys,
   setShortcutRecordingActive,
 } from './hotkeys';
+export type { ImeBackendStatus } from './hotkeys';
 
 // devices
 export type { NetworkCheckResult } from './devices';

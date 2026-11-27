@@ -1,4 +1,4 @@
-import { isTauriHost } from '../runtime/environment';
+import { isNativeDesktopHost, isTauriHost } from '../runtime/environment';
 import { invokeOrPreview } from '../runtime/transport';
 import { downloadUrl } from '../runtime/files';
 import type { ActivityDay, DictationSession } from './contracts';
@@ -7,7 +7,11 @@ import { historyStore } from '../data/history';
 import * as commands from '../lib/ipc/history';
 
 export { getActivityApps, type YearlyActivityApps } from '../data/history';
-export { getActivityAppIcons, readAudioRecording, type HistoryRetranscriptionResult } from '../lib/ipc/history';
+export {
+  getActivityAppIcons,
+  readAudioRecording,
+  type HistoryRetranscriptionResult,
+} from '../lib/ipc/history';
 
 export function deleteHistoryEntry(id: string): Promise<void> {
   return historyStore.mutate(() => commands.deleteHistoryEntry(id));
@@ -43,7 +47,7 @@ export async function getActivityStats(): Promise<ActivityDay[]> {
 }
 
 export async function exportAudioRecording(sessionId: string): Promise<void> {
-  if (isTauriHost()) {
+  if (isTauriHost() || isNativeDesktopHost()) {
     return invokeOrPreview('export_audio_recording', { sessionId }, () => undefined);
   }
   const dataUrl = await commands.readAudioRecording(sessionId);

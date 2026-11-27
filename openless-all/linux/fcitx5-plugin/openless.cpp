@@ -19,6 +19,14 @@
  *    GetSelectionText() -> s             — 读取**当前** PRIMARY 选区文本：探针可用时以合成器为准，
  *                                          当前选区没有 text mime 时返回空，而不是 clipboard
  *                                          addon 里那份可能过期的缓存（见 primary_selection.h）
+ *    GetSurroundingText() -> s           — 焦点输入上下文的光标上下文：
+ *                                          text=应用自报的全文，cursor/anchor=字符偏移，
+ *                                          valid=应用是否支持 surrounding text，
+ *                                          program=应用程序名（用于敏感应用门禁）。
+ *                                          Linux 的光标上下文与自动学词都以它为准，
+ *                                          不支持 surrounding text 的应用返回 valid=0。
+ *                                          编码：`valid\x1fprogram\x1fcursor\x1fanchor\x1ftext`
+ *                                          （偏移是字符数，text 在最后一段，可含任意字符）。
  *    SetClipboardText(s: text) -> b      — 通过 clipboard addon 写入 CLIPBOARD
  *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
  *    ApplySelectionTarget(sss: ticket, source, replacement) -> b — 校验后替换
@@ -38,7 +46,10 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
+#include <thread>
+#include <utility>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -96,6 +107,8 @@ public:
           translationRawStates_(0),
           switchStyleRawSym_(0),
           switchStyleRawStates_(0),
+          skipAutoStyleRawSym_(0),
+          skipAutoStyleRawStates_(0),
           openAppRawSym_(0),
           openAppRawStates_(0),
           hasCustomDictationKey_(false),
@@ -148,6 +161,10 @@ public:
                     auto states = static_cast<uint32_t>(keyEvent.key().states()) &
                                   openless_hotkeys::kModifierMask;
                     bool isPress = !keyEvent.isRelease();
+                    if (isPress) {
+                        if (switchStyleHeld_ && sym != switchStyleRawSym_) switchStyleCombined_ = true;
+                        if (skipAutoStyleHeld_ && sym != skipAutoStyleRawSym_) skipAutoStyleCombined_ = true;
+                    }
 
                     // 命中判定统一走 hotkey_match.h：字母大小写折叠 + US 布局
                     // base/shifted 视为同一物理键（前端把 Shift 折进 keysym）。
@@ -262,8 +279,10 @@ public:
                         if (isPress) selectionIc_ = keyEvent.inputContext();
                         FCITX_LOGC(openless, Debug)
                             << "Selection polish shortcut";
-                        selectionPolishEvent(selectionPolishRawSym_,
-                                             selectionPolishRawStates_, isPress);
+                        if (openless_hotkeys::shouldNotifyAction(isPress,
+                                static_cast<uint32_t>(keyEvent.origKey().states()))) {
+                            selectionPolishEvent(selectionPolishRawSym_, selectionPolishRawStates_, true);
+                        }
                         consume(selectionPolishRawSym_);
                         return;
                     }
@@ -281,8 +300,27 @@ public:
                     }
                     if (switchStyleRawSym_ != 0 &&
                         hit(switchStyleRawSym_, switchStyleRawStates_)) {
-                        switchStyleEvent(sym, states, isPress);
+                        const bool repeat = !openless_hotkeys::shouldNotifyAction(isPress, static_cast<uint32_t>(keyEvent.origKey().states())) && isPress;
+                        if (isModifierKeySym(switchStyleRawSym_) && switchStyleRawStates_ == 0) {
+                            if (isPress && !repeat) { switchStyleHeld_ = true; switchStyleCombined_ = false; }
+                            if (!isPress) {
+                                if (switchStyleHeld_ && !switchStyleCombined_) switchStyleEvent(sym, states, true);
+                                switchStyleHeld_ = false;
+                            }
+                        } else if (isPress && !repeat) switchStyleEvent(sym, states, true);
                         consume(switchStyleRawSym_);
+                        return;
+                    }
+                    if (skipAutoStyleRawSym_ != 0 && hit(skipAutoStyleRawSym_, skipAutoStyleRawStates_)) {
+                        const bool repeat = !openless_hotkeys::shouldNotifyAction(isPress, static_cast<uint32_t>(keyEvent.origKey().states())) && isPress;
+                        if (isModifierKeySym(skipAutoStyleRawSym_) && skipAutoStyleRawStates_ == 0) {
+                            if (isPress && !repeat) { skipAutoStyleHeld_ = true; skipAutoStyleCombined_ = false; }
+                            if (!isPress) {
+                                if (skipAutoStyleHeld_ && !skipAutoStyleCombined_) skipAutoStyleEvent(sym, states, true);
+                                skipAutoStyleHeld_ = false;
+                            }
+                        } else if (isPress && !repeat) skipAutoStyleEvent(sym, states, true);
+                        consume(skipAutoStyleRawSym_);
                         return;
                     }
                     if (openAppRawSym_ != 0 &&
@@ -368,37 +406,48 @@ public:
     }
 
     std::string captureSelectionTarget(const std::string &ticket) {
-        if (ticket.empty() || !selectionIc_) {
+        if (ticket.empty()) {
             return std::string();
+        }
+        // 只走输入法：直接问 fcitx5 的 clipboard addon 要 PRIMARY —— 和“读剪贴板”
+        // 完全同一条路径（`IClipboard::primary(ic)`），并且把**当前输入上下文**
+        // 传进去，让它按该客户端的 data-device 取，而不是我们自己去合成器开
+        // ext-data-control（KWin 特有）、也不是读 addon 的字符串缓存。
+        //
+        // 之前的实现有三条来源（合成器探针 / 缓存 / 应用自报的 surrounding），
+        // 互相抢答，出现「拿到的是上一次的选区」这种不准确的情况。现在只留一条。
+        // 契约用例通过 `setSelectionCacheReader` 注入固定值，替代 clipboard addon；
+        // 运行时没有注入，就走 addon 的 PRIMARY 读取。
+        const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
+                                               : fcitx::SurroundingText();
+        std::string text = readSelectionText(surrounding);
+        if (text.empty()) {
+            FCITX_LOGC(openless, Debug)
+                << "CaptureSelectionTarget: no selection (surrounding invalid or empty, "
+                   "PRIMARY empty)";
+            return std::string();
+        }
+        FCITX_LOGC(openless, Debug)
+            << "CaptureSelectionTarget: captured " << text.size()
+            << " chars (surrounding valid=" << surrounding.isValid() << ")";
+        selectionTargets_[ticket] = {
+            selectionIc_, text, std::string(), surrounding.text(),
+            surrounding.cursor(), surrounding.anchor(), surrounding.isValid()};
+        return text;
+    }
+
+    std::string captureFocusedSelectionTarget(const std::string &ticket) {
+        if (ticket.empty() || !selectionIc_ || !selectionIc_->hasFocus() ||
+            selectionIc_->capabilityFlags().test(fcitx::CapabilityFlag::Password)) {
+            return {};
         }
         const auto &surrounding = selectionIc_->surroundingText();
-        const std::string surroundingSelected =
-            surrounding.isValid() ? surrounding.selectedText() : std::string();
-        // 选区文本以**合成器此刻的 PRIMARY** 为准；应用自己报的 surrounding 只在探针
-        // 给不出结论时兜底（规则见 primary_selection.h 的 chooseSelectionSource）。
-        // 旧实现反过来——先信 surrounding，再退到 clipboard addon 的缓存——于是
-        // “新选区没有 text mime”时会把上一次的选区文本当成当前选区。
-        const auto primary = primarySelectionReader_();
-        auto source =
-            openless_selection::chooseSelectionSource(primary, surroundingSelected);
-        if (source.text.empty() &&
-            primary.status == openless_selection::PrimarySelectionStatus::Unsupported) {
-            // 最后一级兜底：探针**不可用**（X11 会话、合成器没有 ext-data-control）
-            // 且应用自己也没报选中文本时，才用 clipboard addon 的缓存——那是本机
-            // 唯一剩下的来源，也是这次改动之前的行为（否则无 surrounding 的 XIM 类
-            // 应用在 X11 会话下会彻底拿不到选区）。
-            // 边界：探针**给出结论**时（NoText / NoSelection）绝不走这里，
-            // 否则“新选区不是文本”依旧会落到旧文本上，② 就白修了。
-            source = {selectionCacheReader_(), "clipboard-cache-fallback"};
-        }
-        logSelectionCapture(primary, source, surroundingSelected);
-        if (source.text.empty()) {
-            return std::string();
-        }
-        selectionTargets_[ticket] = {
-            selectionIc_, source.text, std::string(), surrounding.text(),
-            surrounding.cursor(), surrounding.anchor(), surrounding.isValid()};
-        return source.text;
+        if (!surrounding.isValid()) return {};
+        const auto text = surrounding.selectedText();
+        if (text.empty()) return {};
+        selectionTargets_[ticket] = {selectionIc_, text, {}, surrounding.text(),
+                                     surrounding.cursor(), surrounding.anchor(), true};
+        return text;
     }
 
     bool captureDictationTarget(const std::string &ticket) {
@@ -407,6 +456,16 @@ public:
         // update savedIc_. Destruction invalidates the ticket instead of
         // redirecting the remaining transcript to a different application.
         return dictationTargets_.emplace(ticket, savedIc_).second;
+    }
+
+    std::string dictationTargetProgram(const std::string &ticket) {
+        const auto found = dictationTargets_.find(ticket);
+        return found == dictationTargets_.end() ? std::string() : found->second->program();
+    }
+
+    std::string dictationTargetSurrounding(const std::string &ticket) {
+        const auto found = dictationTargets_.find(ticket);
+        return surroundingTextFor(found == dictationTargets_.end() ? nullptr : found->second);
     }
 
     bool commitDictationTarget(const std::string &ticket, const std::string &text) {
@@ -432,6 +491,10 @@ public:
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic) {
+            // 没有输入上下文（选区来自 PRIMARY）：只读预览，替换必须安全失败。
+            return false;
+        }
         const auto &surrounding = ic->surroundingText();
         const auto &captured = found->second;
         // PRIMARY can outlive the selection, and the same selected string may
@@ -451,12 +514,28 @@ public:
         return true;
     }
 
+    bool applyFocusedSelectionTarget(const std::string &ticket,
+                                     const std::string &source,
+                                     const std::string &replacement) {
+        const auto found = selectionTargets_.find(ticket);
+        if (found == selectionTargets_.end() || !found->second.inputContext ||
+            !found->second.inputContext->hasFocus() ||
+            found->second.inputContext->capabilityFlags().test(fcitx::CapabilityFlag::Password)) {
+            return false;
+        }
+        return applySelectionTarget(ticket, source, replacement);
+    }
+
     bool revertSelectionTarget(const std::string &ticket) {
         auto found = selectionTargets_.find(ticket);
         if (found == selectionTargets_.end() || found->second.replacement.empty()) {
             return false;
         }
         auto *ic = found->second.inputContext;
+        if (!ic) {
+            // 没有输入上下文时谈不上「撤销替换」。
+            return false;
+        }
         const auto &replacement = found->second.replacement;
         const auto &surrounding = ic->surroundingText();
         if (!surrounding.isValid()) {
@@ -652,6 +731,12 @@ public:
         persistRawHotkey("SwitchStyle", sym, states);
     }
 
+    void setSkipAutoStyleHotkeyRaw(uint32_t sym, uint32_t states) {
+        skipAutoStyleRawSym_ = sym;
+        skipAutoStyleRawStates_ = states;
+        persistRawHotkey("SkipAutoStyle", sym, states);
+    }
+
     void setOpenAppHotkeyRaw(uint32_t sym, uint32_t states) {
         openAppRawSym_ = sym;
         openAppRawStates_ = states;
@@ -685,25 +770,125 @@ public:
     /// 探针不可用（X11 会话、合成器不提供 ext-data-control）或数据没读完时，才退回
     /// 缓存——那是本机唯一还能用的来源。
     std::string getSelectionText() {
-        using Status = openless_selection::PrimarySelectionStatus;
-        const auto primary = primarySelectionReader_();
-        if (primary.status == Status::Text) {
-            FCITX_LOGC(openless, Debug)
-                << "GetSelectionText: probe read " << primary.text.size()
-                << " chars";
-            return primary.text;
+        // 与 `captureSelectionTarget` 走同一条读取路径。
+        const auto &surrounding = selectionIc_ ? selectionIc_->surroundingText()
+                                               : fcitx::SurroundingText();
+        const std::string text = readSelectionText(surrounding);
+        FCITX_LOGC(openless, Debug)
+            << "GetSelectionText: " << text.size() << " chars";
+        return text;
+    }
+
+    /// 读取当前选区：**输入法本来就看得见输入框**。
+    ///
+    /// 1. 客户端通过 `text-input-v3` / GTK / Qt 上报的 surrounding text 里，
+    ///    `anchor != cursor` 就是选区（键盘选中也有，且带精确偏移）——
+    ///    Chrome / Electron / VS Code / LibreOffice / GTK-Qt 应用都属这一类。
+    /// 2. 客户端根本不支持 surrounding（XIM 老应用、部分终端）时，用输入法的
+    ///    特权反过来「让应用自己复制」：向焦点客户端转发一次复制快捷键，再读
+    ///    clipboard addon 拿到的内容。终端类程序用 Ctrl+Shift+C，避免 Ctrl+C
+    ///    变成 SIGINT。
+    std::string readSelectionText(const fcitx::SurroundingText &surrounding) {
+        if (surrounding.isValid()) {
+            const std::string selected = surrounding.selectedText();
+            if (!selected.empty()) {
+                return selected;
+            }
         }
-        if (primary.status == Status::NoText ||
-            primary.status == Status::NoSelection) {
-            FCITX_LOGC(openless, Debug)
-                << "GetSelectionText: no text selection (" << primary.detail
-                << ")";
+        if (selectionCacheReader_) {
+            return selectionCacheReader_();
+        }
+        return copySelectionFromClient(selectionIc_ ? selectionIc_->program() : std::string());
+    }
+
+    /// 让焦点应用执行一次「复制」，从剪贴板读回选区内容。
+    ///
+    /// 只在 surrounding text 不可用时调用；读回后尽力恢复原剪贴板（Wayland 下
+    /// 只有拥有键盘焦点的客户端能真正写选区，所以恢复是 best-effort）。
+    std::string copySelectionFromClient(const std::string &program) {
+        if (copyInFlight_ || !selectionIc_) {
             return std::string();
         }
-        FCITX_LOGC(openless, Warn)
-            << "GetSelectionText: primary probe unavailable (" << primary.detail
-            << "), falling back to the clipboard addon cache";
-        return selectionCacheReader_();
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
+            return std::string();
+        }
+        // 终端里 Ctrl+C 是 SIGINT：改用终端自己的复制键。
+        static const std::set<std::string> terminals = {
+            "konsole",  "alacritty", "kitty",  "gnome-terminal", "kgx",
+            "wezterm",  "foot",      "xterm",  "urxvt",          "tilix",
+            "terminator", "st",      "contour", "rio",
+        };
+        const bool term = terminals.count(program) > 0;
+        fcitx::KeyStates states = fcitx::KeyState::Ctrl;
+        if (term) {
+            states = states | fcitx::KeyState::Shift;
+        }
+        const fcitx::Key key(term ? FcitxKey_C : FcitxKey_c, states);
+
+        const std::string before = clipboard->call<IClipboard::clipboard>(selectionIc_);
+        copyInFlight_ = true;
+        selectionIc_->forwardKey(key, false);
+        selectionIc_->forwardKey(key, true);
+        std::string copied;
+        for (int attempt = 0; attempt < 30; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            const std::string now = clipboard->call<IClipboard::clipboard>(selectionIc_);
+            if (!now.empty() && now != before) {
+                copied = now;
+                break;
+            }
+        }
+        if (!copied.empty() && !before.empty()) {
+            // best-effort 还原，避免把用户的剪贴板换掉。
+#if OPENLESS_FCITX_CLIPBOARD_V2
+            clipboard->call<IClipboard::setClipboardV2>("openless", before, false);
+#else
+            clipboard->call<IClipboard::setClipboard>("openless", before);
+#endif
+        }
+        copyInFlight_ = false;
+        FCITX_LOGC(openless, Debug)
+            << "CopySelection: program=" << program << " chars=" << copied.size()
+            << (term ? " (terminal shortcut)" : "");
+        return copied;
+    }
+
+    /// 焦点输入上下文的 surrounding text。应用不支持时 `valid=false`。
+    ///
+    /// 为什么走 IME 而不是 AT-SPI：我们本来就在输入链路里（提交文字用的就是这个
+    /// input context），应用自报的光标位置比遍历无障碍树可靠得多，也不需要额外权限。
+    std::string getSurroundingText() {
+        auto *ic = savedIc_;
+        if (!ic) {
+            auto &mgr = instance_->inputContextManager();
+            mgr.foreachFocused([&](InputContext *focusedIc) {
+                ic = focusedIc;
+                return false;
+            });
+        }
+        return surroundingTextFor(ic);
+    }
+
+    std::string surroundingTextFor(InputContext *ic) {
+        constexpr char kSep = '\x1f';
+        if (!ic) {
+            return std::string("0") + kSep + std::string() + kSep + "0" + kSep + "0" + kSep;
+        }
+        const std::string program = ic->program();
+        if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Password)) {
+            return std::string("0") + kSep + program + kSep + "0" + kSep + "0" + kSep;
+        }
+        const auto &surrounding = ic->surroundingText();
+        const bool valid = surrounding.isValid();
+        if (!valid) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSurroundingText: invalid for program=" << program;
+            return std::string("0") + kSep + program + kSep + "0" + kSep + "0" + kSep;
+        }
+        return std::string("1") + kSep + program + kSep +
+               std::to_string(surrounding.cursor()) + kSep +
+               std::to_string(surrounding.anchor()) + kSep + surrounding.text();
     }
 
     bool setClipboardText(const std::string &text) {
@@ -713,16 +898,37 @@ public:
                 << "SetClipboardText: clipboard addon not loaded";
             return false;
         }
+        // setClipboardV2(name, text, password) 是 fcitx5 5.1.16 才加的；更老的
+        // 发行版只有 setClipboard(name, text)。版本由 CMake 传进来，避免在
+        // 「命名空间 + 结构体」这套声明宏上做 SFINAE。
+#if OPENLESS_FCITX_CLIPBOARD_V2
+        clipboard->call<IClipboard::setClipboardV2>("openless", text, false);
+#else
         clipboard->call<IClipboard::setClipboard>("openless", text);
+#endif
+        // 读回校验：KWin 下后台进程没有输入事件序列时，setClipboard 会**静默
+        // 失败**（不报错，但选区内容不变）。这里如实返回 false，避免调用方以为
+        // 成功了。宿主应改用自己窗口的剪贴板 API。
+        const std::string readback =
+            clipboard->call<IClipboard::clipboard>(nullptr);
+        if (readback != text) {
+            FCITX_LOGC(openless, Debug)
+                << "SetClipboardText: clipboard not updated (readback mismatch)";
+            return false;
+        }
         return true;
     }
 
     FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(captureDictationTarget, "CaptureDictationTarget", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(dictationTargetProgram, "DictationTargetProgram", "s", "s");
+    FCITX_OBJECT_VTABLE_METHOD(dictationTargetSurrounding, "DictationTargetSurrounding", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(commitDictationTarget, "CommitDictationTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelDictationTarget, "CancelDictationTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(captureSelectionTarget, "CaptureSelectionTarget", "s", "s");
+    FCITX_OBJECT_VTABLE_METHOD(captureFocusedSelectionTarget, "CaptureFocusedSelectionTarget", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(applySelectionTarget, "ApplySelectionTarget", "sss", "b");
+    FCITX_OBJECT_VTABLE_METHOD(applyFocusedSelectionTarget, "ApplyFocusedSelectionTarget", "sss", "b");
     FCITX_OBJECT_VTABLE_METHOD(revertSelectionTarget, "RevertSelectionTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(rekeySelectionTarget, "RekeySelectionTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelSelectionTarget, "CancelSelectionTarget", "s", "b");
@@ -734,9 +940,11 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSwitchStyleHotkeyRaw, "SetSwitchStyleHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setSkipAutoStyleHotkeyRaw, "SetSkipAutoStyleHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setOpenAppHotkeyRaw, "SetOpenAppHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setStylePackHotkeys, "SetStylePackHotkeys", "a(suu)", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(getSurroundingText, "GetSurroundingText", "", "s");
     FCITX_OBJECT_VTABLE_METHOD(setClipboardText, "SetClipboardText", "s", "b");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
@@ -745,6 +953,7 @@ public:
     FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(switchStyleEvent, "SwitchStyleEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(skipAutoStyleEvent, "SkipAutoStyleEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(openAppEvent, "OpenAppEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(stylePackHotkeyEvent, "StylePackHotkeyEvent", "uub");
 
@@ -797,6 +1006,7 @@ public:
             translationRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
         }
         loadRawHotkey(raw, "SwitchStyle", switchStyleRawSym_, switchStyleRawStates_);
+        loadRawHotkey(raw, "SkipAutoStyle", skipAutoStyleRawSym_, skipAutoStyleRawStates_);
         loadRawHotkey(raw, "OpenApp", openAppRawSym_, openAppRawStates_);
         stylePackHotkeys_.clear();
         if (auto *countValue = raw.valueByPath("StylePackHotkeyCount")) {
@@ -938,6 +1148,7 @@ private:
             {"selection_polish", selectionPolishRawSym_, selectionPolishRawStates_},
             {"translation", translationRawSym_, translationRawStates_},
             {"switch_style", switchStyleRawSym_, switchStyleRawStates_},
+            {"skip_auto_style", skipAutoStyleRawSym_, skipAutoStyleRawStates_},
             {"open_app", openAppRawSym_, openAppRawStates_},
         };
         if (hasCustomDictationKey_) {
@@ -1060,6 +1271,12 @@ private:
     uint32_t translationRawStates_;
     uint32_t switchStyleRawSym_;
     uint32_t switchStyleRawStates_;
+    uint32_t skipAutoStyleRawSym_;
+    uint32_t skipAutoStyleRawStates_;
+    bool switchStyleHeld_ = false;
+    bool switchStyleCombined_ = false;
+    bool skipAutoStyleHeld_ = false;
+    bool skipAutoStyleCombined_ = false;
     uint32_t openAppRawSym_;
     uint32_t openAppRawStates_;
     std::vector<std::tuple<std::string, uint32_t, uint32_t>> stylePackHotkeys_;
@@ -1081,6 +1298,8 @@ private:
     /// 真实合成器或剪贴板内容。
     std::function<openless_selection::PrimarySelectionSnapshot()>
         primarySelectionReader_;
+    /// 正在执行「让应用自己复制」的兜底，防止重入。
+    bool copyInFlight_ = false;
     /// clipboard addon 的 PRIMARY 缓存读取，**只**作为“探针不可用”时的最后一级
     /// 兜底（边界见 captureSelectionTarget）。契约用例注入固定值。
     std::function<std::string()> selectionCacheReader_;

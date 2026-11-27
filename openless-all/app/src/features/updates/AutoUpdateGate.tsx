@@ -14,7 +14,9 @@ export function AutoUpdateGate() {
   const { prefs } = useHotkeySettings();
   const u = useAutoUpdate(true);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
-  const enabled = prefs?.autoUpdateCheck === true && platformCaps?.supportsAutoUpdate === true;
+  // Linux checks from the native host, including when the window is hidden.
+  // Do not offer the Tauri installer for deb/rpm packages.
+  const enabled = prefs?.autoUpdateCheck === true && platformCaps?.supportsAutoUpdate === true && !platformCaps.linuxHost;
 
   useEffect(() => {
     let mounted = true;
@@ -57,7 +59,7 @@ export function AutoUpdateGate() {
     };
   }, [enabled]);
 
-  if (platformCaps?.supportsAutoUpdate !== true) return null;
+  if (platformCaps?.supportsAutoUpdate !== true || platformCaps.linuxHost) return null;
 
   return (
     <UpdateDialog

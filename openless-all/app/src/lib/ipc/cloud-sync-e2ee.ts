@@ -1,4 +1,5 @@
-import { invokeOrMock, isTauriNow } from './shared';
+import { invokeOrMock } from './shared';
+import { isNativeDesktopHost } from '../../runtime/environment';
 import { getCloudSyncPreview } from '../../preview/cloud-sync';
 
 export const CLOUD_SYNC_E2EE_CONSENT_VERSION = 'encrypted-full-snapshot-v2';
@@ -54,7 +55,7 @@ export interface RestorePreview {
   localGeneration: string;
   counts: Record<string, number>;
   deviceSettingsToReview: string[];
-  conflicts: Array<{ id: string; kind: string; reason: string }>;
+  conflicts: Array<{ id: string; kind: string; reason: string; localLabel?: string; cloudLabel?: string }>;
 }
 
 export interface EncryptedSyncEventScope {
@@ -186,7 +187,7 @@ export const cloudSyncE2eeGetUiPreferences = (): Promise<{
 } | null> => invokeOrMock('cloud_sync_e2ee_get_ui_preferences', undefined, unavailable);
 
 export async function mirrorEncryptedSyncUiPreferences(): Promise<void> {
-  if (!isTauriNow()) {
+  if (!isNativeDesktopHost()) {
     if (previewCloudSync()) return;
     unavailable();
   }

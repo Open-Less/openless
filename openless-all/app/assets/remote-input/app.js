@@ -288,7 +288,7 @@
       recovering: 'El ordenador está procesando tu última grabación…',
       interrupted: 'Grabación interrumpida. El ordenador procesa el audio ya recibido…',
       offlineRecording:
-        'Conexión perdida; el ordenador seguirá procesando la grabación recibida. Reconecta para ver el resultado.',
+        'Conexión perdida; el ordenador sLinux hostrá procesando la grabación recibida. Reconecta para ver el resultado.',
       recovered: 'Última transcripción recuperada',
       recoveryRetry:
         'La transcripción falló. La grabación está guardada en el historial del ordenador y puede reintentarse.',

@@ -1,5 +1,8 @@
 import { getRuntimeEnvironment } from './environment';
 import { invokeHarmony } from '../lib/harmonyBridge';
+import { invokeHttp, isHttpBridge } from '../lib/httpBridge';
+import { invokeGtk } from '../lib/gtkBridge';
+import { listenHostEvent } from '../lib/hostEventBus';
 
 export const BACKEND_CONTRACT_VERSION = '2.0.0';
 
@@ -18,7 +21,8 @@ export function validateStartupSnapshot(snapshot: StartupSnapshot): StartupSnaps
   return snapshot;
 }
 
-export async function waitForNativeBridge(host: 'tauri' | 'harmony'): Promise<void> {
+export async function waitForNativeBridge(host: 'tauri' | 'harmony' | 'linux'): Promise<void> {
+  if (host === 'linux') return;
   const isReady = () =>
     host === 'harmony'
       ? typeof globalThis.window?.OpenLessHarmonyApi?.invoke === 'function'
@@ -32,11 +36,12 @@ export async function waitForNativeBridge(host: 'tauri' | 'harmony'): Promise<vo
 }
 
 async function invokeNative<T>(
-  host: 'tauri' | 'harmony',
+  host: 'tauri' | 'harmony' | 'linux',
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
   if (host === 'harmony') return invokeHarmony<T>(command, args);
+  if (host === 'linux') return isHttpBridge ? invokeHttp<T>(command, args) : invokeGtk<T>(command, args);
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<T>(command, args);
 }
@@ -78,7 +83,9 @@ export async function listenTauriEvent<T>(
   name: string,
   onEvent: (payload: T) => void,
 ): Promise<() => void> {
-  if (getRuntimeEnvironment().host !== 'tauri') return () => {};
+  const { host } = getRuntimeEnvironment();
+  if (host === 'linux') return listenHostEvent(name, (payload) => onEvent(payload as T));
+  if (host !== 'tauri') return () => {};
   await requireBackendReady();
   const { listen } = await import('@tauri-apps/api/event');
   return listen<T>(name, (event) => onEvent(event.payload));

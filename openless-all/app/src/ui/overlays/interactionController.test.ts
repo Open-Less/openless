@@ -58,3 +58,32 @@ try {
   bridge.dispose();
   controller.clear();
 }
+
+// Deterministic timer coverage: ordinary failures expire, jobs/actions stay,
+// and updating an error restarts its own timer without dismissing a replacement.
+const realTimeout = globalThis.setTimeout;
+const realClear = globalThis.clearTimeout;
+const scheduled = new Map();
+let timerId = 0;
+globalThis.setTimeout = (callback, delay) => { const id = ++timerId; scheduled.set(id, { callback, delay }); return id; };
+globalThis.clearTimeout = (id) => { scheduled.delete(id); };
+const timed = createInteractionController();
+const timedScope = timed.createScope();
+try {
+  timedScope.interaction.notify({ state: 'failed', message: 'Transient failure' });
+  assert.equal([...scheduled.values()][0].delay, 8000);
+  [...scheduled.values()][0].callback();
+  assert.equal(timed.getNotifications().length, 0);
+  timedScope.interaction.notify({ severity: 'warning', message: 'Transient warning' });
+  assert.equal([...scheduled.values()][0].delay, 8000);
+  [...scheduled.values()][0].callback();
+  assert.equal(timed.getNotifications().length, 0);
+  timedScope.interaction.notify({ state: 'saving', message: 'Working' });
+  timedScope.interaction.notify({ state: 'failed', message: 'Pinned', durationMs: 0 });
+  timedScope.interaction.notify({ state: 'failed', message: 'Action', actionLabel: 'Retry', onAction: () => {} });
+  assert.equal(scheduled.size, 0);
+} finally {
+  timedScope.dispose(); timed.clear();
+  globalThis.setTimeout = realTimeout;
+  globalThis.clearTimeout = realClear;
+}
