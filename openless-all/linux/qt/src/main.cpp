@@ -760,6 +760,8 @@ int main(int argc, char **argv) {
                 const auto object = document.object();
                 const QString name = object.value("name").toString();
                 const QString payload = object.value("payload").toString();
+                if (qEnvironmentVariableIsSet("OPENLESS_INPUT_REGION_TRACE"))
+                    qInfo("host event=%s", qPrintable(name));
                 const auto inner = QJsonDocument::fromJson(payload.toUtf8()).object();
                 if (name == "dictation:state") {
                     // DictationPhase: idle/starting/recording/transcribing/
@@ -785,7 +787,7 @@ int main(int argc, char **argv) {
                         QDesktopServices::openUrl(QUrl(inner.value("url").toString()));
                     } else if (action == "restart") {
                         QCoreApplication::instance()->setProperty("openlessRestart", true);
-                        QCoreApplication::quit();
+                        QCoreApplication::exit(0);
                     }
                 } else if (name == "voice-edit:show") {
                     voiceEdit.setVisible(true);
@@ -797,7 +799,9 @@ int main(int argc, char **argv) {
                 } else if (name == "tray:command") {
                     // payload 是 JSON 字符串："show" / "quit"
                     if (payload.contains("quit")) {
-                        QCoreApplication::quit();
+                        // quit() asks the close-to-tray main window to close,
+                        // which deliberately vetoes that request. Tray quit is final.
+                        QCoreApplication::exit(0);
                     } else if (payload.contains("show")) {
                         mainWindow.raise();
                     }
@@ -832,11 +836,23 @@ int main(int argc, char **argv) {
         }
     });
 
-    QObject::connect(&app, &QApplication::aboutToQuit, [backend]() {
+    QObject::connect(&app, &QApplication::aboutToQuit, [&app, backend, instanceServer, instanceKey, instanceLock]() {
         if (backend && backend->state() != QProcess::NotRunning) {
             backend->terminate();
-            backend->waitForFinished(2000);
+            if (!backend->waitForFinished(2000)) {
+                backend->kill();
+                backend->waitForFinished(2000);
+            }
         }
+        instanceServer->close();
+        QLocalServer::removeServer(instanceKey);
+        if (app.property("openlessRestart").toBool()) {
+            if (instanceLock >= 0) ::close(instanceLock);
+            QProcess::startDetached(QCoreApplication::applicationFilePath(), {});
+        }
+        // WebEngine's shutdown hook can block before exec() returns. All owned
+        // processes are now reaped, so exit here instead of entering that hook.
+        std::_Exit(0);
     });
 
     const int exitCode = app.exec();

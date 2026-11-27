@@ -46,7 +46,13 @@ export async function exportErrorLog(suggestedFileName: string): Promise<string 
       () => null,
     );
   if (isLinuxHost()) {
-    const result = await invokeOrMock<{ written: string }>('export_error_log', { fileName: suggestedFileName }, () => { throw new Error('Linux bridge unavailable'); });
+    const result = await invokeOrMock<{ written: string }>(
+      'export_error_log',
+      { fileName: suggestedFileName },
+      () => {
+        throw new Error('Linux bridge unavailable');
+      },
+    );
     return result.written;
   }
   if (isPreviewHost()) {

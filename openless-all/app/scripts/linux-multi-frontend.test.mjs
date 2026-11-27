@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  copyFileSync,
+  chmodSync,
+  rmSync,
+  readFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -18,7 +26,10 @@ try {
   writeFileSync(join(temporary, 'usr/share/openless/version'), 'OpenLess test-234\n');
   for (const frontend of ['qt', 'gtk']) {
     const path = join(temporary, `usr/lib/openless/openless-${frontend}`);
-    writeFileSync(path, `#!/usr/bin/env bash\nprintf '${frontend}'; printf ' <%s>' "$@"; printf '\\n'\n`);
+    writeFileSync(
+      path,
+      `#!/usr/bin/env bash\nprintf '${frontend}'; printf ' <%s>' "$@"; printf '\\n'\n`,
+    );
     chmodSync(path, 0o755);
   }
   const run = (args = []) => spawnSync(launcher, args, { encoding: 'utf8' });
@@ -39,8 +50,13 @@ try {
   const messages = [];
   const window = { addEventListener() {}, __openlessEngine: 'webkitgtk' };
   const clipboard = Object.freeze({ writeText() {} });
-  const context = { window, navigator: { clipboard }, document: { documentElement: { dataset: {} } },
-    alert: (message) => messages.push(message), fetch: () => Promise.resolve({}), console,
+  const context = {
+    window,
+    navigator: { clipboard },
+    document: { documentElement: { dataset: {} } },
+    alert: (message) => messages.push(message),
+    fetch: () => Promise.resolve({}),
+    console,
   };
   vm.runInNewContext(source, context);
   await window.__openlessCopyText('history text 中文');
@@ -58,4 +74,6 @@ try {
   assert.match(qt, /XShapeCombineRectangles/);
   assert.match(gtk, /gdk_surface_set_input_region/);
   console.log('Linux dual-frontend launcher, shared native copy and input-region contracts passed');
-} finally { rmSync(temporary, { recursive: true, force: true }); }
+} finally {
+  rmSync(temporary, { recursive: true, force: true });
+}

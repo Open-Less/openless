@@ -858,6 +858,7 @@ jobs:
           cargo clippy --locked -p openless-linux-host --all-targets -- -D warnings
           node scripts/linux-host-tauri-free-contract.test.mjs
           node scripts/linux-host-release-contract.test.mjs
+          node scripts/linux-multi-frontend.test.mjs
           node scripts/ci-changed-areas.test.mjs
           node scripts/ci-cache-usage.test.mjs
           node scripts/ci-cache-sharing.test.mjs

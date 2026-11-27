@@ -232,7 +232,8 @@ function ClassicCapsule({
   const reduced = useReducedMotion();
   // The top floating translation badge reflects only the current foreground session,
   // never background processing jobs (which show their own status on the rear satellite).
-  const translating = translation && (state === 'recording' || state === 'transcribing' || state === 'polishing');
+  const translating =
+    translation && (state === 'recording' || state === 'transcribing' || state === 'polishing');
   const liveText = transcript?.trim() ?? '';
   const classicGeometry = getClassicCapsuleGeometry(
     os,
@@ -956,30 +957,31 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         willChange: isClassic ? 'auto' : 'transform, opacity',
       }}
     >
-      {displayedSatellite && (() => {
-        const satelliteLabel = displayedSatellite.translationActive
-          ? t('capsule.translating')
-          : t('capsule.transcribing');
-        return (
-          <button
-            className="ol-processing-satellite"
-            style={{ bottom: hostMetrics.bottomInset + 28 }}
-            data-session-id={displayedSatellite.sessionId}
-            data-translation={displayedSatellite.translationActive}
-            data-leaving={displayedSatellite.leaving}
-            data-capsule-interactive
-            disabled={displayedSatellite.leaving}
-            aria-label={`${satelliteLabel} · ${displayedSatellite.count} · ${t('common.cancel')}`}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => void cancelDictation(displayedSatellite.sessionId)}
-          >
-            <span className="ol-processing-satellite-label" aria-hidden="true">
-              {satelliteLabel}
-              {displayedSatellite.count > 1 ? ` · ${displayedSatellite.count}` : ''}
-            </span>
-          </button>
-        );
-      })()}
+      {displayedSatellite &&
+        (() => {
+          const satelliteLabel = displayedSatellite.translationActive
+            ? t('capsule.translating')
+            : t('capsule.transcribing');
+          return (
+            <button
+              className="ol-processing-satellite"
+              style={{ bottom: hostMetrics.bottomInset + 28 }}
+              data-session-id={displayedSatellite.sessionId}
+              data-translation={displayedSatellite.translationActive}
+              data-leaving={displayedSatellite.leaving}
+              data-capsule-interactive
+              disabled={displayedSatellite.leaving}
+              aria-label={`${satelliteLabel} · ${displayedSatellite.count} · ${t('common.cancel')}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => void cancelDictation(displayedSatellite.sessionId)}
+            >
+              <span className="ol-processing-satellite-label" aria-hidden="true">
+                {satelliteLabel}
+                {displayedSatellite.count > 1 ? ` · ${displayedSatellite.count}` : ''}
+              </span>
+            </button>
+          );
+        })()}
       {!renderedSelectionPolish &&
         (isClassic ? (
           <ClassicCapsule

@@ -5,7 +5,9 @@ import { isLinuxHost } from '../../runtime/environment';
 // The focused native window owns the Wayland clipboard; a headless fcitx5
 // process may only update its own history while falsely reporting success.
 declare global {
-  interface Window { __openlessCopyText?: (text: string) => Promise<void>; }
+  interface Window {
+    __openlessCopyText?: (text: string) => Promise<void>;
+  }
 }
 import { mockVocab, mockCorrectionRules } from './mock-data';
 
