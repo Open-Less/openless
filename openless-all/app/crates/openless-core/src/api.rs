@@ -11079,6 +11079,7 @@ fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<
 #[cfg(test)]
 mod tests {
     include!("document_permission_tests.rs");
+    include!("range_identity_tests.rs");
     include!("recording_overlap_tests.rs");
     include!("sync_dictation_fence_tests.rs");
     use std::sync::{Arc, Mutex};

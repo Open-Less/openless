@@ -31,16 +31,19 @@ another input focused before capture, and a cancelled recording. No native
 document data should be returned; ordinary dictation and chosen style remain
 available. Do not enter credentials or other private content to test this.
 
-## Same name and rewrite
+## Current desktop safety and explicit vocabulary
 
 1. Dictate a test sentence whose ASR output is `请使用 Codox 完成这个任务`.
-   Correct only `Codox` to `Codex` inside that insertion and leave the caret there.
-   Pause at least five seconds. A candidate may appear only if the native range
-   and all required observer subscriptions were established.
-2. Before confirming, verify no new dictionary entry exists. Use the existing
-   confirmation card; after confirming the complete `Codex` word should appear
-   once. Do not create a source-to-target replacement rule.
-3. Begin another recording after confirmation and say the same name. Inspect
+   Correct only `Codox` to `Codex` inside that insertion. Ordinary AX and Windows
+   have no integrated trusted edit-span/revision source: there must be NO
+   automatic body read, word candidate or expression evidence, including after
+   a quiet pause or an equal-length correction. This is a safety fallback,
+   not acceptance of automatic learning.
+2. Add `Codex` through the existing explicit manual vocabulary action. Existing
+   pending-candidate accept/reject APIs also remain intact; they must not write
+   before explicit acceptance. The trusted-owner contract regression exercises
+   this confirmation boundary, but cannot produce a native candidate in Dev.
+3. Begin another recording after explicit addition/confirmation and say the same name. Inspect
    the exact request's hotword data without recording the surrounding field,
    then record the actual ASR/model output as test evidence. A hotword
    appearing in a request does not prove the model recognized it correctly.
@@ -48,14 +51,16 @@ available. Do not enter credentials or other private content to test this.
    It must not create a word candidate or an expression sample.
 5. Edit an identical word elsewhere outside the inserted range. Switch to
    another field or window, then return; also move the caret outside the known
-   insertion and return. The old observation must end without a late candidate.
-6. Cancel/start another recording while the first watcher is queued. Old
-   callbacks must not read a new input or post a candidate into the new session.
+   insertion and return. No automatic watcher may be armed or post a candidate.
+6. Cancel/start parallel recordings. No old receipt may authorize reading a
+   new input or post a candidate into another session.
 
 ## Expression and modes
 
-- Repeated punctuation/list/closed courtesy and concise-form edits may produce
-  abstract evidence only. One session contributes once; fewer than 10 sessions,
+- A future trusted owner can submit punctuation/list/closed courtesy and
+  concise-form edits as abstract evidence only. This contract is tested with
+  synthetic callbacks; current AX/Windows edits must produce NO evidence.
+  One session contributes once; fewer than 10 sessions,
   a span under three days, or inconsistent directions must not affect prompts.
 - Confirmed names are used by the next ASR/postprocessing snapshot. Expression
   directions are postprocessing only. Neither snapshot changes a recording that
@@ -68,23 +73,27 @@ available. Do not enter credentials or other private content to test this.
 
 ## Evidence limits and platform fallback
 
-Record exact SHA, editor/version, permission state, input, actual output and
-whether notifications really fired. Registration success and synthetic range
-tests do not prove native event delivery or real model quality. Unsupported AX
-range APIs, missing required notifications, transformed paste text, stale
-targets and failed delivery proof must fall back to ordinary dictation.
+Record exact SHA, editor/version, permission state, input and actual output.
+Synthetic range tests do not prove native editor support or real model quality.
+Startup context is separate from post-insertion observation; verifying the
+former does not establish any tracked-range capability for the latter.
 
 This candidate does not create an alternative Windows observer: automatic
 desktop learning stays off there until an owned UIA/native insertion-range
-receipt is available. Ordinary Windows insertion, manual vocabulary APIs and
+receipt and continuous edit revisions are available. Ordinary Windows insertion, manual vocabulary APIs and
 other legacy hosts keep their existing contracts. Browser input-kind labels
 never authorize page/URL reads, and these steps do not exercise P5's page reader.
 
-Plain AX value/selection notifications do not identify the edit span. A changed
-field length does not resize the insertion sample: do not read or learn that
-intermediate state. Equal-length corrections at the original fixed position
-remain eligible. Delete-then-type can resume only if it returns to the same
-proven length/range; net insertions/deletions require a real native range owner,
-which this AX path does not currently have. In particular, append once far
-after 64 repeated boundary newlines while leaving the original caret unchanged:
-there must be no expanded sample, vocabulary candidate or expression evidence.
+Plain AX value/selection notifications do not identify an edit span or revision,
+so fixed positions, unchanged totals, repeated anchors and caret positions never
+authorize subsequent body reads. Both split notifications that restore total
+length and one coalesced equal-length batch must be rejected. Reproduce with
+64 `！`, `今天先完成这个工作然后再讨论！`, 64 `！`, and `TAIL`: insert `！`
+before the field, delete the last `L`, keeping the caret numerically in the old
+range. No borrowed punctuation may become expression evidence. Repeat the
+far-append case after 64 boundary newlines; there must be no sample or learning.
+
+The Core trusted-owner positive fixture proves only its contract: same
+session/owner/insertion, every exact local edit span, revision-scoped selection
+and bounded body read. No production desktop adapter currently supplies it.
+Do not count disabled observation as completion of #4.

@@ -1,22 +1,22 @@
-//! Explicit UTF-16 insertion range, not a search/diff over a whole field.
+//! Admission for an independently tracked insertion, never text/length matching.
 
 use super::{minimal_edit, EditPair};
 
-pub struct RangeObservation {
-    start: usize,
-    original: String,
-    total: usize,
-    before: String,
-    after: String,
-    valid: bool,
-    length: usize,
-    revision: u64,
+/// Host-local identity of one frozen owner and one successful delivery in one
+/// recording. Not IPC/model/history data. A future trusted editor adapter must
+/// obtain these identities from its owner, not from the document's contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnedRangeIdentity {
+    pub session_id: crate::SessionId,
+    pub owner_id: uuid::Uuid,
+    pub insertion_id: uuid::Uuid,
 }
 
-/// Host-only evidence from a native range/edit owner, never inferred from
-/// field length, caret or matching text. Plain AXValueChanged has no such
-/// payload and must not manufacture this record.
+/// Exact edit-span callback from that owner. Every edit revision must arrive,
+/// including edits outside the insertion (which invalidate this observation).
+/// AXValueChanged, field length, caret and matching text cannot supply this.
 pub struct OwnedRangeChange {
+    pub identity: OwnedRangeIdentity,
     pub revision: u64,
     pub start: usize,
     pub removed_utf16: usize,
@@ -25,68 +25,65 @@ pub struct OwnedRangeChange {
     pub total_after: usize,
 }
 
+/// The same trusted owner must attest the revision AND selection under which
+/// the bounded read runs. The read closure must revalidate that revision before
+/// returning. Ordinary AX/UIA snapshots cannot manufacture this evidence.
+pub struct OwnedRangeRevision {
+    pub identity: OwnedRangeIdentity,
+    pub revision: u64,
+    pub total: usize,
+    pub selection: (usize, usize),
+}
+
+pub struct RangeObservation {
+    identity: OwnedRangeIdentity,
+    start: usize,
+    original: String,
+    total: usize,
+    valid: bool,
+    length: usize,
+    revision: u64,
+    sampled_revision: u64,
+}
+
 impl RangeObservation {
     pub const MAX_INSERTION_UTF16: usize = 16_384;
 
-    /// The host must first verify delivery at this exact start, the expected
-    /// collapsed caret, document length and both unchanged boundary anchors.
+    /// Only a successful delivery receipt from the trusted owner can establish
+    /// revision zero. This alone does not authorize any subsequent text read.
     pub fn delivered(
+        identity: OwnedRangeIdentity,
         start: usize,
         original: String,
         total: usize,
-        before: String,
-        after: String,
     ) -> Option<Self> {
         let length = original.encode_utf16().count();
         if original.trim().is_empty()
             || length > Self::MAX_INSERTION_UTF16
             || start.checked_add(length)? > total
-            || before.encode_utf16().count() > start
-            || after.encode_utf16().count() > total - start - length
         {
             return None;
         }
         Some(Self {
+            identity,
             start,
             original,
             total,
-            before,
-            after,
             valid: true,
             length,
             revision: 0,
+            sampled_revision: 0,
         })
     }
 
     pub fn original(&self) -> &str {
         &self.original
     }
-    pub fn before(&self) -> &str {
-        &self.before
-    }
-    pub fn after(&self) -> &str {
-        &self.after
-    }
 
-    /// Native range APIs receive these UTF-16 coordinates. They are never Rust
-    /// byte/character indices. Field length is a rejection condition, never
-    /// evidence that the inserted range itself grew or shrank.
-    pub fn range(&self, total: usize) -> Option<(usize, usize)> {
-        if !self.valid {
-            return None;
-        }
-        (total == self.total).then_some((self.start, self.length))
-    }
-
-    pub fn known_range(&self) -> Option<(usize, usize)> {
-        self.valid.then_some((self.start, self.length))
-    }
-
-    /// Only a real native owner reporting the exact edit span can advance this
-    /// boundary. This is intentionally not wired to AX value/selection events.
     pub fn record_local_change(&mut self, change: OwnedRangeChange) -> bool {
         let valid = self.valid
-            && change.revision == self.revision.saturating_add(1)
+            && change.identity == self.identity
+            && Some(change.revision) == self.revision.checked_add(1)
             && change.total_before == self.total
             && change.start >= self.start
             && change
@@ -112,39 +109,59 @@ impl RangeObservation {
         true
     }
 
+    /// Shared native-entry/sampling gate. Missing evidence permanently rejects
+    /// even a single equal-length batch; a restored length cannot revive it.
+    /// Coordinates and text equality are never a substitute for continuity.
+    pub fn admit_revision(
+        &mut self,
+        evidence: Option<OwnedRangeRevision>,
+    ) -> Option<(usize, usize)> {
+        let accepted = evidence.is_some_and(|evidence| {
+            self.valid
+                && evidence.identity == self.identity
+                && evidence.revision == self.revision
+                && self.revision > self.sampled_revision
+                && evidence.total == self.total
+                && evidence.selection.0 >= self.start
+                && evidence
+                    .selection
+                    .0
+                    .checked_add(evidence.selection.1)
+                    .is_some_and(|end| end <= self.start + self.length)
+        });
+        if !accepted {
+            self.invalidate();
+            return None;
+        }
+        self.sampled_revision = self.revision;
+        Some((self.start, self.length))
+    }
+
     pub fn invalidate(&mut self) {
         self.valid = false;
     }
 
-    /// Called only after native events settle and two owner-scoped reads agree.
-    /// Keep the original insertion as comparison baseline: subsequent reports
-    /// stay in Core's original coordinates, including delete-then-type.
-    pub fn observe(
+    /// Admission precedes ALL subsequent body reads. The only readable range
+    /// is the independently tracked insertion, in native UTF-16 coordinates.
+    /// This is a contract for a future trusted adapter, not AX/UIA support.
+    pub fn sample_revision(
         &mut self,
-        total: usize,
-        current: &str,
-        before: &str,
-        after: &str,
-        caret: (usize, usize),
+        evidence: Option<OwnedRangeRevision>,
+        read: impl FnOnce(usize, usize) -> Option<String>,
         publish: impl FnOnce(EditPair) -> bool,
     ) -> bool {
-        let Some((start, length)) = self.range(total) else {
+        let Some((start, length)) = self.admit_revision(evidence) else {
+            return false;
+        };
+        let Some(current) = read(start, length) else {
             self.invalidate();
             return false;
         };
-        if current.encode_utf16().count() != length
-            || before != self.before
-            || after != self.after
-            || caret.0 < start
-            || caret
-                .0
-                .checked_add(caret.1)
-                .is_none_or(|end| end > start + length)
-        {
+        if current.encode_utf16().count() != length {
             self.invalidate();
             return false;
         }
-        if let Some(edit) = minimal_edit(&self.original, current) {
+        if let Some(edit) = minimal_edit(&self.original, &current) {
             publish(edit);
         }
         true
@@ -155,207 +172,140 @@ impl RangeObservation {
 mod tests {
     use super::*;
 
-    #[test]
-    fn repeated_document_words_are_irrelevant_to_an_explicit_inserted_range() {
-        let mut observed = RangeObservation::delivered(
-            40,
-            "请使用 codx 完成任务".into(),
-            100,
-            "😀前文".into(),
-            "原后文".into(),
-        )
-        .unwrap();
-        let mut pairs = Vec::new();
-        assert!(observed.observe(
-            100,
-            "请使用 code 完成任务",
-            "😀前文",
-            "原后文",
-            (50, 0),
-            |edit| {
-                pairs.push(edit);
-                true
-            }
-        ));
-        assert_eq!(pairs[0].source, "x");
-        assert_eq!(pairs[0].target, "e");
-        assert!(observed.observe(
-            100,
-            "请使用 Code 完成任务",
-            "😀前文",
-            "原后文",
-            (50, 0),
-            |edit| {
-                assert_eq!(edit.before, "请使用 ");
-                true
-            }
-        ));
+    fn identity() -> OwnedRangeIdentity {
+        OwnedRangeIdentity {
+            session_id: crate::SessionId::from_uuid(uuid::Uuid::from_u128(1)),
+            owner_id: uuid::Uuid::from_u128(2),
+            insertion_id: uuid::Uuid::from_u128(3),
+        }
     }
 
     #[test]
-    fn changed_anchor_or_caret_outside_the_inserted_range_permanently_ends_collection() {
-        for (before, caret) in [("别处", (50, 0)), ("😀前文", (0, 0))] {
-            let mut observed = RangeObservation::delivered(
-                40,
-                "请使用 codx 完成任务".into(),
-                100,
-                "😀前文".into(),
-                "原后文".into(),
-            )
-            .unwrap();
-            assert!(!observed.observe(
-                100,
-                "请使用 code 完成任务",
-                before,
-                "原后文",
-                caret,
-                |_| { panic!("outside observation must not publish") }
+    fn trusted_owner_delete_then_type_and_multiple_corrections_contract() {
+        // Synthetic trusted editor callbacks, NOT evidence of native AX support.
+        let identity = identity();
+        let original = "请使用 codx 完成任务";
+        let mut range = RangeObservation::delivered(identity, 10, original.into(), 40).unwrap();
+        for (revision, removed, inserted, before, after, text) in [
+            (1, 4, 0, 40, 36, "请使用  完成任务"),
+            (2, 0, 5, 36, 41, "请使用 codex 完成任务"),
+            (3, 1, 1, 41, 41, "请使用 Codex 完成任务"),
+        ] {
+            assert!(range.record_local_change(OwnedRangeChange {
+                identity,
+                revision,
+                start: 14,
+                removed_utf16: removed,
+                inserted_utf16: inserted,
+                total_before: before,
+                total_after: after,
+            }));
+            assert!(range.sample_revision(
+                Some(OwnedRangeRevision {
+                    identity,
+                    revision,
+                    total: after,
+                    selection: (14, 0),
+                }),
+                |start, length| {
+                    assert_eq!(start, 10);
+                    assert_eq!(length, text.encode_utf16().count());
+                    Some(text.into())
+                },
+                |edit| {
+                    assert!(original.starts_with(&edit.before));
+                    true
+                },
             ));
-            assert!(observed.range(100).is_none());
         }
     }
 
     #[test]
-    fn remote_append_with_repeated_newline_boundary_cannot_expand_or_read_a_sample() {
+    fn missing_or_wrong_owner_revision_selection_never_reads_and_cannot_revive() {
+        for failure in 0..7 {
+            let identity = identity();
+            let mut range = RangeObservation::delivered(identity, 10, "codx".into(), 20).unwrap();
+            assert!(range.record_local_change(OwnedRangeChange {
+                identity,
+                revision: 1,
+                start: 10,
+                removed_utf16: 4,
+                inserted_utf16: 5,
+                total_before: 20,
+                total_after: 21,
+            }));
+            let mut evidence = OwnedRangeRevision {
+                identity,
+                revision: 1,
+                total: 21,
+                selection: (15, 0),
+            };
+            match failure {
+                1 => {
+                    evidence.identity.session_id =
+                        crate::SessionId::from_uuid(uuid::Uuid::from_u128(4))
+                }
+                2 => evidence.identity.owner_id = uuid::Uuid::from_u128(4),
+                3 => evidence.identity.insertion_id = uuid::Uuid::from_u128(4),
+                4 => evidence.selection = (0, 0),
+                5 => evidence.revision = 2,
+                6 => evidence.total = 20,
+                _ => {}
+            }
+            assert!(!range.sample_revision(
+                (failure != 0).then_some(evidence),
+                |_, _| panic!("unproven ownership must precede all body reads"),
+                |_| panic!("unproven ownership must precede all sinks"),
+            ));
+            assert!(range
+                .admit_revision(Some(OwnedRangeRevision {
+                    identity,
+                    revision: 1,
+                    total: 21,
+                    selection: (15, 0),
+                }))
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn skipped_or_remote_edit_span_invalidates_before_sampling() {
+        for (revision, start) in [(2, 10), (1, 0), (1, 19)] {
+            let identity = identity();
+            let mut range = RangeObservation::delivered(identity, 10, "codx".into(), 20).unwrap();
+            assert!(!range.record_local_change(OwnedRangeChange {
+                identity,
+                revision,
+                start,
+                removed_utf16: 1,
+                inserted_utf16: 1,
+                total_before: 20,
+                total_after: 20,
+            }));
+            assert!(!range.sample_revision(
+                Some(OwnedRangeRevision {
+                    identity,
+                    revision,
+                    total: 20,
+                    selection: (14, 0),
+                }),
+                |_, _| panic!("skipped/remote edit is not an insertion sample"),
+                |_| panic!("skipped/remote edit is not learning evidence"),
+            ));
+        }
+    }
+
+    #[test]
+    fn unproven_remote_append_with_repeated_newlines_never_reads_a_body() {
         let original = "今天先完成这个工作然后再讨论";
-        let length = original.encode_utf16().count();
-        let mut observed = RangeObservation::delivered(
-            0,
-            original.into(),
-            length + 66,
-            String::new(),
-            "\n".repeat(32),
-        )
-        .unwrap();
-        // Production host checks range before requesting any text. No expanded
-        // read may occur, even though shifted 32-newline anchors would match.
-        let mut text_reads = 0;
-        if let Some((_start, _length)) = observed.range(length + 67) {
-            text_reads += 1;
-        }
-        assert_eq!(text_reads, 0);
-        assert_eq!(observed.range(length + 66), Some((0, length)));
-        let mut published = 0;
-        assert!(!observed.observe(
-            length + 67,
-            &(original.to_owned() + "\n"),
-            "",
-            &"\n".repeat(32),
-            (length, 0),
-            |_| {
-                published += 1;
-                true
-            },
-        ));
-        assert_eq!(
-            published, 0,
-            "neither vocabulary nor expression may receive this edit"
-        );
-    }
-
-    #[test]
-    fn owner_proven_delete_then_type_and_multiple_edits_keep_original_coordinates() {
-        let mut observed = RangeObservation::delivered(
-            10,
-            "请使用 codx 完成任务".into(),
-            40,
-            "原前文".into(),
-            "原后文".into(),
-        )
-        .unwrap();
-        let length = observed.original.encode_utf16().count();
-        assert!(observed.record_local_change(OwnedRangeChange {
-            revision: 1,
-            start: 14,
-            removed_utf16: 4,
-            inserted_utf16: 0,
-            total_before: 40,
-            total_after: 36,
-        }));
-        assert_eq!(observed.range(36), Some((10, length - 4)));
-        assert!(observed.observe(
-            36,
-            "请使用  完成任务",
-            "原前文",
-            "原后文",
-            (14, 0),
-            |_| false
-        ));
-        assert!(observed.record_local_change(OwnedRangeChange {
-            revision: 2,
-            start: 14,
-            removed_utf16: 0,
-            inserted_utf16: 5,
-            total_before: 36,
-            total_after: 41,
-        }));
-        assert!(observed.observe(
-            41,
-            "请使用 codex 完成任务",
-            "原前文",
-            "原后文",
-            (19, 0),
-            |edit| {
-                assert_eq!((edit.source.as_str(), edit.target.as_str()), ("x", "ex"));
-                true
-            }
-        ));
-        assert!(observed.record_local_change(OwnedRangeChange {
-            revision: 3,
-            start: 14,
-            removed_utf16: 1,
-            inserted_utf16: 1,
-            total_before: 41,
-            total_after: 41,
-        }));
-        assert!(observed.observe(
-            41,
-            "请使用 Codex 完成任务",
-            "原前文",
-            "原后文",
-            (19, 0),
-            |edit| {
-                assert_eq!(edit.before, "请使用 ");
-                true
-            }
-        ));
-    }
-
-    #[test]
-    fn plain_ax_can_resume_a_fixed_equal_length_correction_after_unlocated_delete_then_type() {
-        let mut observed = RangeObservation::delivered(
-            10,
-            "请使用 codx 完成任务".into(),
-            40,
-            "原前文".into(),
-            "原后文".into(),
-        )
-        .unwrap();
-        assert!(
-            observed.range(36).is_none(),
-            "no intermediate text read without range evidence"
-        );
-        assert!(observed.observe(
-            40,
-            "请使用 code 完成任务",
-            "原前文",
-            "原后文",
-            (18, 0),
-            |edit| {
-                assert_eq!((edit.source.as_str(), edit.target.as_str()), ("x", "e"));
-                true
-            }
-        ));
-        assert!(observed.observe(
-            40,
-            "请使用 Code 完成任务",
-            "原前文",
-            "原后文",
-            (18, 0),
-            |edit| {
-                assert_eq!(edit.before, "请使用 ");
-                true
-            }
+        let total = original.encode_utf16().count() + 66;
+        let mut range = RangeObservation::delivered(identity(), 0, original.into(), total).unwrap();
+        let field_after_remote_append = format!("{original}{}TAIL\n", "\n".repeat(62));
+        assert_eq!(field_after_remote_append.encode_utf16().count(), total + 1);
+        assert!(!range.sample_revision(
+            None,
+            |_, _| panic!("field length and repeated newlines never authorize text reads"),
+            |_| panic!("remote append must not become word or expression evidence"),
         ));
     }
 }

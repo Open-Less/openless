@@ -299,15 +299,20 @@ mod tests {
     fn an_explicit_delivered_span_still_refuses_a_paragraph_rewrite() {
         let original = "今天先讨论接口参数，然后安排明天的项目验收";
         let edited = "改成下周讨论文档就好了";
+        let identity = crate::host_document::OwnedRangeIdentity {
+            session_id: crate::SessionId::new(),
+            owner_id: uuid::Uuid::new_v4(),
+            insertion_id: uuid::Uuid::new_v4(),
+        };
         let mut range = crate::host_document::RangeObservation::delivered(
+            identity,
             10,
             original.into(),
             10 + original.encode_utf16().count() + 4,
-            "原前文".into(),
-            "原后文".into(),
         )
         .unwrap();
         assert!(range.record_local_change(crate::host_document::OwnedRangeChange {
+            identity,
             revision: 1,
             start: 10,
             removed_utf16: original.encode_utf16().count(),
@@ -316,12 +321,17 @@ mod tests {
             total_after: 10 + edited.encode_utf16().count() + 4,
         }));
         let mut seen = false;
-        assert!(range.observe(
-            10 + edited.encode_utf16().count() + 4,
-            edited,
-            "原前文",
-            "原后文",
-            (10 + edited.encode_utf16().count(), 0),
+        assert!(range.sample_revision(
+            Some(crate::host_document::OwnedRangeRevision {
+                identity,
+                revision: 1,
+                total: 10 + edited.encode_utf16().count() + 4,
+                selection: (10 + edited.encode_utf16().count(), 0),
+            }),
+            |_, length| {
+                assert_eq!(length, edited.encode_utf16().count());
+                Some(edited.into())
+            },
             |edit| {
                 seen = true;
                 assert!(vocabulary_candidates(original, &edit, 32).is_empty());
