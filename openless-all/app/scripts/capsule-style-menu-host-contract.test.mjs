@@ -6,6 +6,8 @@ const [commands, lib, hotkeys, loops, bridge, host, menu, selection] = await Pro
   read('coordinator/hotkey_loops.rs'), read('coordinator/style_menu.rs'),
   read('tauri_coordinator_host.rs'), read('capsule_style_menu.rs'), read('selection.rs'),
 ]);
+const core = await readFile(new URL('../crates/openless-core/src/api.rs', import.meta.url), 'utf8');
+const appEvents = await read('tauri_events.rs');
 assert.match(lib, /commands::get_capsule_style_menu_request/);
 assert.match(commands, /pub fn get_capsule_style_menu_request[^]*?capsule_label\(window.label\(\)\)/);
 assert.match(commands, /pub async fn set_capsule_style_menu[^]*?request_id: Option<String>,[^]*?menu_id: Option<String>/);
@@ -14,7 +16,7 @@ const programmatic = commands.slice(commands.indexOf('pub fn update_dictation_st
 assert.doesNotMatch(programmatic, /hotkey_toggled|handle_skip_auto_style_hotkey/);
 assert.equal((loops.match(/handle_skip_auto_style_hotkey\(&inner, /g) ?? []).length, 2,
   'modifier and custom-combination hotkeys share one provenance boundary');
-assert.match(bridge, /toggle_dictation_style_for_session\(session_id\)[^]*?menu::hotkey_toggled\(&target\)/);
+assert.match(bridge, /toggle_dictation_style_with_epoch\(session_id\)[^]*?menu::hotkey_toggled\(&target, epoch\)/);
 assert.match(bridge, /DictationPhase::Starting \| openless_core::DictationPhase::Recording/);
 assert.match(bridge, /DictationOutputTarget::AskComposer[^]*?DictationOutputTarget::Qa[^]*?DictationOutputTarget::VoiceEdit/);
 assert.match(bridge, /mutable: target.mutable && surface_available/);
@@ -25,6 +27,17 @@ assert.match(selection, /pub\(crate\) fn capture_capsule_menu_input_target[^]*?t
 assert.match(menu, /keyboard_available: c.keyboard_available && c.focus.is_some\(\)/);
 assert.match(menu, /target.selection != DictationStyleSelection::SkipAuto/);
 assert.match(menu, /c\.picker_enabled && c\.skip_auto/);
+assert.match(bridge, /dictation_style_target_with_epoch\(\)/);
+assert.match(bridge, /configure_fenced/);
+assert.match(menu, /c.style_epoch == style_epoch/);
+assert.match(menu, /c.style_epoch == active.style_epoch/);
+assert.match(menu, /before != after/);
+assert.match(menu, /fn drain_key/);
+assert.match(core, /fn change_dictation_style[^]*?let mut state = self.state.write\(\)[^]*?previous != selection[^]*?state.advance_dictation_style_epoch\(\)[^]*?Ok\(\(result, state.dictation_style_epoch\)\)/,
+  'all style mutation entry points return their own epoch under the mutation lock');
+assert.match(core, /fn publish_preferences_changed[^]*?enabled != state.dictation_style_picker_enabled[^]*?state.advance_dictation_style_epoch\(\)/);
+assert.match(appEvents, /project_current_style\(&mut snapshot, &current.dictation\)/,
+  'late live-session app frames project the current style before presenting a capsule');
 assert.match(menu, /label == "capsule"/);
 for (const event of ['request', 'key', 'closed']) {
   assert.match(host, new RegExp(`emit_to\\([^;]*"capsule:style-menu-${event}"`));

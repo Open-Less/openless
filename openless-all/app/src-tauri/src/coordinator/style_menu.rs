@@ -56,8 +56,9 @@ impl FocusState {
 pub(super) fn configure_style_menu(inner: &Arc<Inner>) {
     let source = Arc::downgrade(inner);
     let sink = Arc::downgrade(inner);
+    let epoch = Arc::downgrade(inner);
     let focus = Mutex::new(FocusState::default());
-    menu::configure(Arc::new(move || {
+    menu::configure_fenced(Arc::new(move || {
         let inner = source.upgrade()?;
         let snapshot = inner.backend.snapshot();
         if !matches!(snapshot.dictation.phase,
@@ -71,19 +72,22 @@ pub(super) fn configure_style_menu(inner: &Arc<Inner>) {
         )) || inner.selection_polish_capsule_active.load(Ordering::SeqCst) {
             return None;
         }
-        let target = inner.backend.dictation_style_target()?;
+        // Query native focus first; then read current Core readiness and the
+        // capsule surface, so a slow AX/UIA query cannot replay Starting over
+        // an owner that has already mounted in this same style epoch.
+        let (focus, target_verified) = focus.lock().current()
+            .map(|(focus, verified)| (Some(focus), verified)).unwrap_or((None, false));
+        let (target, style_epoch, picker_enabled) = inner.backend.dictation_style_target_with_epoch()?;
         if snapshot.dictation.session_id != Some(target.session_id) { return None; }
         let surface_available = inner.host.style_menu_surface_available(target.session_id);
         let keyboard_available = cfg!(any(target_os = "macos", target_os = "windows"))
             && !inner.shortcut_recording_active.load(Ordering::SeqCst)
             && inner.hotkey.try_lock().is_some_and(|monitor| monitor.is_some())
             && surface_available;
-        let (focus, target_verified) = focus.lock().current()
-            .map(|(focus, verified)| (Some(focus), verified)).unwrap_or((None, false));
         Some(Context {
-            session_id: target.session_id, mutable: target.mutable && surface_available,
+            session_id: target.session_id, style_epoch, mutable: target.mutable && surface_available,
             skip_auto: target.skip_auto_style,
-            picker_enabled: inner.backend.get_preferences().skip_auto_style_picker_enabled,
+            picker_enabled,
             // Window/control identity is the insertion adapter's existing
             // native proof (AX on macOS, HWND/UIA on Windows). Missing permission
             // or an unverifiable input target yields mouse-only ownership.
@@ -92,14 +96,15 @@ pub(super) fn configure_style_menu(inner: &Arc<Inner>) {
         })
     }), Arc::new(move |event| {
         sink.upgrade().is_some_and(|inner| inner.host.queue_style_menu_event(event))
-    }));
+    }), Arc::new(move || epoch.upgrade()
+        .map(|inner| inner.backend.dictation_style_epoch()).unwrap_or(u64::MAX)));
 }
 
 /// Only the two native hotkey consumers call this. Programmatic style changes
 /// and ordinary start options never pass through this provenance boundary.
 pub(super) fn handle_skip_auto_style_hotkey(inner: &Arc<Inner>, session_id: openless_core::SessionId) {
-    if let Ok(target) = inner.backend.toggle_dictation_style_for_session(session_id) {
-        if let Some(request) = menu::hotkey_toggled(&target) {
+    if let Ok((target, epoch)) = inner.backend.toggle_dictation_style_with_epoch(session_id) {
+        if let Some(request) = menu::hotkey_toggled(&target, epoch) {
             let _ = inner.host.queue_style_menu_event(Event::Request(request));
         }
     }

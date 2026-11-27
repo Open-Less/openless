@@ -206,6 +206,12 @@ async fn forward_legacy_event(
             if current.dictation.session_id.is_none()
                 && current.processing_dictations.first().is_some_and(|job| job.session_id != snapshot.session_id)
             { return; }
+            #[cfg(not(mobile))]
+            let snapshot = {
+                let mut snapshot = snapshot;
+                crate::capsule_style_menu::project_current_style(&mut snapshot, &current.dictation);
+                snapshot
+            };
             capsule_owners.transcription_notice = None;
             if snapshot.phase != DictationPhase::Idle {
                 capsule_owners.qa_voice = None;
