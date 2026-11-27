@@ -8,7 +8,6 @@
 use core_foundation::{
     array::CFArray,
     base::{CFEqual, CFGetTypeID, CFType, TCFType},
-    boolean::CFBoolean,
     runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource},
     string::CFString,
     url::CFURL,
@@ -311,11 +310,6 @@ pub(crate) unsafe fn enrich(
     let subrole = text(input, "AXSubrole").unwrap_or_default();
     if role == "AXSecureTextField" || subrole == "AXSecureTextField" {
         return None;
-    }
-    if let Some(protected) = attr(input, "AXProtectedContent") {
-        if protected.downcast_into::<CFBoolean>().map(bool::from) != Some(false) {
-            return None;
-        }
     }
     // A focusable non-text control is not an input scenario. Reading only the
     // role/subrole before deciding avoids exposing protected values.
