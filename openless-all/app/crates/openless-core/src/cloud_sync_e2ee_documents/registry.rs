@@ -523,6 +523,20 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
+        rust_name: "skip_auto_style_hotkey",
+        key: "skipAutoStyleHotkey",
+        class: PreferenceClass::DeviceProfile,
+        shape: PreferenceShape::Object,
+        reason: "device_bound",
+    },
+    PreferenceField {
+        rust_name: "skip_auto_style_picker_enabled",
+        key: "skipAutoStylePickerEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "switch_style_hotkey",
         key: "switchStyleHotkey",
         class: PreferenceClass::DeviceProfile,

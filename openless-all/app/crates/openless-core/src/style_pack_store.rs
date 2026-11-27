@@ -296,6 +296,28 @@ impl StylePackStore {
         self.get_for_dictation([], active_id)
     }
 
+    /// Capture all alternatives under one catalog lock, so editing a pack
+    /// during native startup cannot give the toggle two versions of one style.
+    pub(crate) fn capture_dictation_styles<'a>(
+        &self,
+        assigned_ids: impl IntoIterator<Item = &'a str>,
+        active_id: &'a str,
+        polish_id: &'a str,
+    ) -> Result<(StylePack, StylePack, Vec<StylePack>), BackendError> {
+        let packs = self.lock()?;
+        let resolve = |ids: Vec<&str>| {
+            ids.into_iter()
+                .find_map(|id| packs.iter().find(|pack| pack.id == id && pack.enabled))
+                .or_else(|| packs.iter().find(|pack| pack.id == default_active_style_pack_id() && pack.enabled))
+                .or_else(|| packs.iter().find(|pack| pack.enabled))
+                .cloned()
+                .ok_or_else(|| BackendError::new(BackendErrorCode::InvalidState, "no enabled style pack"))
+        };
+        let automatic = resolve(assigned_ids.into_iter().chain([active_id]).collect())?;
+        let polish = resolve(vec![polish_id])?;
+        Ok((automatic, polish, packs.iter().filter(|pack| pack.enabled).cloned().collect()))
+    }
+
     pub(crate) fn get_for_dictation<'a>(
         &self,
         assigned_ids: impl IntoIterator<Item = &'a str>,
