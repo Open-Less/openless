@@ -1329,6 +1329,12 @@ export const ko: typeof zhCN = {
       exclamationsLess: '느낌표 줄이기',
       terminalPunctuationMore: '문장 끝 구두점 사용',
       terminalPunctuationLess: '문장 끝 구두점 줄이기',
+      listUsageMore: '목록 선호',
+      listUsageLess: '줄바꿈만 사용',
+      courteousToneMore: '정중한 호칭 선호',
+      courteousToneLess: '일상적인 호칭 선호',
+      conciseWordingMore: '간결한 표현 선호',
+      conciseWordingLess: '생략을 줄인 표현 선호',
 
       title: '표현 습관',
       enabled: '표현 습관 학습',

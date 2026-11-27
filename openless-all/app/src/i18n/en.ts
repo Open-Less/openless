@@ -1353,6 +1353,12 @@ export const en: typeof zhCN = {
       exclamationsLess: 'Fewer exclamation marks',
       terminalPunctuationMore: 'Use terminal punctuation',
       terminalPunctuationLess: 'Use less terminal punctuation',
+      listUsageMore: 'Prefer lists',
+      listUsageLess: 'Prefer lines without bullets',
+      courteousToneMore: 'Prefer polite greetings',
+      courteousToneLess: 'Prefer casual greetings',
+      conciseWordingMore: 'Prefer concise wording',
+      conciseWordingLess: 'Prefer fuller wording',
 
       title: 'Expression habits',
       enabled: 'Learn expression habits',

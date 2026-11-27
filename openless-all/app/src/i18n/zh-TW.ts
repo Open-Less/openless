@@ -1296,6 +1296,12 @@ export const zhTW: typeof zhCN = {
       exclamationsLess: '減少驚嘆號',
       terminalPunctuationMore: '保留句末標點',
       terminalPunctuationLess: '減少句末標點',
+      listUsageMore: '更常使用清單',
+      listUsageLess: '更常用一般分行',
+      courteousToneMore: '偏好禮貌稱謂',
+      courteousToneLess: '偏好日常稱謂',
+      conciseWordingMore: '偏好簡潔措辭',
+      conciseWordingLess: '偏好完整措辭',
 
       title: '表達習慣',
       enabled: '學習表達習慣',

@@ -1378,6 +1378,12 @@ export const de: typeof zhCN = {
       exclamationsLess: 'Weniger Ausrufezeichen',
       terminalPunctuationMore: 'Satzzeichen am Ende verwenden',
       terminalPunctuationLess: 'Weniger Satzzeichen am Ende',
+      listUsageMore: 'Listen bevorzugen',
+      listUsageLess: 'Einfache Zeilen bevorzugen',
+      courteousToneMore: 'Höfliche Anrede bevorzugen',
+      courteousToneLess: 'Lockere Anrede bevorzugen',
+      conciseWordingMore: 'Knappe Formulierungen bevorzugen',
+      conciseWordingLess: 'Ausführlichere Formulierungen bevorzugen',
 
       title: 'Ausdrucksgewohnheiten',
       enabled: 'Ausdrucksgewohnheiten lernen',

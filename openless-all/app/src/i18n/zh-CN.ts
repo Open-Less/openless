@@ -1294,6 +1294,12 @@ export const zhCN = {
       exclamationsLess: '减少感叹号',
       terminalPunctuationMore: '保留句末标点',
       terminalPunctuationLess: '减少句末标点',
+      listUsageMore: '更常使用列表',
+      listUsageLess: '更常用普通分行',
+      courteousToneMore: '偏好礼貌称谓',
+      courteousToneLess: '偏好日常称谓',
+      conciseWordingMore: '偏好简洁措辞',
+      conciseWordingLess: '偏好完整措辞',
 
       title: '表达习惯',
       enabled: '学习表达习惯',

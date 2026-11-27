@@ -1372,6 +1372,12 @@ export const es: typeof zhCN = {
       exclamationsLess: 'Menos signos de exclamación',
       terminalPunctuationMore: 'Usar puntuación final',
       terminalPunctuationLess: 'Reducir la puntuación final',
+      listUsageMore: 'Preferir listas',
+      listUsageLess: 'Preferir líneas sin viñetas',
+      courteousToneMore: 'Preferir saludos corteses',
+      courteousToneLess: 'Preferir saludos informales',
+      conciseWordingMore: 'Preferir frases concisas',
+      conciseWordingLess: 'Preferir frases más completas',
 
       title: 'Hábitos de expresión',
       enabled: 'Aprender hábitos de expresión',

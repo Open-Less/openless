@@ -1338,6 +1338,12 @@ export const ja: typeof zhCN = {
       exclamationsLess: '感嘆符を減らす',
       terminalPunctuationMore: '文末の句読点を使う',
       terminalPunctuationLess: '文末の句読点を減らす',
+      listUsageMore: '箇条書きを使う',
+      listUsageLess: '改行だけで並べる',
+      courteousToneMore: '丁寧な呼びかけ',
+      courteousToneLess: 'くだけた呼びかけ',
+      conciseWordingMore: '簡潔な言い回し',
+      conciseWordingLess: '省略を控えた言い回し',
 
       title: '表現の習慣',
       enabled: '表現の習慣を学習',
