@@ -151,7 +151,7 @@ assert.doesNotMatch(
   /run:\s*>-[ ]*\n\s*#/,
   'a folded run scalar must not start with a comment; it comments out the command',
 );
-assert.match(workflow, /node ..\/harmony\/scripts\/upload-appgallery\.mjs \\/);
+assert.match(workflow, /node \.\.\/harmony\/scripts\/upload-appgallery\.mjs \\/);
 
 // Both destinations are wired.
 assert.match(workflow, /gh release upload/);

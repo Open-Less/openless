@@ -32,6 +32,8 @@ class FinderPictureSchemaTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="openless-dmg-schema-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.app_root = self.root / "app"
+        (self.app_root / "src-tauri").mkdir(parents=True)
         self.volume = self.root / "volume"
         contents = self.volume / "OpenLess.app/Contents"
         contents.mkdir(parents=True)
@@ -39,7 +41,7 @@ class FinderPictureSchemaTests(unittest.TestCase):
             plistlib.dumps({"CFBundleShortVersionString": "1.2.3"})
         )
         (self.volume / "Applications").symlink_to("/Applications")
-        background = self.root / "../macos/dmg/background.tiff"
+        background = self.root / "macos/dmg/background.tiff"
         background.parent.mkdir(parents=True)
         background.write_bytes(b"controlled-background-fixture")
         self.dmg = {
@@ -48,10 +50,14 @@ class FinderPictureSchemaTests(unittest.TestCase):
             "appPosition": {"x": 216, "y": 253},
             "applicationFolderPosition": {"x": 552, "y": 253},
         }
-        self.style = {"iconSize": 128, "textSize": 14, "retinaBackground": "dmg/background.tiff"}
+        self.style = {
+            "iconSize": 128,
+            "textSize": 14,
+            "retinaBackground": "../../macos/dmg/background.tiff",
+        }
         mocks = contextlib.ExitStack()
         self.addCleanup(mocks.close)
-        mocks.enter_context(patch.object(layout, "APP_ROOT", self.root))
+        mocks.enter_context(patch.object(layout, "APP_ROOT", self.app_root))
         mocks.enter_context(patch.object(layout, "settings", return_value=(
             {"productName": "OpenLess", "version": "1.2.3"}, self.dmg, self.style
         )))
