@@ -131,7 +131,6 @@ type AxObserverCallback = unsafe extern "C" fn(
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXIsProcessTrusted() -> u8;
     fn AXUIElementGetTypeID() -> CFTypeId;
     pub(crate) fn AXUIElementCreateApplication(pid: i32) -> AxUiElementRef;
     pub(crate) fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
@@ -603,7 +602,9 @@ impl crate::selection::bound_native::Native for FrozenSelectionNative<'_, '_> {
     {
         use crate::selection::bound_native::Failure;
         unsafe {
-            if AXIsProcessTrusted() == 0 || crate::unicode_keystroke::is_secure_input_enabled() {
+            if crate::permissions::check_accessibility() != crate::permissions::PermissionStatus::Granted
+                || crate::unicode_keystroke::is_secure_input_enabled()
+            {
                 return Err(Failure::Unavailable);
             }
             let (owned_control, owned_window) = self.lease.ax_objects();

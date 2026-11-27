@@ -126,8 +126,8 @@ impl SelectionServiceInner {
         let _ = self
             .runtime_work
             .cleanup(Box::pin(async move {
-                let _ = polisher.cancel(session_id).await;
-                let _ = runtime.cancel(session_id).await;
+                let runtime_cancel = runtime.cancel(session_id);
+                let _ = futures_util::future::join(runtime_cancel, polisher.cancel(session_id)).await;
                 Ok(())
             }))
             .await;
@@ -968,8 +968,12 @@ impl SelectionApi for SelectionService {
             inner.publish_history_changed();
             inner.hide_preview();
             let active_session = active_session.0;
-            let polish_result = inner.polisher.cancel(active_session).await;
-            let runtime_result = inner.runtime.cancel(active_session).await;
+            // The host synchronously invalidates pending native work at this
+            // call boundary; do not postpone it behind provider cancellation.
+            let runtime_cancel = inner.runtime.cancel(active_session);
+            let (runtime_result, polish_result) = futures_util::future::join(
+                runtime_cancel, inner.polisher.cancel(active_session),
+            ).await;
             polish_result?;
             runtime_result
         }))

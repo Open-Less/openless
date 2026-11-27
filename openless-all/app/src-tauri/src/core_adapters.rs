@@ -1241,9 +1241,39 @@ impl SelectionPlatformBridge for NativeSelectionPlatformBridge {
 }
 
 #[cfg(not(mobile))]
+struct TauriSelectionSlot {
+    generation: u64,
+    cancelled: Arc<AtomicBool>,
+    ready: Option<TauriSelectionTarget>,
+}
+
+#[cfg(not(mobile))]
+struct TauriSelectionCaptureReservation {
+    targets: Arc<Mutex<HashMap<SessionId, TauriSelectionSlot>>>,
+    session_id: SessionId,
+    generation: u64,
+    cancelled: Arc<AtomicBool>,
+    armed: bool,
+}
+
+#[cfg(not(mobile))]
+impl Drop for TauriSelectionCaptureReservation {
+    fn drop(&mut self) {
+        if !self.armed { return; }
+        let mut targets = self.targets.lock();
+        if targets.get(&self.session_id).is_some_and(|slot| slot.generation == self.generation) {
+            if let Some(slot) = targets.remove(&self.session_id) {
+                slot.cancelled.store(true, Ordering::Release);
+            }
+        }
+    }
+}
+
+#[cfg(not(mobile))]
 struct TauriSelectionRuntime {
     bridge: Arc<dyn SelectionPlatformBridge>,
-    targets: Arc<Mutex<HashMap<SessionId, TauriSelectionTarget>>>,
+    targets: Arc<Mutex<HashMap<SessionId, TauriSelectionSlot>>>,
+    next_capture_generation: AtomicU64,
 }
 
 #[cfg(not(mobile))]
@@ -1256,6 +1286,7 @@ impl TauriSelectionRuntime {
         Self {
             bridge,
             targets: Arc::new(Mutex::new(HashMap::new())),
+            next_capture_generation: AtomicU64::new(1),
         }
     }
 }
@@ -1276,31 +1307,72 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
             });
         }
         let bridge = Arc::clone(&self.bridge);
-        let targets = Arc::clone(&self.targets);
+        // Reserve before returning the future: pending/unpolled capture is
+        // already cancellable, and can never publish over a later generation.
+        let mut reservation = {
+            let mut targets = self.targets.lock();
+            if targets.contains_key(&session_id) {
+                return Box::pin(async {
+                    Err(BackendError::new(BackendErrorCode::Busy,
+                        "selection target is already reserved for this session"))
+                });
+            }
+            let generation = match self.next_capture_generation.fetch_update(
+                Ordering::Relaxed, Ordering::Relaxed, |generation| generation.checked_add(1),
+            ) {
+                Ok(generation) => generation,
+                Err(_) => return Box::pin(async {
+                    Err(BackendError::new(BackendErrorCode::Internal, "selection capture generation exhausted"))
+                }),
+            };
+            for slot in targets.values() {
+                slot.cancelled.store(true, Ordering::Release);
+            }
+            targets.clear();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            targets.insert(session_id, TauriSelectionSlot {
+                generation,
+                cancelled: Arc::clone(&cancelled),
+                ready: None,
+            });
+            TauriSelectionCaptureReservation {
+                targets: Arc::clone(&self.targets), session_id, generation, armed: true,
+                cancelled,
+            }
+        };
         Box::pin(async move {
-            let (capture, target) = tauri::async_runtime::spawn_blocking(move || bridge.capture())
+            if reservation.cancelled.load(Ordering::Acquire) {
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture expired"));
+            }
+            let cancelled = Arc::clone(&reservation.cancelled);
+            let (capture, mut target) = tauri::async_runtime::spawn_blocking(move || {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture expired"));
+                }
+                bridge.capture()
+            })
                 .await
                 .map_err(|error| {
                     BackendError::new(BackendErrorCode::Platform, error.to_string())
                 })??;
-            let mut targets = targets.lock();
-            if targets.contains_key(&session_id) {
-                return Err(BackendError::new(
-                    BackendErrorCode::Busy,
-                    "selection target is already registered for this session",
-                ));
+            let mut targets = reservation.targets.lock();
+            let slot = targets.get_mut(&session_id).filter(|slot| {
+                slot.generation == reservation.generation
+                    && !slot.cancelled.load(Ordering::Acquire)
+            });
+            let Some(slot) = slot else {
+                target.cancelled.store(true, Ordering::Release);
+                drop(targets);
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture expired"));
+            };
+            if target.cancelled.load(Ordering::Acquire) {
+                drop(targets);
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture cancelled"));
             }
-            for target in targets.values() {
-                target.target.cancelled.store(true, Ordering::Release);
-            }
-            targets.clear();
-            targets.insert(
-                session_id,
-                TauriSelectionTarget {
-                    target,
-                    preview: false,
-                },
-            );
+            target.cancelled = Arc::clone(&slot.cancelled);
+            slot.ready = Some(TauriSelectionTarget { target, preview: false });
+            drop(targets);
+            reservation.armed = false;
             Ok(capture)
         })
     }
@@ -1315,12 +1387,19 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
             .targets
             .lock()
             .get(&session_id)
-            .map(|target| target.target.clone())
-            .unwrap_or_default();
+            .and_then(|slot| slot.ready.as_ref())
+            .map(|target| target.target.clone());
         Box::pin(async move {
+            let target = target.ok_or_else(|| BackendError::new(
+                BackendErrorCode::Cancelled, "selection target is no longer active",
+            ))?;
             tauri::async_runtime::spawn_blocking(move || {
+                if target.cancelled.load(Ordering::Acquire) {
+                    return Err(BackendError::new(BackendErrorCode::Cancelled, "selection session cancelled"));
+                }
                 bridge.protect_original(&target, &text)?;
-                Ok(*target.original_clipboard.lock())
+                let revision = *target.original_clipboard.lock();
+                Ok(revision)
             })
             .await
             .map_err(|error| BackendError::new(BackendErrorCode::Platform, error.to_string()))?
@@ -1336,13 +1415,16 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
         let bridge = Arc::clone(&self.bridge);
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
-            let target = targets.lock().get(&session_id).cloned().ok_or_else(|| {
+            let target = targets.lock().get(&session_id).and_then(|slot| slot.ready.clone()).ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::Cancelled,
                     "selection target is no longer active",
                 )
             })?;
             tauri::async_runtime::spawn_blocking(move || {
+                if target.target.cancelled.load(Ordering::Acquire) {
+                    return Err(BackendError::new(BackendErrorCode::Cancelled, "selection session cancelled"));
+                }
                 bridge.apply(
                     &target.target,
                     &source_text,
@@ -1362,7 +1444,7 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
             let mut targets = targets.lock();
-            let target = targets.get_mut(&session_id).ok_or_else(|| {
+            let target = targets.get_mut(&session_id).and_then(|slot| slot.ready.as_mut()).ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::Cancelled,
                     "selection target is no longer active",
@@ -1380,24 +1462,26 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
         let bridge = Arc::clone(&self.bridge);
         let targets = Arc::clone(&self.targets);
         Box::pin(async move {
-            let target = targets.lock().get(&session_id).cloned().ok_or_else(|| {
+            let target = targets.lock().get(&session_id).and_then(|slot| slot.ready.clone()).ok_or_else(|| {
                 BackendError::new(
                     BackendErrorCode::Cancelled,
                     "selection target is no longer active",
                 )
             })?;
+            if target.target.cancelled.load(Ordering::Acquire) {
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection session cancelled"));
+            }
             bridge.revert(&target.target)
         })
     }
 
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
-        let targets = Arc::clone(&self.targets);
-        Box::pin(async move {
-            if let Some(target) = targets.lock().remove(&session_id) {
-                target.target.cancelled.store(true, Ordering::Release);
-            }
-            Ok(())
-        })
+        // Invalidate immediately, even when the caller has not polled cancel's
+        // completion future or the native capture/protection worker is queued.
+        if let Some(slot) = self.targets.lock().remove(&session_id) {
+            slot.cancelled.store(true, Ordering::Release);
+        }
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -6360,6 +6444,8 @@ mod tests {
         capture_calls: std::sync::atomic::AtomicUsize,
         apply_calls: Mutex<Vec<(String, String, bool)>>,
         revert_calls: Mutex<usize>,
+        protect_calls: Mutex<Vec<String>>,
+        capture_pause: Mutex<Option<(Arc<tokio::sync::Notify>, std::sync::mpsc::Receiver<()>)>>,
     }
 
     #[cfg(not(mobile))]
@@ -6375,6 +6461,13 @@ mod tests {
         > {
             self.capture_calls
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let pause = self.capture_pause.lock().take();
+            if let Some((entered, release)) = pause {
+                entered.notify_one();
+                release.recv_timeout(std::time::Duration::from_secs(3)).map_err(|_| {
+                    BackendError::new(BackendErrorCode::Platform, "fixture capture release timed out")
+                })?;
+            }
             Ok((
                 openless_core::SelectionCapture {
                     text: "source".to_string(),
@@ -6382,6 +6475,17 @@ mod tests {
                 },
                 crate::selection::SelectionInsertionTarget::default(),
             ))
+        }
+
+        fn protect_original(
+            &self,
+            target: &crate::selection::SelectionInsertionTarget,
+            text: &str,
+        ) -> Result<(), BackendError> {
+            assert!(!target.cancelled.load(Ordering::Acquire));
+            self.protect_calls.lock().push(text.to_string());
+            *target.original_clipboard.lock() = Some(1);
+            Ok(())
         }
 
         fn apply(
@@ -6745,9 +6849,78 @@ mod tests {
             bridge
                 .capture_calls
                 .load(std::sync::atomic::Ordering::Acquire),
-            2
+            1
         );
         assert_eq!(bridge.apply_calls.lock().len(), 1);
+    }
+
+    #[cfg(not(mobile))]
+    #[tokio::test]
+    async fn cancelled_late_selection_capture_cannot_overwrite_the_new_session() {
+        use openless_core::SelectionRuntimeAdapter;
+        let bridge = Arc::new(TestSelectionPlatformBridge::default());
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (release, released) = std::sync::mpsc::channel();
+        *bridge.capture_pause.lock() = Some((entered.clone(), released));
+        let runtime = TauriSelectionRuntime::with_bridge(bridge.clone());
+        let a = SessionId::new();
+        let b = SessionId::new();
+        let pending_a = tokio::spawn(runtime.capture(a, None));
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified()).await.unwrap();
+        let unpolled_cancel = runtime.cancel(a);
+        runtime.capture(b, None).await.unwrap();
+        release.send(()).unwrap();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), pending_a)
+            .await.unwrap().unwrap().unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::Cancelled);
+        unpolled_cancel.await.unwrap();
+        runtime.protect_original(b, "B original".into()).await.unwrap();
+        runtime.apply(b, "source".into(), "B result".into()).await.unwrap();
+        assert_eq!(bridge.protect_calls.lock().as_slice(), ["B original"]);
+        assert_eq!(bridge.apply_calls.lock().as_slice(),
+            [("source".to_string(), "B result".to_string(), false)]);
+        assert_eq!(runtime.protect_original(a, "late A".into()).await.unwrap_err().code,
+            BackendErrorCode::Cancelled);
+    }
+
+    #[cfg(not(mobile))]
+    #[tokio::test]
+    async fn selection_protection_missing_pending_or_cancelled_never_reaches_the_bridge() {
+        use openless_core::SelectionRuntimeAdapter;
+        let bridge = Arc::new(TestSelectionPlatformBridge::default());
+        let runtime = TauriSelectionRuntime::with_bridge(bridge.clone());
+        let missing = SessionId::new();
+        assert_eq!(runtime.protect_original(missing, "missing".into()).await.unwrap_err().code,
+            BackendErrorCode::Cancelled);
+        let pending = runtime.capture(missing, None);
+        assert_eq!(runtime.protect_original(missing, "pending".into()).await.unwrap_err().code,
+            BackendErrorCode::Cancelled);
+        let pending_cancel = runtime.cancel(missing);
+        assert_eq!(pending.await.unwrap_err().code, BackendErrorCode::Cancelled);
+        pending_cancel.await.unwrap();
+        assert_eq!(bridge.capture_calls.load(Ordering::Acquire), 0);
+        runtime.capture(missing, None).await.unwrap();
+        let queued_copy = runtime.protect_original(missing, "cancelled".into());
+        // Invalidation cannot depend on polling the completion future.
+        let unpolled_cancel = runtime.cancel(missing);
+        assert_eq!(queued_copy.await.unwrap_err().code, BackendErrorCode::Cancelled);
+        unpolled_cancel.await.unwrap();
+        assert!(bridge.protect_calls.lock().is_empty());
+    }
+
+    #[cfg(not(mobile))]
+    #[tokio::test]
+    async fn dropping_an_old_capture_reservation_does_not_discard_a_new_target() {
+        use openless_core::SelectionRuntimeAdapter;
+        let bridge = Arc::new(TestSelectionPlatformBridge::default());
+        let runtime = TauriSelectionRuntime::with_bridge(bridge.clone());
+        let a = runtime.capture(SessionId::new(), None);
+        let b = SessionId::new();
+        runtime.capture(b, None).await.unwrap();
+        drop(a);
+        runtime.apply(b, "source".into(), "new result".into()).await.unwrap();
+        assert_eq!(bridge.apply_calls.lock().len(), 1);
+        assert_eq!(bridge.capture_calls.load(Ordering::Acquire), 1);
     }
 
     #[cfg(not(mobile))]
