@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(not(mobile))]
+#[path = "capsule_picker.rs"]
+mod capsule_picker;
+
 #[tauri::command]
 pub async fn get_startup_snapshot(
     core: CoreState<'_>,
@@ -288,20 +292,13 @@ async fn set_capsule_picker_menu_impl(
         .ok_or("capsule_window_unavailable")?;
     let (send, receive) = tokio::sync::oneshot::channel();
     capsule.run_on_main_thread(move |capsule| {
-        let mutable = if style {
-            core.dictation_style_target().is_some_and(|active| active.mutable && active.session_id == session_id)
-        } else {
-            core.dictation_translation_target().is_some_and(|active| active.mutable && active.session_id == session_id)
-        };
-        if open && !mutable {
-            let _ = send.send(Err(if style { "recording_style_required" } else { "recording_translation_required" }.into()));
-            return;
-        }
-        let result = if style {
-            capsule.set_style_menu_open(label, session_id, open, request_id, menu_id)
-        } else {
-            capsule.set_translation_menu_open(label, session_id, open).map(|_| None)
-        };
+        let result = capsule_picker::dispatch(&core, session_id, open, style, || {
+            if style {
+                capsule.set_style_menu_open(label, session_id, open, request_id, menu_id)
+            } else {
+                capsule.set_translation_menu_open(label, session_id, open).map(|_| None)
+            }
+        });
         let _ = send.send(result);
     })?;
     receive

@@ -8,10 +8,19 @@ const [commands, lib, hotkeys, loops, bridge, host, menu, selection] = await Pro
 ]);
 const core = await readFile(new URL('../crates/openless-core/src/api.rs', import.meta.url), 'utf8');
 const appEvents = await read('tauri_events.rs');
+const pickerCommand = await read('commands/capsule_picker.rs');
 assert.match(lib, /commands::get_capsule_style_menu_request/);
 assert.match(commands, /pub fn get_capsule_style_menu_request[^]*?capsule_label\(window.label\(\)\)/);
 assert.match(commands, /pub async fn set_capsule_style_menu[^]*?request_id: Option<String>,[^]*?menu_id: Option<String>/);
 assert.match(commands, /capsule\.set_style_menu_open\(label, session_id, open, request_id, menu_id\)/);
+assert.match(commands, /capsule_picker::dispatch\(&core, session_id, open, style,[^]*?capsule\.set_style_menu_open/);
+const pickerImpl = commands.slice(commands.indexOf('async fn set_capsule_picker_menu_impl'));
+assert.doesNotMatch(pickerImpl, /dictation_style_target|recording_style_required/,
+  'command admission must let request-aware style reservation classify stale sessions first');
+assert.match(pickerCommand, /if open && !style && !core.dictation_translation_target\(\)/);
+assert.match(pickerCommand, /active.mutable && active.session_id == session_id/);
+assert.match(pickerCommand, /return Err\("recording_translation_required".into\(\)\)/);
+assert.doesNotMatch(pickerCommand, /dictation_style_target|recording_style_required/);
 const programmatic = commands.slice(commands.indexOf('pub fn update_dictation_style'), commands.indexOf('pub async fn start_dictation'));
 assert.doesNotMatch(programmatic, /hotkey_toggled|handle_skip_auto_style_hotkey/);
 assert.equal((loops.match(/handle_skip_auto_style_hotkey\(&inner, /g) ?? []).length, 2,
