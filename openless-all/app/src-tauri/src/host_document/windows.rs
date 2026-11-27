@@ -27,6 +27,7 @@ use windows::Win32::{
 type Callback = Box<dyn Fn(EditPair, Option<AnchorSnapshot>) -> bool + Send + Sync>;
 
 mod edit_settle;
+mod selection_value;
 use edit_settle::{can_publish, has_edit_events, EditSettle};
 
 #[derive(Debug, Clone)]
@@ -313,22 +314,31 @@ pub(super) fn replace_selection_direct(
         }
         let value = element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
             .map_err(unavailable)?;
-        if value.CurrentIsReadOnly().map_err(unavailable)?.as_bool()
-            || value.CurrentValue().map_err(unavailable)?.to_string() != original
-            || read_selection_full().as_deref() != Some(original)
-            || !still_current()
-            || !uia.CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
-                .map_err(unavailable)?.as_bool()
-            || value.CurrentValue().map_err(unavailable)?.to_string() != original
-            || !still_current()
-        {
-            return Err("selectionPolishTargetUnavailable".into());
-        }
-        value.SetValue(&windows::core::BSTR::from(replacement)).map_err(unavailable)?;
-        if value.CurrentValue().map_err(unavailable)?.to_string() != replacement {
-            return Err("selectionPolishWriteUnconfirmed".into());
-        }
-        Ok(())
+        selection_value::replace(
+            || {
+                if value.CurrentIsReadOnly().map_err(unavailable)?.as_bool()
+                    || value.CurrentValue().map_err(unavailable)?.to_string() != original
+                    || read_selection_full().as_deref() != Some(original)
+                    || !still_current()
+                    || !uia.CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
+                        .map_err(unavailable)?.as_bool()
+                    || value.CurrentValue().map_err(unavailable)?.to_string() != original
+                    || !still_current()
+                {
+                    return Err("selectionPolishTargetUnavailable".into());
+                }
+                Ok(())
+            },
+            || value.SetValue(&windows::core::BSTR::from(replacement)),
+            || {
+                // Read only the pattern belonging to the original element. A
+                // lost target or unreadable value after submission is unknown.
+                let confirmed = value.CurrentValue()?.to_string() == replacement;
+                Ok(confirmed && still_current()
+                    && uia.CompareElements(&element, &uia.GetFocusedElement()?)?.as_bool()
+                    && still_current())
+            },
+        )
     })
 }
 

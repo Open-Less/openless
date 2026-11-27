@@ -590,33 +590,14 @@ pub(crate) fn insert_selection_result(
             // Serialize native delivery with other insertions, without borrowing
             // or rewriting the clipboard. Drop the gate before fallback copies.
             let _delivery = crate::insertion::clipboard_delivery::lock();
-            crate::host_document::replace_selection_direct(source_text, text, || {
-                selection_insertion_target_is_current(target)
-            }, target)
-            .map(|()| openless_core::InsertOutcome::Inserted)
-            .map_err(|reason| {
-                openless_core::BackendError::new(
-                    if reason == "selectionPolishWriteUnconfirmed" {
-                        openless_core::BackendErrorCode::OutcomeUnknown
-                    } else {
-                        openless_core::BackendErrorCode::Platform
-                    },
-                    reason,
-                )
-            })
+            direct_delivery::native_result(crate::host_document::replace_selection_direct(
+                source_text,
+                text,
+                || selection_insertion_target_is_current(target),
+                target,
+            ))
         },
-        |mut error| {
-            let fallback = selection_result_fallback(target, text);
-            if error.code == openless_core::BackendErrorCode::OutcomeUnknown {
-                error.details = Some(serde_json::json!({
-                    "original_saved": true,
-                    "result_copied": matches!(fallback, Ok(openless_core::InsertOutcome::CopiedFallback)),
-                }));
-                Err(error)
-            } else {
-                fallback
-            }
-        },
+        |error| direct_delivery::fallback_result(error, selection_result_fallback(target, text)),
     )
 }
 
