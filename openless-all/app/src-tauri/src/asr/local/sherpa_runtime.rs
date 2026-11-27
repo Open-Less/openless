@@ -53,10 +53,13 @@ struct LoadedOfflineModel {
     decode_gate: Arc<tokio::sync::Semaphore>,
 }
 
-/// Online model load state. Each dictation session creates its own `OnlineStream` from the recognizer.
+/// Each segment owns its stream, while native calls on the shared recognizer
+/// are serialized. Do not hold this executor for an entire session: a later
+/// live segment may start before an earlier buffered segment enters finish().
 #[derive(Clone)]
 struct LoadedOnlineModel {
-    // [DEBUG-VOICE-1003] Observe overlap without serializing native calls.
+    execution: Arc<Mutex<()>>,
+    // Streams own their text state; native calls share the recognizer executor.
     #[cfg(local_asr_sherpa)]
     diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
@@ -320,7 +323,11 @@ impl SherpaOnnxRuntime {
             .clone()
             .filter(|loaded| loaded.alias == loaded_alias)
             .context("sherpa-onnx online model not loaded")?;
-        create_online_session_from_loaded(loaded)
+        // A previous stream may still be draining native decode. Waiting for
+        // its executor belongs on a worker, never on Core's async control lane.
+        tokio::task::spawn_blocking(move || create_online_session_from_loaded(loaded))
+            .await
+            .context("sherpa-onnx online stream creation worker failed")?
     }
 
     pub fn request_cancel_prepare(&self) {
@@ -498,6 +505,7 @@ async fn load_model(alias: &str, dir: &Path) -> Result<LoadedModel> {
             Some(openless_core::LocalAsrExecutionMode::Online) => {
                 let recognizer = create_online_recognizer(&alias, &dir)?;
                 Ok(LoadedModel::Online(LoadedOnlineModel {
+                    execution: Arc::new(Mutex::new(())),
                     diagnostic_active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                     alias,
                     recognizer: Arc::new(recognizer),
@@ -520,6 +528,7 @@ async fn load_model(alias: &str, _dir: &Path) -> Result<LoadedModel> {
         }
         Some(openless_core::LocalAsrExecutionMode::Online) => {
             Ok(LoadedModel::Online(LoadedOnlineModel {
+                execution: Arc::new(Mutex::new(())),
                 alias: alias.to_string(),
             }))
         }
@@ -753,13 +762,14 @@ async fn transcribe_loaded_model(
 }
 
 pub struct SherpaOnlineSession {
+    execution: Arc<Mutex<()>>,
     #[cfg(local_asr_sherpa)]
     diagnostic_active: Arc<std::sync::atomic::AtomicUsize>,
     alias: String,
     #[cfg(local_asr_sherpa)]
     recognizer: Arc<OnlineRecognizer>,
     #[cfg(local_asr_sherpa)]
-    stream: sherpa_onnx::OnlineStream,
+    stream: Option<sherpa_onnx::OnlineStream>,
     committed_text: String,
     last_partial_text: String,
     last_emitted_text: String,
@@ -807,6 +817,9 @@ impl Drop for VoiceNativeProbe<'_> {
 #[cfg(local_asr_sherpa)]
 impl Drop for SherpaOnlineSession {
     fn drop(&mut self) {
+        let _execution = self.execution.lock();
+        // Destroy the stream while this recognizer is still exclusively held.
+        self.stream.take();
         crate::recorder::voice_diagnostic("P5", &["H4"], "session_owner", "dropping",
             serde_json::json!({"count": Arc::strong_count(&self.recognizer),
                 "active": self.diagnostic_active.load(Ordering::Relaxed)}),
@@ -815,6 +828,11 @@ impl Drop for SherpaOnlineSession {
 }
 
 impl SherpaOnlineSession {
+    #[cfg(local_asr_sherpa)]
+    fn stream(&self) -> &sherpa_onnx::OnlineStream {
+        self.stream.as_ref().expect("online stream lives until session drop")
+    }
+
     pub fn alias(&self) -> &str {
         &self.alias
     }
@@ -826,6 +844,8 @@ impl SherpaOnlineSession {
         if pcm.is_empty() {
             return Ok(());
         }
+        let execution = Arc::clone(&self.execution);
+        let _execution = execution.lock();
         let samples = pcm_s16le_to_f32(pcm)?;
         self.accept_samples(&samples, on_token)
     }
@@ -834,6 +854,8 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
+        let execution = Arc::clone(&self.execution);
+        let _execution = execution.lock();
         self.finish_inner(on_token)
     }
 
@@ -843,6 +865,8 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
+        let execution = Arc::clone(&self.execution);
+        let _execution = execution.lock();
         self.flush_segment_inner(on_token)
     }
 
@@ -853,7 +877,7 @@ impl SherpaOnlineSession {
     {
         {
             let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "accept");
-            self.stream.accept_waveform(16_000, samples);
+            self.stream().accept_waveform(16_000, samples);
         }
         self.drain_ready(on_token);
         Ok(())
@@ -875,11 +899,11 @@ impl SherpaOnlineSession {
         finish_online_segment_input(
             |tail| {
                 let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
-                self.stream.accept_waveform(16_000, tail);
+                self.stream().accept_waveform(16_000, tail);
             },
             || {
                 let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
-                self.stream.input_finished();
+                self.stream().input_finished();
             },
         );
         self.drain_ready(on_token);
@@ -903,11 +927,11 @@ impl SherpaOnlineSession {
         finish_online_segment_input(
             |tail| {
                 let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "tail_padding");
-                self.stream.accept_waveform(16_000, tail);
+                self.stream().accept_waveform(16_000, tail);
             },
             || {
                 let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "input_finished");
-                self.stream.input_finished();
+                self.stream().input_finished();
             },
         );
         self.drain_ready_without_endpoint_reset(on_token);
@@ -921,7 +945,7 @@ impl SherpaOnlineSession {
         {
             // EOF also closes feature extraction; recognizer reset only resets decoding.
             let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "new_stream");
-            self.stream = self.recognizer.create_stream();
+            self.stream = Some(self.recognizer.create_stream());
         }
         Ok(())
     }
@@ -939,10 +963,10 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        while self.recognizer.is_ready(&self.stream) {
+        while self.recognizer.is_ready(self.stream()) {
             {
                 let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
-                self.recognizer.decode(&self.stream);
+                self.recognizer.decode(self.stream());
             }
             self.capture_result(on_token, true);
         }
@@ -953,10 +977,10 @@ impl SherpaOnlineSession {
     where
         F: Fn(&SherpaTokenEmission),
     {
-        while self.recognizer.is_ready(&self.stream) {
+        while self.recognizer.is_ready(self.stream()) {
             {
                 let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "decode");
-                self.recognizer.decode(&self.stream);
+                self.recognizer.decode(self.stream());
             }
             self.capture_result(on_token, false);
         }
@@ -969,7 +993,7 @@ impl SherpaOnlineSession {
     {
         let result = {
             let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "result");
-            self.recognizer.get_result(&self.stream)
+            self.recognizer.get_result(self.stream())
         };
         crate::recorder::voice_diagnostic("P3", &["H2", "H4", "H6"], "native_result", "observed",
             serde_json::json!({"present": result.is_some(),
@@ -985,14 +1009,14 @@ impl SherpaOnlineSession {
         }
         self.emit_delta(&text, on_token);
         self.last_partial_text = text.clone();
-        if allow_endpoint_reset && self.recognizer.is_endpoint(&self.stream) {
+        if allow_endpoint_reset && self.recognizer.is_endpoint(self.stream()) {
             append_segment(&mut self.committed_text, &text);
             self.last_partial_text.clear();
             self.last_emitted_text.clear();
             self.pending_new_segment = true;
             {
                 let _probe = VoiceNativeProbe::enter(&self.diagnostic_active, "reset");
-                self.recognizer.reset(&self.stream);
+                self.recognizer.reset(self.stream());
             }
         }
     }
@@ -1055,6 +1079,7 @@ fn append_segment(text: &mut String, segment: &str) {
 
 #[cfg(local_asr_sherpa)]
 fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
+    let _execution = loaded.execution.lock();
     let stream = loaded.recognizer.create_stream();
     crate::recorder::voice_diagnostic(
         "P5",
@@ -1064,10 +1089,11 @@ fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<Sherpa
         serde_json::json!({"count": Arc::strong_count(&loaded.recognizer)}),
     );
     Ok(SherpaOnlineSession {
+        execution: Arc::clone(&loaded.execution),
         diagnostic_active: loaded.diagnostic_active,
         alias: loaded.alias,
         recognizer: loaded.recognizer,
-        stream,
+        stream: Some(stream),
         committed_text: String::new(),
         last_partial_text: String::new(),
         last_emitted_text: String::new(),
@@ -1078,6 +1104,7 @@ fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<Sherpa
 #[cfg(not(local_asr_sherpa))]
 fn create_online_session_from_loaded(loaded: LoadedOnlineModel) -> Result<SherpaOnlineSession> {
     Ok(SherpaOnlineSession {
+        execution: Arc::clone(&loaded.execution),
         alias: loaded.alias,
         committed_text: String::new(),
         last_partial_text: String::new(),
@@ -1099,6 +1126,46 @@ fn pcm_s16le_to_f32(pcm: &[u8]) -> Result<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(local_asr_sherpa))]
+    #[test]
+    fn online_operations_share_the_cached_recognizer_executor_without_pinning_a_session() {
+        use std::time::Duration;
+        let loaded = LoadedOnlineModel {
+            execution: Arc::new(Mutex::new(())),
+            alias: "zipformer-bilingual-zh-en-streaming".into(),
+        };
+        let mut first = create_online_session_from_loaded(loaded.clone()).unwrap();
+        // A second stream can exist before the first finishes (stable/live
+        // and cloud fallback ordering must not deadlock on session ownership).
+        let second = create_online_session_from_loaded(loaded.clone()).unwrap();
+        assert!(Arc::ptr_eq(&first.execution, &second.execution));
+        for operation in ["pcm", "flush", "finish"] {
+            let mut second = create_online_session_from_loaded(loaded.clone()).unwrap();
+            let guard = first.execution.lock();
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                entered_tx.send(()).unwrap();
+                match operation {
+                    "pcm" => second.accept_pcm_chunk(&[1, 0], &|_| {}).unwrap(),
+                    "flush" => second.flush_segment(&|_| {}).unwrap(),
+                    "finish" => { second.finish(&|_| {}).unwrap(); },
+                    _ => unreachable!(),
+                }
+                done_tx.send(()).unwrap();
+            });
+            entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(done_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+                "{operation} entered a busy recognizer");
+            drop(guard);
+            done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            worker.join().unwrap();
+        }
+        first.last_partial_text = "first".into();
+        assert!(second.final_text().is_empty());
+        assert_eq!(first.final_text(), "first");
+    }
 
     #[tokio::test]
     async fn release_generation_is_rechecked_after_waiting_for_native_lifecycle() {
@@ -1207,6 +1274,7 @@ mod tests {
                 alias: "sense-voice-small-zh".into(),
             });
             runtime.state.lock().online_loaded = Some(LoadedOnlineModel {
+                execution: Arc::new(Mutex::new(())),
                 alias: "zipformer-bilingual-zh-en-streaming".into(),
             });
         }
@@ -1345,7 +1413,7 @@ mod tests {
             .create_online_session("zipformer-bilingual-zh-en-streaming", Path::new(&model_dir))
             .await
             .unwrap();
-        session.stream.set_option("openless-test-segment", "first");
+        session.stream().set_option("openless-test-segment", "first");
         for chunk in pcm.chunks(640) {
             session.accept_pcm_chunk(chunk, &|_| {}).unwrap();
         }
@@ -1356,7 +1424,7 @@ mod tests {
             "the fixture must contain recognizable speech"
         );
         assert!(
-            !session.stream.has_option("openless-test-segment"),
+            !session.stream().has_option("openless-test-segment"),
             "EOF must replace the feature stream"
         );
         for chunk in pcm.chunks(640) {

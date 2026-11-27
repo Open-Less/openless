@@ -4,7 +4,7 @@ import { Icon } from '../../components/Icon';
 import { IS_BETA_BUILD, IS_DEV_BUILD } from '../../lib/appVersion';
 import type { OS } from '../../runtime/environment';
 import { Tooltip } from '../../ui/overlays/Tooltip';
-import { NAV_TREE, subItemLabelKey, type AppTab } from './navigation';
+import { NAV_TREE, isTabAvailable, subItemLabelKey, type AppTab } from './navigation';
 
 interface SidebarNavButtonProps extends Omit<ComponentPropsWithoutRef<'button'>, 'className'> {
   active?: boolean;
@@ -59,8 +59,9 @@ export function DesktopSidebar({
   const { t } = useTranslation();
   const visibleTab = settingsOpen ? undefined : currentTab;
   const pageButtonProps = (tab: AppTab) => ({
+    disabled: !isTabAvailable(tab),
     onClick: () => onSelectTab(tab),
-    onPointerEnter: () => onPreloadTab(tab),
+    onPointerEnter: isTabAvailable(tab) ? () => onPreloadTab(tab) : undefined,
     onFocus: () => onPreloadTab(tab),
     'aria-current': visibleTab === tab ? ('page' as const) : undefined,
   });

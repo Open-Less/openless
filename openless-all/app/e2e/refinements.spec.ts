@@ -1,6 +1,7 @@
 import { fixtureOrigin } from './support/server';
-import { openMicrophoneSettings, settleNavigation } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation, settleSelectDismissal } from './support/navigation';
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { ASK_ANYTHING_AVAILABLE } from '../src/lib/appVersion';
 
 const fixture = `${fixtureOrigin}/e2e/fixtures/refinements.html`;
 
@@ -31,8 +32,10 @@ test('shortcut search remains visible without focus', async ({ page }) => {
   const search = page.getByRole('searchbox', { name: '搜索命令或按键' });
   await expect(search).toHaveCSS('clip-path', 'none');
   await expect(search).toHaveCSS('appearance', 'none');
-  await expect(search).toHaveCSS('border-radius', '16px');
-  const colors = await search.evaluate((element) => ({
+  await expect(search).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  const frame = search.locator('..');
+  await expect(frame).toHaveCSS('border-radius', '12px');
+  const colors = await frame.evaluate((element) => ({
     search: getComputedStyle(element).backgroundColor,
     page: getComputedStyle(element.closest('.ol-settings-content') ?? document.body)
       .backgroundColor,
@@ -139,9 +142,15 @@ test('compact typography selects persist font, size and reading width without ne
   page.on('request', (request) => {
     if (request.resourceType() === 'font') fonts.push(request.url());
   });
+  await page.addInitScript(() => {
+    if (localStorage.getItem('ol-font-scale') === null) {
+      localStorage.setItem('ol-font-scale', 'medium');
+    }
+  });
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '外观与语言', exact: true }).click();
+  await settleNavigation(page);
   const section = page.locator('.ol-typography');
   await expect(section.getByRole('combobox')).toHaveCount(3);
   await expect(section.getByText('文字用途', { exact: true })).toHaveCount(0);
@@ -155,12 +164,15 @@ test('compact typography selects persist font, size and reading width without ne
   await expect(page.getByRole('listbox')).toBeVisible();
   await expect(section.getByRole('listbox')).toHaveCount(0);
   await page.getByRole('option', { name: 'Avenir Next · Aptos', exact: true }).click();
+  await settleSelectDismissal(page);
   await expect(section.getByRole('combobox', { name: '字体系列' })).toBeFocused();
   await section.getByRole('combobox', { name: '阅读宽度' }).press('Enter');
   await page.getByRole('option', { name: '聚焦', exact: true }).click();
   await expect(page.locator('html')).toHaveCSS('--ol-reading-width', '56ch');
+  await settleSelectDismissal(page);
   await section.getByRole('combobox', { name: '界面大小' }).click();
   await page.getByRole('option', { name: '110%', exact: true }).click();
+  await expect(page.locator('html')).toHaveCSS('--ol-interface-scale', '1.1');
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('ol.typography.v1')!));
   expect(stored.fonts).toEqual({
     ui: 'humanist',
@@ -174,6 +186,7 @@ test('compact typography selects persist font, size and reading width without ne
   await expect(page.locator('.ol-viewport-content')).toHaveCSS('zoom', '1.1');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '外观与语言', exact: true }).click();
+  await settleNavigation(page);
   await expect(section.getByRole('combobox', { name: '字体系列' })).toHaveText(
     'Avenir Next · Aptos',
   );
@@ -215,7 +228,6 @@ const styleDestinations = [
 ] as const;
 const toolDestinations = [
   ['纠正规则', 'corrections'],
-  ['随便问', 'selectionAsk'],
   ['翻译', 'translation'],
   ['速记', 'quickNote'],
 ] as const;
@@ -238,9 +250,17 @@ for (const layout of ['desktop', 'narrow'] as const) {
       await expect(heading).toBeVisible();
       await expect(heading).toBeInViewport();
     };
-    const visit = async (scope: Locator, name: string, id: string) => {
-      await scope.getByRole('button', { name, exact: true }).click();
-      await expectDestination(id);
+    const visit = async (scope: Locator, name: string, id: string, fromSheet = false) => {
+      const button = scope.getByRole('button', { name, exact: true });
+      const available = id !== 'selectionAsk' || ASK_ANYTHING_AVAILABLE;
+      if (available) {
+        await button.click();
+      } else {
+        await expect(button).toBeDisabled();
+        if (fromSheet) await scope.getByRole('button', { name: '关闭', exact: true }).click();
+      }
+      if (fromSheet) await expect(page.locator('.ol-mobile-navigation-sheet')).toHaveCount(0);
+      if (available) await expectDestination(id);
     };
 
     await expectDestination('overview');
@@ -251,9 +271,7 @@ for (const layout of ['desktop', 'narrow'] as const) {
       const visitFromSheet = async (sheet: string, name: string, id: string) => {
         await nav.getByRole('button', { name: sheet, exact: true }).click();
         const dialog = page.getByRole('dialog', { name: sheet, exact: true });
-        await dialog.getByRole('button', { name, exact: true }).click();
-        await expect(page.locator('.ol-mobile-navigation-sheet')).toHaveCount(0);
-        await expectDestination(id);
+        await visit(dialog, name, id, true);
       };
       for (const [name, id] of styleDestinations) await visitFromSheet('风格', name, id);
       await visitFromSheet('更多', '词典', 'vocab');
@@ -265,7 +283,7 @@ for (const layout of ['desktop', 'narrow'] as const) {
       const tools = nav.getByRole('button', { name: '工具', exact: true });
       await tools.click();
       await expect(tools).toHaveAttribute('aria-expanded', 'true');
-      await expect(nav.getByRole('button', { name: /^(纠正规则|随便问|翻译|速记)$/ })).toHaveText(
+      await expect(nav.getByRole('button', { name: /^(纠正规则|翻译|速记)$/ })).toHaveText(
         toolDestinations.map(([name]) => name),
       );
       for (const [name, id] of toolDestinations) await visit(nav, name, id);

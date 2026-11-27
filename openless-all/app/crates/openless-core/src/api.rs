@@ -1,10 +1,13 @@
 mod cloud_note;
+#[path = "ask_voice_capture.rs"]
+pub mod ask_voice_capture;
 use futures_util::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::activity::ActivityDay;
+use crate::app_style_routing::{AppStyleAssignment, AppStyleRouting, AppStyleStore};
 use crate::coding_agent::{
     normalize_coding_agent_executable, normalize_coding_agent_workdir,
     normalize_less_computer_permission_mode, resolve_coding_agent_model, CodingAgentProvider,
@@ -49,6 +52,8 @@ use crate::{ActivityStore, CorrectionRuleStore, HistoryStore, PreferencesStore, 
 pub struct BackendSnapshot {
     pub running: bool,
     pub dictation: DictationStateSnapshot,
+    #[serde(default)]
+    pub processing_dictations: Vec<DictationStateSnapshot>,
     #[serde(default)]
     pub vocabulary_revision: u64,
     #[serde(default)]
@@ -137,6 +142,23 @@ struct DictationReservation {
     capture_generation: Option<u64>,
     pending_capture: Option<Box<dyn PendingAudioCapture>>,
 }
+
+#[derive(Clone)]
+struct ResolvedDictationProviders {
+    asr: crate::dictation_context::ProviderInvocation,
+    llm: crate::dictation_context::ProviderInvocation,
+    omni: crate::dictation_context::ProviderInvocation,
+    llm_error: Option<BackendError>,
+}
+
+struct DictationProviderWarmth {
+    token: Arc<()>,
+    revision: (u64, u64),
+    until: std::time::Instant,
+    providers: Option<ResolvedDictationProviders>,
+}
+
+const DICTATION_PROVIDER_WARMTH: std::time::Duration = std::time::Duration::from_millis(1500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum PendingAudioCaptureKey {
@@ -1785,6 +1807,7 @@ impl BackendRepositories {
 struct MutableState {
     running: bool,
     dictation: DictationStateSnapshot,
+    processing_dictations: HashMap<SessionId, SubmittedDictation>,
     dictation_context: Option<Arc<DictationContext>>,
     /// The requested output target is published before async context capture
     /// completes, so a second quick-note hotkey edge can still resolve the
@@ -1799,6 +1822,34 @@ struct MutableState {
     transcripts: HashMap<SessionId, crate::types::TranscriptAccumulator>,
     recording_fault_cleanup: Option<SessionId>,
     silence_monitor: Option<SilenceMonitor>,
+}
+
+struct SubmittedDictation {
+    snapshot: DictationStateSnapshot,
+    context: Arc<DictationContext>,
+    submitted_at: std::time::Instant,
+}
+
+impl MutableState {
+    fn processing_snapshots(&self) -> Vec<DictationStateSnapshot> {
+        let mut tasks: Vec<_> = self.processing_dictations.values().collect();
+        tasks.sort_by_key(|task| task.submitted_at);
+        tasks.into_iter().map(|task| task.snapshot.clone()).collect()
+    }
+    fn session(&self, id: SessionId) -> Option<&DictationStateSnapshot> {
+        if self.dictation.session_id == Some(id) { Some(&self.dictation) }
+        else { self.processing_dictations.get(&id).map(|task| &task.snapshot) }
+    }
+
+    fn session_mut(&mut self, id: SessionId) -> Option<&mut DictationStateSnapshot> {
+        if self.dictation.session_id == Some(id) { Some(&mut self.dictation) }
+        else { self.processing_dictations.get_mut(&id).map(|task| &mut task.snapshot) }
+    }
+
+    fn session_context(&self, id: SessionId) -> Option<&Arc<DictationContext>> {
+        if self.dictation.session_id == Some(id) { self.dictation_context.as_ref() }
+        else { self.processing_dictations.get(&id).map(|task| &task.context) }
+    }
 }
 
 struct SilenceMonitor {
@@ -2332,12 +2383,55 @@ impl ActiveTextInsertion {
     }
 }
 
+fn recording_history_entry(
+    context: &DictationContext,
+    session_id: SessionId,
+    created_at: String,
+) -> DictationSession {
+    let front_app = context.captured_front_app();
+    let pipeline_mode = match context.pipeline_mode {
+        crate::shared_types::PipelineMode::Traditional => "traditional",
+        crate::shared_types::PipelineMode::Deepseek => "deepseek",
+        crate::shared_types::PipelineMode::Multimodal => "multimodal",
+    };
+    DictationSession {
+        id: session_id.to_string(),
+        created_at,
+        source: OpenLessBackend::history_source_for_context(context),
+        raw_transcript: String::new(),
+        asr_transcript: None,
+        final_text: String::new(),
+        mode: context.polish.mode,
+        style_pack_id: Some(context.polish.style_pack_id.clone()),
+        translation_active: context.polish.translation_active,
+        polish_source: None,
+        app_bundle_id: front_app.bundle_id,
+        app_name: front_app.name,
+        insert_status: HistoryInsertStatus::NotRequested,
+        error_code: Some("recording".into()),
+        duration_ms: None,
+        dictionary_entry_count: None,
+        has_audio_recording: Some(context.recording.archive_enabled),
+        asr_provider: Some(context.asr.provider_id.clone()),
+        asr_model: context.asr.model.clone(),
+        llm_provider: None,
+        llm_model: None,
+        pipeline_mode: Some(pipeline_mode.into()),
+        asr_ms: None,
+        polish_ms: None,
+    }
+}
+
 struct BackendEngineProgress {
     events: Arc<EventBus>,
     state: Arc<RwLock<MutableState>>,
     phase_changed: Arc<tokio::sync::Notify>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
     raw_transcripts: Mutex<HashMap<SessionId, TranscriptAccumulator>>,
+    history: Arc<HistoryStore>,
+    history_revision: Arc<AtomicU64>,
+    clock: Arc<dyn Clock>,
+    preferences: Arc<PreferencesStore>,
 }
 
 impl EngineProgressSink for BackendEngineProgress {
@@ -2345,12 +2439,12 @@ impl EngineProgressSink for BackendEngineProgress {
         match progress {
             EngineProgress::CaptureReady => {
                 let state = self.state.read().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 self.phase_changed.notify_waiters();
             }
             EngineProgress::RecordingLevel { elapsed_ms, level } => {
                 let mut state = self.state.write().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 if !matches!(
                     state.dictation.phase,
                     DictationPhase::Starting | DictationPhase::Recording
@@ -2409,7 +2503,7 @@ impl EngineProgressSink for BackendEngineProgress {
             }
             EngineProgress::RecordingLimitReached => {
                 let state = self.state.read().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 if !matches!(
                     state.dictation.phase,
                     DictationPhase::Starting | DictationPhase::Recording
@@ -2432,7 +2526,7 @@ impl EngineProgressSink for BackendEngineProgress {
             }
             EngineProgress::RecordingFault(error) => {
                 let mut state = self.state.write().expect("backend state lock poisoned");
-                ensure_active_session(&state, session_id)?;
+                ensure_capture_session(&state, session_id)?;
                 state.dictation.phase = DictationPhase::Failed;
                 state.dictation.message = Some(error.message);
                 self.events.publish(
@@ -2457,11 +2551,11 @@ impl EngineProgressSink for BackendEngineProgress {
                     EngineStage::Transcribing => DictationPhase::Transcribing,
                     EngineStage::Polishing => DictationPhase::Polishing,
                 };
-                if state.dictation.phase != phase {
-                    state.dictation.phase = phase;
+                if state.session(session_id).unwrap().phase != phase {
+                    state.session_mut(session_id).unwrap().phase = phase;
                     self.events.publish(
                         Some(session_id),
-                        BackendEventKind::DictationStateChanged(state.dictation.clone()),
+                        BackendEventKind::DictationStateChanged(state.session(session_id).unwrap().clone()),
                     );
                     self.phase_changed.notify_waiters();
                 }
@@ -2470,7 +2564,7 @@ impl EngineProgressSink for BackendEngineProgress {
                 let mut state = self.state.write().expect("backend state lock poisoned");
                 ensure_active_session(&state, session_id)?;
                 if !matches!(
-                    state.dictation.phase,
+                    state.session(session_id).unwrap().phase,
                     DictationPhase::Starting
                         | DictationPhase::Recording
                         | DictationPhase::Transcribing
@@ -2482,8 +2576,7 @@ impl EngineProgressSink for BackendEngineProgress {
                 }
                 // Traditional final text was cleaned before correction and polishing.
                 let activation_phrases = state
-                    .dictation_context
-                    .as_ref()
+                    .session_context(session_id)
                     .filter(|context| {
                         !delta.is_final
                             || context.pipeline_mode
@@ -2522,6 +2615,67 @@ impl EngineProgressSink for BackendEngineProgress {
                 };
                 let is_partial = !delta.is_final;
                 let transcript_chars = transcript.chars().count();
+                if delta.is_final
+                    && state.session(session_id).unwrap().elapsed_ms
+                        > crate::long_recording::THRESHOLD_MS
+                {
+                    // Keep the whole ASR text recoverable before an expensive LLM call.
+                    // The state lock prevents a late final delta overwriting cancellation.
+                    let saved = (|| -> Result<bool, BackendError> {
+                        let context = state.session_context(session_id).ok_or_else(|| {
+                            BackendError::new(
+                                BackendErrorCode::Internal,
+                                "long-recording history has no session context",
+                            )
+                        })?;
+                        if !matches!(
+                            context.output_target,
+                            DictationOutputTarget::ForegroundApp
+                                | DictationOutputTarget::QuickNote
+                                | DictationOutputTarget::Undecided
+                        ) {
+                            return Ok(false);
+                        }
+                        let existing = self.history.read_entry(&session_id.to_string())?;
+                        let new_entry = existing.is_none();
+                        let mut entry = existing.unwrap_or_else(|| {
+                            recording_history_entry(
+                                context,
+                                session_id,
+                                self.clock.now_utc().to_rfc3339(),
+                            )
+                        });
+                        if entry.error_code.as_deref() != Some("recording") {
+                            return Ok(false);
+                        }
+                        entry.raw_transcript = transcript.clone();
+                        entry.duration_ms = Some(state.session(session_id).unwrap().elapsed_ms);
+                        if new_entry {
+                            let prefs = self.preferences.get();
+                            self.history.upsert_with_retention(
+                                entry,
+                                prefs.history_retention_days,
+                                prefs.history_max_entries,
+                            )?;
+                            Ok(true)
+                        } else {
+                            self.history.update_entry(entry)
+                        }
+                    })();
+                    match saved {
+                        Ok(true) => {
+                            let revision = self.history_revision.fetch_add(1, Ordering::AcqRel) + 1;
+                            self.events.publish(
+                                None,
+                                BackendEventKind::HistoryChanged(HistoryChange { revision }),
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!("failed to persist long-recording transcript: {error}")
+                        }
+                        Ok(false) => {}
+                    }
+                }
                 drop(state);
                 if is_partial {
                     let insertion = self
@@ -2550,7 +2704,7 @@ impl EngineProgressSink for BackendEngineProgress {
             EngineProgress::PolishDelta(delta) => {
                 let state = self.state.read().expect("backend state lock poisoned");
                 ensure_active_session(&state, session_id)?;
-                if state.dictation.phase != DictationPhase::Polishing {
+                if state.session(session_id).unwrap().phase != DictationPhase::Polishing {
                     return Err(BackendError::new(
                         BackendErrorCode::InvalidState,
                         "polish delta arrived outside the polishing phase",
@@ -2617,15 +2771,20 @@ pub struct OpenLessBackend {
     vocabulary_revision: Arc<AtomicU64>,
     history: Arc<HistoryStore>,
     history_revision: Arc<AtomicU64>,
+    main_dictation_trace: crate::main_dictation_trace::MainDictationTrace,
     activity: Arc<ActivityStore>,
     expression_profile: crate::expression_observation::SharedExpressionProfile,
     style_packs: Arc<StylePackStore>,
     style_pack_revision: Arc<AtomicU64>,
+    app_styles: AppStyleStore,
     preferences: Arc<PreferencesStore>,
     preferences_revision: Arc<AtomicU64>,
+    dictation_provider_warmth: Mutex<Option<DictationProviderWarmth>>,
+    provider_credentials_revision: AtomicU64,
     settings_write_gate: Arc<Mutex<()>>,
     // Serialize channel ownership changes through runtime cleanup, not status reads.
     local_asr_channel_gate: tokio::sync::Mutex<()>,
+    dictation_processing_gate: tokio::sync::Mutex<()>,
     cloud_sync: Option<crate::cloud_sync::CloudSyncService>,
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
@@ -3133,6 +3292,14 @@ impl OpenLessBackend {
                 "data directory is required",
             ));
         }
+        let app_styles = if restore_guard.is_some() {
+            AppStyleStore::in_memory()
+        } else {
+            AppStyleStore::open(
+                &config.data_dir,
+                deps.marketplace_config.as_ref().map(|config| config.base_url.clone()),
+            )
+        };
         let events = Arc::new(EventBus::new(256));
         // 保留裁剪与「最近 N 分钟」必须跟着注入的时钟走：同一个后端里
         // `created_at` 已经用 `clock` 生成，裁剪却偷读系统时钟的话，测试/
@@ -3164,6 +3331,7 @@ impl OpenLessBackend {
                 Arc::clone(&repositories.style_packs),
                 deps.selection_polisher.clone(),
                 Arc::clone(&voice_sessions),
+                deps.selection_runtime.clone(),
             ));
         if let Some(process) = deps.services.take_coding_agent_process() {
             let runner = Arc::new(crate::coding_agent::CodingAgentRunner::new(Arc::clone(
@@ -3455,6 +3623,7 @@ impl OpenLessBackend {
             state: Arc::new(RwLock::new(MutableState {
                 running: false,
                 dictation: DictationStateSnapshot::default(),
+                processing_dictations: HashMap::new(),
                 dictation_context: None,
                 dictation_start_output_target: None,
                 dictation_translation_requested: None,
@@ -3474,14 +3643,19 @@ impl OpenLessBackend {
             vocabulary_revision,
             history: repositories.history,
             history_revision,
+            main_dictation_trace: Default::default(),
             activity: repositories.activity,
             expression_profile: repositories.expression_profile,
             style_packs: repositories.style_packs,
             style_pack_revision,
+            app_styles,
             preferences: repositories.preferences,
             preferences_revision,
+            dictation_provider_warmth: Mutex::new(None),
+            provider_credentials_revision: Default::default(),
             settings_write_gate,
             local_asr_channel_gate: tokio::sync::Mutex::new(()),
+            dictation_processing_gate: tokio::sync::Mutex::new(()),
             cloud_sync,
             encrypted_sync,
             encrypted_sync_store,
@@ -4350,6 +4524,48 @@ impl OpenLessBackend {
     /// the concrete implementation.
     pub fn services(&self) -> &crate::domains::BackendServices {
         &self.deps.services
+    }
+
+    #[cfg(feature = "ask-attachments")]
+    pub fn create_standalone_ask(
+        &self,
+        context: Arc<dyn crate::ask::ContextProvider>,
+        assistant_context: Arc<dyn crate::assistant_api::AssistantContextProvider>,
+        attachments: Arc<dyn crate::ask::AttachmentReader>,
+    ) -> crate::ask::StandaloneQaService {
+        use crate::ask::{AskUsagePersistence, ConfiguredAskModels, StandaloneQaDependencies};
+        let models = Arc::new(ConfiguredAskModels::new(
+            self.deps.credential_store.clone(),
+            self.preferences.clone(),
+        ));
+        let search = Arc::new(crate::ask_search::WebSearchTool::new(
+            self.deps.credential_store.clone(),
+        ));
+        let usage = self.deps.services.usage_recorder.clone().map(|recorder| AskUsagePersistence {
+            recorder,
+            clock: self.clock.clone(),
+        });
+        let assistant = Arc::new(crate::assistant::PersonalAssistant::new(
+            crate::assistant::AssistantDependencies {
+                models: models.clone(),
+                context: assistant_context,
+                search: search.clone(),
+                usage: usage.as_ref().map(|usage| AskUsagePersistence {
+                    recorder: usage.recorder.clone(),
+                    clock: usage.clock.clone(),
+                }),
+            },
+        ));
+        crate::ask::StandaloneQaService::new(StandaloneQaDependencies {
+            assistant,
+            models,
+            context,
+            search,
+            attachments,
+            spawner: self.deps.task_spawner.clone(),
+            history: self.deps.services.qa.ask_history_sink(),
+            usage,
+        })
     }
 
     fn cloud_sync_service(&self) -> Result<&crate::cloud_sync::CloudSyncService, BackendError> {
@@ -5233,6 +5449,10 @@ impl OpenLessBackend {
             phase_changed: Arc::clone(&self.phase_changed),
             text_insertions: Arc::clone(&self.text_insertions),
             raw_transcripts: Mutex::new(HashMap::new()),
+            history: Arc::clone(&self.history),
+            history_revision: Arc::clone(&self.history_revision),
+            clock: Arc::clone(&self.clock),
+            preferences: Arc::clone(&self.preferences),
         })
     }
 
@@ -5247,6 +5467,12 @@ impl OpenLessBackend {
         // pending journal therefore uses the Host's read-only loader before
         // startup recovery/auto-sync tries to capture credentials.
         if !self.snapshot().running {
+            let catalog = Arc::clone(&self.app_styles.catalog);
+            self.deps.task_spawner.spawn(Box::pin(async move {
+                if let Err(error) = catalog.refresh().await {
+                    log::debug!("application catalog refresh unavailable: {error}");
+                }
+            }));
             self.recover_cloud_notes()?;
         }
         let before = self.get_preferences();
@@ -5302,6 +5528,7 @@ impl OpenLessBackend {
                     backend: BackendSnapshot {
                         running: true,
                         dictation: state.dictation.clone(),
+            processing_dictations: state.processing_snapshots(),
                         vocabulary_revision: self.vocabulary_revision.load(Ordering::Acquire),
                         history_revision: self.history_revision.load(Ordering::Acquire),
                         style_pack_revision: self.style_pack_revision.load(Ordering::Acquire),
@@ -5317,6 +5544,7 @@ impl OpenLessBackend {
                 backend: BackendSnapshot {
                     running: true,
                     dictation: state.dictation.clone(),
+            processing_dictations: state.processing_snapshots(),
                     vocabulary_revision: self.vocabulary_revision.load(Ordering::Acquire),
                     history_revision: self.history_revision.load(Ordering::Acquire),
                     style_pack_revision: self.style_pack_revision.load(Ordering::Acquire),
@@ -5377,6 +5605,14 @@ impl OpenLessBackend {
         );
         for capture in pending_captures.into_values() {
             let _ = capture.discard().await;
+        }
+        let submitted = self.snapshot().processing_dictations;
+        for task in submitted {
+            if let Some(id) = task.session_id {
+                let _ = self.cancel_session_adapters(id).await;
+                self.reset_dictation_session(id);
+                self.remove_recording_draft(id);
+            }
         }
         if !was_running {
             return Ok(());
@@ -5499,6 +5735,7 @@ impl OpenLessBackend {
         BackendSnapshot {
             running: state.running,
             dictation: state.dictation.clone(),
+            processing_dictations: state.processing_snapshots(),
             vocabulary_revision: self.vocabulary_revision.load(Ordering::Acquire),
             history_revision: self.history_revision.load(Ordering::Acquire),
             style_pack_revision: self.style_pack_revision.load(Ordering::Acquire),
@@ -5520,6 +5757,28 @@ impl OpenLessBackend {
             .as_ref()
             .map(|context| context.output_target)
             .or(state.dictation_start_output_target)
+    }
+
+    /// Immutable final mode, language, context and materials for a submitted segment.
+    pub fn submitted_dictation_context(&self, session_id: SessionId) -> Option<Arc<DictationContext>> {
+        self.state.read().expect("backend state lock poisoned")
+            .processing_dictations.get(&session_id).map(|task| Arc::clone(&task.context))
+    }
+
+    /// Resolves only after the device stop joined and this segment became a job.
+    /// Callers race this with the terminal result for cancelled/failed startup.
+    pub async fn wait_for_dictation_submission(&self, session_id: SessionId) {
+        loop {
+            let changed = self.phase_changed.notified();
+            if self.submitted_dictation_context(session_id).is_some() { return; }
+            changed.await;
+        }
+    }
+
+    /// Resolve an explicit owner before a UI/CLI cancellation crosses an await.
+    pub fn dictation_cancel_target(&self) -> Option<SessionId> {
+        let state = self.state.read().expect("backend state lock poisoned");
+        state.dictation.session_id.or_else(|| state.processing_snapshots().first().and_then(|task| task.session_id))
     }
 
     /// Dispatch a launcher/single-instance intent through the same state
@@ -5556,7 +5815,7 @@ impl OpenLessBackend {
                 Ok(CliDispatchOutcome::QaToggled)
             }
             crate::cli::CliIntent::CancelDictation => {
-                if let Some(session_id) = self.snapshot().dictation.session_id {
+                if let Some(session_id) = self.dictation_cancel_target() {
                     self.cancel_dictation(Some(session_id)).await?;
                 } else if let Some(session_id) = self.less_computer_active_session() {
                     // 1.x voice_agent shared the dictation cancellation scope.
@@ -5708,8 +5967,30 @@ impl OpenLessBackend {
         edge: DictationHotkeyEdge,
         options: DictationHotkeyDispatchOptions,
     ) -> Result<CliDispatchOutcome, BackendError> {
+        self.dispatch_dictation_hotkey_edge_inner(edge, options, None).await
+    }
+
+    pub async fn dispatch_arbitrated_dictation_hotkey_press(
+        &self,
+        edge: DictationHotkeyEdge,
+        still_held: impl Fn() -> bool + Send + Sync,
+    ) -> Result<CliDispatchOutcome, BackendError> {
+        self.dispatch_dictation_hotkey_edge_inner(
+            edge, DictationHotkeyDispatchOptions::default(), Some(&still_held),
+        ).await
+    }
+
+    async fn dispatch_dictation_hotkey_edge_inner(
+        &self,
+        edge: DictationHotkeyEdge,
+        options: DictationHotkeyDispatchOptions,
+        still_held: Option<&(dyn Fn() -> bool + Send + Sync)>,
+    ) -> Result<CliDispatchOutcome, BackendError> {
         use crate::hotkey_interpreter::HotkeyIntent;
 
+        if still_held.is_some_and(|check| !check()) {
+            return Ok(CliDispatchOutcome::Noop);
+        }
         if let Some(changed) = self.accept_voice_activation_hotkey_edge(edge) {
             if changed {
                 self.reconcile_voice_activation_hotkey().await?;
@@ -5731,12 +6012,15 @@ impl OpenLessBackend {
         } else {
             Some(self.hotkey_dispatch_gate.lock().await)
         };
-        let modifier_only =
-            crate::shortcut_types::is_modifier_chord_binding(&preferences.dictation_hotkey)
+        if still_held.is_some_and(|check| !check()) {
+            return Ok(CliDispatchOutcome::Noop);
+        }
+        let modifier_only = still_held.is_none() &&
+            (crate::shortcut_types::is_modifier_chord_binding(&preferences.dictation_hotkey)
                 || crate::hotkey_interpreter::modifier_arbitration_required(
                     crate::shortcut_types::legacy_modifier_trigger(&preferences.dictation_hotkey),
                     mode,
-                );
+                ));
         let intent = {
             let mut hotkey = self
                 .hotkey
@@ -5885,10 +6169,12 @@ impl OpenLessBackend {
                     }
                 }
             }
-            HotkeyIntent::Stop => self
-                .stop_dictation_with_options(options.stop)
-                .await
-                .map(CliDispatchOutcome::DictationCompleted),
+            HotkeyIntent::Stop => {
+                let session = self.snapshot().dictation.session_id;
+                drop(_dispatch_guard);
+                self.stop_dictation_session_with_options(session, options.stop, None)
+                    .await.map(CliDispatchOutcome::DictationCompleted)
+            }
             HotkeyIntent::Cancel { press_id } => {
                 let active = self.snapshot().dictation.session_id;
                 if active.is_none() {
@@ -5943,6 +6229,20 @@ impl OpenLessBackend {
         &self,
         requested: bool,
     ) -> Result<(), BackendError> {
+        self.change_dictation_translation(None, Some(requested))
+    }
+
+    /// Toggle only the capture that owned the completed native Shift gesture.
+    /// Startup retains raw intent until context capture resolves the effective mode.
+    pub fn toggle_dictation_translation_for_session(
+        &self, session_id: SessionId,
+    ) -> Result<(), BackendError> {
+        self.change_dictation_translation(Some(session_id), None)
+    }
+
+    fn change_dictation_translation(
+        &self, expected_session_id: Option<SessionId>, requested: Option<bool>,
+    ) -> Result<(), BackendError> {
         let preferences = self.get_preferences();
         {
             let mut state = self.state.write().expect("backend state lock poisoned");
@@ -5962,6 +6262,12 @@ impl OpenLessBackend {
                     "no active dictation session",
                 )
             })?;
+            if expected_session_id.is_some_and(|expected| expected != session_id) {
+                return Err(BackendError::new(BackendErrorCode::InvalidState,
+                    "translation gesture belongs to a recording that has ended"));
+            }
+            let requested = requested.unwrap_or_else(|| !state.dictation_translation_requested
+                .unwrap_or(state.dictation.translation_active));
             state.dictation_translation_requested = Some(requested);
             let effective = if let Some(context) = state.dictation_context.as_ref() {
                 let updated = Arc::new(context.with_translation_requested(requested));
@@ -6856,6 +7162,8 @@ impl OpenLessBackend {
     }
 
     pub async fn refresh_and_publish_credentials(&self) -> Result<CredentialsStatus, BackendError> {
+        self.provider_credentials_revision.fetch_add(1, Ordering::AcqRel);
+        self.dictation_provider_warmth.lock().unwrap().take();
         let status = crate::deepseek_suite::credentials_status(
             self.deps.credential_store.as_ref(),
             self.get_preferences(),
@@ -7153,6 +7461,36 @@ impl OpenLessBackend {
         );
     }
 
+    pub async fn refresh_app_style_catalog(&self) -> Result<AppStyleRouting, BackendError> {
+        self.app_styles.catalog.refresh().await?;
+        self.app_styles.snapshot()
+    }
+
+    pub fn app_style_routing(&self) -> Result<AppStyleRouting, BackendError> {
+        self.app_styles.snapshot()
+    }
+
+    pub fn set_app_style_assignment(
+        &self,
+        assignment: AppStyleAssignment,
+    ) -> Result<AppStyleRouting, BackendError> {
+        if let Some(id) = assignment.style_pack_id() {
+            if !self.style_packs.get(id)?.enabled {
+                return Err(BackendError::new(
+                    BackendErrorCode::InvalidArgument,
+                    "style pack is disabled",
+                ));
+            }
+        }
+        self.app_styles.set(assignment)?;
+        self.app_styles.snapshot()
+    }
+
+    pub fn clear_input_app_history(&self) -> Result<AppStyleRouting, BackendError> {
+        self.app_styles.clear_seen()?;
+        self.app_styles.snapshot()
+    }
+
     pub fn list_style_packs(&self, active_id: &str) -> Result<Vec<StylePack>, BackendError> {
         self.style_packs.list_with_active(active_id)
     }
@@ -7381,6 +7719,64 @@ impl OpenLessBackend {
         self.history.list()
     }
 
+    pub fn enable_main_dictation_trace(&self) {
+        self.main_dictation_trace.enable();
+    }
+
+    pub fn main_dictation_trace_enabled(&self) -> bool {
+        self.main_dictation_trace.enabled()
+    }
+
+    pub fn trace_main_dictation_app_route(&self, event: &crate::BackendEvent, emitted: bool) {
+        self.main_dictation_trace.app_route(event, emitted);
+    }
+
+    pub fn trace_main_dictation_webview(
+        &self,
+        session: SessionId,
+        sequence: u64,
+        surface: crate::main_dictation_trace::CaptionTraceSurface,
+        stage: crate::main_dictation_trace::CaptionTraceStage,
+    ) {
+        self.main_dictation_trace.webview(session, sequence, surface, stage);
+    }
+
+    fn trace_main_dictation_history(&self, session: SessionId, checkpoint: &'static str) {
+        let Some(previous) = self.main_dictation_trace.previous(session) else {
+            return;
+        };
+        let Ok(records) = self.list_history() else {
+            self.main_dictation_trace.record(
+                session,
+                format_args!("stage=history checkpoint={checkpoint} status=unavailable"),
+            );
+            return;
+        };
+        let status = |id: SessionId| {
+            let id = id.to_string();
+            let Some(row) = records.iter().find(|row| row.id == id) else {
+                return "absent";
+            };
+            match (
+                !row.raw_transcript.trim().is_empty(),
+                !row.final_text.trim().is_empty(),
+            ) {
+                (true, true) => "raw_and_final",
+                (true, false) => "raw_only",
+                (false, true) => "final_only",
+                (false, false) => "empty",
+            }
+        };
+        self.main_dictation_trace.record(
+            session,
+            format_args!(
+                "stage=history checkpoint={checkpoint} current={} previous={}",
+                status(session),
+                previous.map_or("none", status),
+            ),
+        );
+    }
+
     pub fn recent_history_within_minutes(
         &self,
         minutes: u32,
@@ -7507,13 +7903,7 @@ impl OpenLessBackend {
             .ok_or_else(|| {
                 BackendError::new(BackendErrorCode::InvalidArgument, "history entry not found")
             })?;
-        if entry.source != HistorySource::QuickNote
-            && entry.error_code.as_deref() != Some("recording")
-            && !matches!(
-                entry.error_code.as_deref(),
-                Some("transcribeFailed" | "emptyTranscript")
-            )
-        {
+        if !entry.can_apply_retranscription() {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidState,
                 "history entry is not a failed transcription",
@@ -7664,8 +8054,8 @@ impl OpenLessBackend {
         // reading any document for an obsolete completion.
         {
             let state = self.state.read().expect("backend state lock poisoned");
-            if state.dictation.session_id != Some(session_id)
-                || state.dictation.phase != DictationPhase::Completed
+            if state.dictation.session_id.is_some_and(|id| id != session_id)
+                || state.session(session_id).is_none_or(|snapshot| snapshot.phase != DictationPhase::Completed)
             {
                 return;
             }
@@ -7980,6 +8370,18 @@ impl OpenLessBackend {
         output_target: DictationOutputTarget,
         capture_key: Option<PendingAudioCaptureKey>,
     ) -> Result<DictationReservation, BackendError> {
+        self.reserve_dictation_session_with_id(
+            SessionId::new(), insert_text, output_target, capture_key,
+        )
+    }
+
+    fn reserve_dictation_session_with_id(
+        &self,
+        session_id: SessionId,
+        insert_text: bool,
+        output_target: DictationOutputTarget,
+        capture_key: Option<PendingAudioCaptureKey>,
+    ) -> Result<DictationReservation, BackendError> {
         {
             let state = self.state.read().expect("backend state lock poisoned");
             ensure_running(&state)?;
@@ -7990,7 +8392,6 @@ impl OpenLessBackend {
                 ));
             }
         }
-        let session_id = SessionId::new();
         self.voice_sessions.acquire(
             session_id,
             crate::voice_session::VoiceSessionKind::Dictation,
@@ -7999,7 +8400,7 @@ impl OpenLessBackend {
         // Freeze the destination and its matching host-context reader before context/credential
         // awaits or feedback can change foreground focus. No native preparation happens yet.
         let (inserter, host_context) = if insert_text {
-            match self.deps.text_inserter.capture_target() {
+            match self.deps.text_inserter.capture_target_for_session(session_id) {
                 Some(captured) => (captured.inserter, captured.host_context),
                 None => (
                     Arc::clone(&self.deps.text_inserter),
@@ -8030,6 +8431,9 @@ impl OpenLessBackend {
             state.dictation_start_output_target = Some(output_target);
             state.dictation_translation_requested = None;
             state.dictation_destination_changed = false;
+            if output_target == DictationOutputTarget::ForegroundApp {
+                self.main_dictation_trace.begin(session_id);
+            }
             self.events.publish(
                 Some(session_id),
                 BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -8063,6 +8467,28 @@ impl OpenLessBackend {
         self.start_reserved_dictation(reservation, options).await
     }
 
+    pub async fn start_dictation_for_ask_composer(
+        &self,
+        session_id: SessionId,
+        is_current: impl Fn() -> bool,
+    ) -> Result<SessionId, BackendError> {
+        if !is_current() {
+            return Err(VoiceCaptureLifecycle::cancelled_error());
+        }
+        let options = DictationStartOptions {
+            insert_text: false,
+            output_target: DictationOutputTarget::AskComposer,
+            ..Default::default()
+        };
+        let reservation =
+            self.reserve_dictation_session_with_id(session_id, false, options.output_target, None)?;
+        if !is_current() {
+            let _ = self.cancel_dictation(Some(session_id)).await;
+            return Err(VoiceCaptureLifecycle::cancelled_error());
+        }
+        self.start_reserved_dictation(reservation, options).await
+    }
+
     async fn start_reserved_dictation(
         &self,
         reservation: DictationReservation,
@@ -8087,7 +8513,11 @@ impl OpenLessBackend {
             .capture_dictation_context_with_host(
                 &options,
                 DictationContextPurpose::Dictation,
-                host_context.as_ref(),
+                if options.output_target == DictationOutputTarget::AskComposer {
+                    &crate::ports::NoopHostContextAdapter
+                } else {
+                    host_context.as_ref()
+                },
             )
             .await
         {
@@ -8194,13 +8624,27 @@ impl OpenLessBackend {
             return Err(error);
         }
         if context.insertion.enabled {
+            let defer_preparation = inserter.defer_preparation_until_stop();
             let insertion_context = Arc::clone(&context);
             let task_spawner = Arc::clone(&self.deps.task_spawner);
             let resources = Arc::clone(&starting_resources);
+            let preparation_state = Arc::clone(&self.state);
             let preparing: futures_util::future::BoxFuture<
                 'static,
                 Result<Arc<ActiveTextInsertion>, BackendError>,
             > = Box::pin(async move {
+                if resources.cancel.is_cancelled() {
+                    return Err(VoiceCaptureLifecycle::cancelled_error());
+                }
+                // Shift and stop options are sealed before deferred preparation.
+                // Use this session's submitted context, never the next capture's.
+                let insertion_context = if defer_preparation {
+                    preparation_state.read().expect("backend state lock poisoned")
+                        .session_context(session_id).cloned()
+                        .ok_or_else(VoiceCaptureLifecycle::cancelled_error)?
+                } else {
+                    insertion_context
+                };
                 let platform = inserter
                     .begin(session_id, Arc::clone(&insertion_context))
                     .await?;
@@ -8228,6 +8672,7 @@ impl OpenLessBackend {
                     .expect("text insertion registry lock poisoned")
                     .insert(session_id, preparation.clone());
             }
+            if !defer_preparation {
             let prepared = preparation.await;
             let still_active = self
                 .state
@@ -8258,7 +8703,11 @@ impl OpenLessBackend {
                     self.persist_failed_dictation(
                         &context,
                         session_id,
-                        "insertFailed",
+                        if error.code == BackendErrorCode::OutcomeUnknown {
+                            "insertOutcomeUnknown"
+                        } else if error.is_target_unavailable() {
+                            "insertTargetChanged"
+                        } else { "insertFailed" },
                         String::new(),
                         String::new(),
                         None,
@@ -8275,6 +8724,7 @@ impl OpenLessBackend {
                     self.reset_dictation_session(session_id);
                     return Err(error);
                 }
+            }
             }
         }
         if context.output_target != DictationOutputTarget::ForegroundApp {
@@ -8374,6 +8824,26 @@ impl OpenLessBackend {
             .await
     }
 
+    /// Transfer finalization to an owned task and return once capture is released.
+    /// Terminal result/history/events still use this session's identity; dropping
+    /// an IPC reply cannot abandon that work. Legacy stop APIs keep awaiting it.
+    pub async fn submit_dictation_session(
+        self: &Arc<Self>, session_id: SessionId, options: DictationStopOptions,
+    ) -> Result<SessionId, BackendError> {
+        let backend = Arc::clone(self);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        self.deps.task_spawner.spawn(Box::pin(async move {
+            let result = backend.stop_dictation_session_with_options(Some(session_id), options, None).await;
+            if let Err(error) = &result { log::warn!("[dictation] submitted segment {session_id}: {error}"); }
+            let _ = send.send(result);
+        }));
+        tokio::select! {
+            _ = self.wait_for_dictation_submission(session_id) => Ok(session_id),
+            result = receive => result.map_err(|_| BackendError::new(BackendErrorCode::Cancelled,
+                "dictation finalization task stopped"))?.map(|result| result.session_id),
+        }
+    }
+
     pub async fn stop_dictation_with_options(
         &self,
         options: DictationStopOptions,
@@ -8445,6 +8915,14 @@ impl OpenLessBackend {
                                 "active dictation session has no captured context",
                             )
                         })?;
+                        if captured.output_target == DictationOutputTarget::AskComposer
+                            && (output_target.is_some() || options.quick_note.is_some())
+                        {
+                            return Err(BackendError::new(
+                                BackendErrorCode::InvalidState,
+                                "Ask composer dictation cannot change destinations",
+                            ));
+                        }
                         let target = output_target.unwrap_or_else(|| match options.quick_note {
                             Some(true) => DictationOutputTarget::QuickNote,
                             Some(false)
@@ -8482,6 +8960,10 @@ impl OpenLessBackend {
                         state.dictation_context = Some(Arc::clone(&context));
                         state.dictation.translation_active = context.polish.translation_active;
                         state.dictation.phase = DictationPhase::Transcribing;
+                        self.main_dictation_trace.record(
+                            session_id,
+                            format_args!("stage=finalization_started"),
+                        );
                         self.events.publish(
                             Some(session_id),
                             BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -8535,6 +9017,10 @@ impl OpenLessBackend {
             changed.await;
         };
 
+        // Reset removes the visible job before terminal history is persisted.
+        // Keep restore admission busy until every finalization write has ended.
+        let _finalization_resources = self.voice_sessions.hold_resources(session_id)?;
+
         // Android's undecided capture prepared a non-streaming insertion
         // resource so an ordinary tap can still finish normally. A quick-note
         // gesture changes the target at the stop boundary, so cancel that
@@ -8575,6 +9061,40 @@ impl OpenLessBackend {
             }
         }
 
+        // Native stop joins the audio producer before capture can be reassigned.
+        // An error cannot prove release; keep the capture lease through cleanup.
+        let capture_released = self.deps.dictation_engine.stop_recording(session_id).await.unwrap_or(false);
+        if capture_released {
+            let mut hotkey = self.hotkey.lock().expect("hotkey interpreter lock poisoned");
+            let mut state = self.state.write().expect("backend state lock poisoned");
+            ensure_active_session(&state, session_id)?;
+            let snapshot = std::mem::take(&mut state.dictation);
+            state.processing_dictations.insert(session_id, SubmittedDictation {
+                snapshot: snapshot.clone(), context: Arc::clone(&context),
+                submitted_at: std::time::Instant::now(),
+            });
+            state.dictation_context = None;
+            state.dictation_start_output_target = None;
+            state.silence_monitor = None;
+            hotkey.submitted();
+            self.voice_sessions.submit(session_id);
+            // Reuse the semantic event; consumers re-read the capture and job snapshots.
+            self.events.publish(Some(session_id), BackendEventKind::DictationJobsChanged(
+                state.processing_snapshots()));
+            self.phase_changed.notify_waiters();
+        }
+        // Queue final ASR/polish/insertion work, including unsafe local models.
+        // Waiting here never owns the physical recorder.
+        let _processing = self.dictation_processing_gate.lock().await;
+        // Prepare the captured destination only after the predecessor has fully
+        // delivered. This enables stable polish streaming/TSF composition without
+        // acquiring native input resources during an overlapping recording.
+        let preparation = self.text_insertions.lock()
+            .expect("text insertion registry lock poisoned").get(&session_id).cloned();
+        if let Some(preparation) = preparation {
+            // Final insertion reports preparation errors after retaining the transcript.
+            let _ = preparation.await;
+        }
         let progress = self.engine_progress_sink();
         let resources = self.voice_sessions.hold_resources(session_id)?;
         let finishing = self.deps.dictation_engine.finish(session_id, progress);
@@ -8711,15 +9231,7 @@ impl OpenLessBackend {
             &engine_result.polished_text,
             context.polish.chinese_script_preference,
         );
-        let correction_rules = match self.correction_rules.list() {
-            Ok(rules) => rules,
-            Err(error) => {
-                log::warn!(
-                    "failed to load correction rules for completed dictation: {error}; continuing without correction"
-                );
-                Vec::new()
-            }
-        };
+        let correction_rules = &context.correction_rules;
         let streamed_text_is_visible = self
             .text_insertions
             .lock()
@@ -8730,16 +9242,16 @@ impl OpenLessBackend {
             .is_some_and(|insertion| insertion.has_written_text());
         if !correction_rules.is_empty() && !streamed_text_is_visible {
             engine_result.polished_text =
-                apply_correction_rules(&engine_result.polished_text, &correction_rules);
+                apply_correction_rules(&engine_result.polished_text, correction_rules);
         }
 
         // Cancellation may happen while ASR/LLM work is in flight. Never
         // insert a result after the session has been cancelled or replaced.
         let cancelled_before_insertion = {
             let state = self.state.read().expect("backend state lock poisoned");
-            state.dictation.session_id != Some(session_id)
+            state.session(session_id).is_none()
                 || !matches!(
-                    state.dictation.phase,
+                    state.session(session_id).map(|snapshot| snapshot.phase).unwrap_or(DictationPhase::Idle),
                     DictationPhase::Transcribing | DictationPhase::Polishing
                 )
         };
@@ -8755,14 +9267,14 @@ impl OpenLessBackend {
         {
             let mut state = self.state.write().expect("backend state lock poisoned");
             ensure_active_session(&state, session_id)?;
-            state.dictation.phase = if context.insertion.enabled {
+            state.session_mut(session_id).unwrap().phase = if context.insertion.enabled {
                 DictationPhase::Inserting
             } else {
                 DictationPhase::Completed
             };
             self.events.publish(
                 Some(session_id),
-                BackendEventKind::DictationStateChanged(state.dictation.clone()),
+                BackendEventKind::DictationStateChanged(state.session(session_id).unwrap().clone()),
             );
             self.phase_changed.notify_waiters();
         }
@@ -8787,7 +9299,11 @@ impl OpenLessBackend {
                     self.persist_failed_dictation(
                         &context,
                         session_id,
-                        "insertFailed",
+                        if error.code == BackendErrorCode::OutcomeUnknown {
+                            "insertOutcomeUnknown"
+                        } else if error.is_target_unavailable() {
+                            "insertTargetChanged"
+                        } else { "insertFailed" },
                         engine_result.raw_text.clone(),
                         engine_result.polished_text.clone(),
                         engine_result.polish_source.clone(),
@@ -8831,16 +9347,20 @@ impl OpenLessBackend {
 
         let session_replaced = {
             let mut state = self.state.write().expect("backend state lock poisoned");
-            let replaced = state.dictation.session_id != Some(session_id)
-                || state.dictation.phase
+            let replaced = state.session(session_id).is_none()
+                || state.session(session_id).map(|snapshot| snapshot.phase).unwrap_or(DictationPhase::Idle)
                     != if context.insertion.enabled {
                         DictationPhase::Inserting
                     } else {
                         DictationPhase::Completed
                     };
             if !replaced {
-                state.dictation.phase = DictationPhase::Completed;
-                state.dictation.message = Some(match insert_outcome {
+                state.session_mut(session_id).unwrap().phase = DictationPhase::Completed;
+                self.main_dictation_trace.record(
+                    session_id,
+                    format_args!("stage=terminal phase=completed"),
+                );
+                state.session_mut(session_id).unwrap().message = Some(match insert_outcome {
                     Some(InsertOutcome::Inserted) => "inserted".to_string(),
                     Some(InsertOutcome::PasteSent) => "paste_sent".to_string(),
                     Some(InsertOutcome::CopiedFallback) => "copied_fallback".to_string(),
@@ -8861,7 +9381,7 @@ impl OpenLessBackend {
                 );
                 self.events.publish(
                     Some(session_id),
-                    BackendEventKind::DictationStateChanged(state.dictation.clone()),
+                    BackendEventKind::DictationStateChanged(state.session(session_id).unwrap().clone()),
                 );
                 self.phase_changed.notify_waiters();
             }
@@ -8903,45 +9423,14 @@ impl OpenLessBackend {
     }
 
     fn persist_recording_started(&self, context: &DictationContext, session_id: SessionId) {
-        if context.output_target == DictationOutputTarget::CloudNote
+        if matches!(context.output_target, DictationOutputTarget::CloudNote | DictationOutputTarget::AskComposer)
             || self.is_cloud_note(session_id)
         {
             return;
         }
         let preferences = self.get_preferences();
-        let front_app =
-            crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
-        let pipeline_mode = match context.pipeline_mode {
-            crate::shared_types::PipelineMode::Traditional => "traditional",
-            crate::shared_types::PipelineMode::Deepseek => "deepseek",
-            crate::shared_types::PipelineMode::Multimodal => "multimodal",
-        };
-        let session = DictationSession {
-            id: session_id.to_string(),
-            created_at: self.clock.now_utc().to_rfc3339(),
-            source: Self::history_source_for_context(context),
-            raw_transcript: String::new(),
-            asr_transcript: None,
-            final_text: String::new(),
-            mode: context.polish.mode,
-            style_pack_id: Some(context.polish.style_pack_id.clone()),
-            translation_active: context.polish.translation_active,
-            polish_source: None,
-            app_bundle_id: front_app.bundle_id,
-            app_name: front_app.name,
-            insert_status: HistoryInsertStatus::NotRequested,
-            error_code: Some("recording".to_string()),
-            duration_ms: None,
-            dictionary_entry_count: None,
-            has_audio_recording: Some(context.recording.archive_enabled),
-            asr_provider: Some(context.asr.provider_id.clone()),
-            asr_model: context.asr.model.clone(),
-            llm_provider: None,
-            llm_model: None,
-            pipeline_mode: Some(pipeline_mode.to_string()),
-            asr_ms: None,
-            polish_ms: None,
-        };
+        let session =
+            recording_history_entry(context, session_id, self.clock.now_utc().to_rfc3339());
         if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
@@ -8949,6 +9438,7 @@ impl OpenLessBackend {
         ) {
             log::warn!("failed to persist recording-start history: {error}");
         }
+        self.trace_main_dictation_history(session_id, "draft");
     }
 
     fn persist_recording_started_if_starting(
@@ -9023,10 +9513,12 @@ impl OpenLessBackend {
     ) {
         if context.output_target == DictationOutputTarget::Qa
             || context.output_target == DictationOutputTarget::VoiceEdit
+            || context.output_target == DictationOutputTarget::AskComposer
             || context.output_target == DictationOutputTarget::CloudNote
             || self.is_cloud_note(result.session_id)
         {
             self.remove_recording_draft(result.session_id);
+            self.trace_main_dictation_history(result.session_id, "destination_excluded");
             return;
         }
         let preferences = self.get_preferences();
@@ -9037,8 +9529,7 @@ impl OpenLessBackend {
                 None
             }
         };
-        let front_app =
-            crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
+        let front_app = context.captured_front_app();
         let insert_status = match insert_outcome {
             Some(InsertOutcome::Inserted) => HistoryInsertStatus::Inserted,
             Some(InsertOutcome::PasteSent) => HistoryInsertStatus::PasteSent,
@@ -9089,6 +9580,13 @@ impl OpenLessBackend {
             polish_ms: attribution.polish_ms,
         };
         let activity_app = session.app_name.clone();
+        if matches!(insert_outcome, Some(InsertOutcome::Inserted | InsertOutcome::PasteSent)) {
+            if let Some(app) = &context.input_app {
+                if let Err(error) = self.app_styles.observe(app) {
+                    log::warn!("failed to persist input application: {error}");
+                }
+            }
+        }
         if let Err(error) = self.upsert_history(
             session,
             preferences.history_retention_days,
@@ -9096,6 +9594,7 @@ impl OpenLessBackend {
         ) {
             log::warn!("failed to persist completed dictation history: {error}");
         }
+        self.trace_main_dictation_history(result.session_id, "completed");
         if let Err(error) = self.activity.bump_app(&self.clock.today_local().format("%Y-%m-%d").to_string(), activity_app.as_deref()) {
             log::warn!("failed to persist application activity: {error}");
         }
@@ -9125,14 +9624,13 @@ impl OpenLessBackend {
         asr_call_label: Option<crate::auxiliary::AsrCallLabel>,
         llm_call_label: Option<crate::polish::LlmCallLabel>,
     ) {
-        if context.output_target == DictationOutputTarget::CloudNote
+        if matches!(context.output_target, DictationOutputTarget::CloudNote | DictationOutputTarget::AskComposer)
             || self.is_cloud_note(session_id)
         {
             return;
         }
         let preferences = self.get_preferences();
-        let front_app =
-            crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
+        let front_app = context.captured_front_app();
         let pipeline_mode = match context.pipeline_mode {
             crate::shared_types::PipelineMode::Traditional => "traditional",
             crate::shared_types::PipelineMode::Deepseek => "deepseek",
@@ -9183,6 +9681,7 @@ impl OpenLessBackend {
         ) {
             log::warn!("failed to persist dictation failure history: {error}");
         }
+        self.trace_main_dictation_history(session_id, "failed");
     }
 
     fn hide_dictation_feedback(&self, session_id: SessionId) -> Result<(), BackendError> {
@@ -9191,6 +9690,7 @@ impl OpenLessBackend {
             .dictation
             .session_id
             .is_some_and(|current| current != session_id)
+            || state.processing_dictations.keys().any(|id| *id != session_id)
         {
             return Ok(());
         }
@@ -9213,6 +9713,17 @@ impl OpenLessBackend {
             .lock()
             .expect("hotkey interpreter lock poisoned");
         let mut state = self.state.write().expect("backend state lock poisoned");
+        if state.processing_dictations.remove(&session_id).is_some() {
+            state.transcripts.remove(&session_id);
+            self.voice_sessions.release(session_id);
+            self.events.publish(Some(session_id), BackendEventKind::DictationJobsChanged(
+                state.processing_snapshots()));
+            self.phase_changed.notify_waiters();
+            drop(state);
+            drop(hotkey);
+            if let Err(error) = self.cleanup_cloud_note(session_id, false) { log::warn!("{error}"); }
+            return;
+        }
         if state.dictation.session_id != Some(session_id) {
             return;
         }
@@ -9323,7 +9834,7 @@ impl OpenLessBackend {
                     {
                         insertions.remove(&session_id);
                     }
-                    return Err(error);
+                    return if error.code == BackendErrorCode::Cancelled { Ok(()) } else { Err(error) };
                 }
             };
             let result = insertion.cancel().await;
@@ -9488,6 +9999,31 @@ impl OpenLessBackend {
         &self,
         session_id: Option<SessionId>,
     ) -> Result<(), BackendError> {
+        if let Some(id) = session_id {
+            let submitted = {
+                let mut state = self.state.write().expect("backend state lock poisoned");
+                if let Some(task) = state.processing_dictations.get_mut(&id) {
+                    task.snapshot.phase = DictationPhase::Cancelled;
+                    self.events.publish(Some(id), BackendEventKind::DictationStateChanged(task.snapshot.clone()));
+                    Some(task.context.output_target == DictationOutputTarget::QuickNote)
+                } else { None }
+            };
+            if let Some(preserve_quick_note) = submitted {
+                let result = self.cancel_session_adapters(id).await;
+                let _ = self.hide_dictation_feedback(id);
+                self.reset_dictation_session(id);
+                self.cleanup_voice_activation_after_dictation(id).await;
+                if preserve_quick_note {
+                    if let Ok(entries) = self.list_history() {
+                        if let Some(mut entry) = entries.into_iter().find(|entry| entry.id == id.to_string()) {
+                            entry.error_code = Some("cancelled".into());
+                            let _ = self.update_history_entry(entry);
+                        }
+                    }
+                } else { let _ = self.delete_history(&id.to_string()); }
+                return result;
+            }
+        }
         let (active, preserve_quick_note) = {
             let mut state = self.state.write().expect("backend state lock poisoned");
             ensure_running(&state)?;
@@ -9508,6 +10044,10 @@ impl OpenLessBackend {
                 .as_ref()
                 .is_some_and(|context| context.output_target == DictationOutputTarget::QuickNote);
             state.dictation.phase = DictationPhase::Cancelled;
+            self.main_dictation_trace.record(
+                active,
+                format_args!("stage=terminal phase=cancelled"),
+            );
             self.events.publish(
                 Some(active),
                 BackendEventKind::DictationStateChanged(state.dictation.clone()),
@@ -9540,6 +10080,7 @@ impl OpenLessBackend {
             let _ = self.delete_history(&active.to_string());
             Ok(())
         };
+        self.trace_main_dictation_history(active, "cancelled");
         let cancel_result = self.cancel_session_adapters(active).await;
         self.cleanup_voice_activation_after_dictation(active).await;
         // The state can already display cancellation, but native audio/input
@@ -9577,7 +10118,44 @@ impl OpenLessBackend {
         purpose: DictationContextPurpose,
         host_context: &dyn HostContextAdapter,
     ) -> Result<DictationContext, BackendError> {
+        let revision = self.dictation_provider_revision();
         let preferences = self.get_preferences();
+        let foreground_output = purpose == DictationContextPurpose::Dictation
+            && options.insert_text
+            && options.output_target == DictationOutputTarget::ForegroundApp;
+        let input_app = if foreground_output {
+            host_context.input_app()
+        } else {
+            None
+        };
+        let explicit_style = options
+            .style_pack_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty());
+        // Capture target metadata before any asynchronous host or credential access.
+        let input_location = (foreground_output && preferences.cursor_context_enabled)
+            .then(|| host_context.input_location())
+            .flatten();
+        let (mut assigned_ids, input_scene_prefix) = input_app
+            .as_ref()
+            .map(|app| self.app_styles.selection(app, input_location.as_deref()))
+            .unwrap_or_else(|| {
+                (
+                    Vec::new(),
+                    crate::app_style_routing::input_scene_prefix(
+                        None, None, None, None, input_location.as_deref(),
+                    ),
+                )
+            });
+        // Caller-supplied app context preserves the existing manual-style fallback.
+        // The actual target still supplies scene metadata independently of style routing.
+        if explicit_style.is_some() || options.front_app.is_some() {
+            assigned_ids.clear();
+        }
+        let active_id = explicit_style.unwrap_or(&preferences.active_style_pack_id);
+        let style_pack = self
+            .style_packs
+            .get_for_dictation(assigned_ids.iter().map(String::as_str), active_id)?;
         let mut captured_options = options.clone();
         if !preferences.cursor_context_enabled {
             // This switch controls document text, including text supplied by
@@ -9603,12 +10181,6 @@ impl OpenLessBackend {
             }
         }
         let options = &captured_options;
-        let style_pack_id = options
-            .style_pack_id
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&preferences.active_style_pack_id);
-        let style_pack = self.style_packs.get_or_default_active(style_pack_id)?;
         let hotwords = self
             .vocabulary
             .list()?
@@ -9616,53 +10188,22 @@ impl OpenLessBackend {
             .filter(|entry| entry.enabled)
             .map(|entry| entry.phrase)
             .collect();
-        // Auxiliary Voice (Selection / Less) and QA Voice respect multimodal
-        // preferences. Skip unused traditional channels so a valid Omni route
-        // is not blocked by missing ASR/LLM. QA text needs no microphone
-        // provider.
         let pipeline_mode = crate::shared_types::effective_pipeline_mode(
             preferences.multimodal_pipeline_enabled,
             preferences.pipeline_mode,
         );
         let traditional = pipeline_mode != crate::shared_types::PipelineMode::Multimodal;
-        let active_asr_provider = if traditional && purpose != DictationContextPurpose::QaText {
-            self.resolve_dictation_asr_provider(&preferences).await?
-        } else {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_asr_provider,
-            )
+        let warmed = (purpose == DictationContextPurpose::Dictation)
+            .then(|| self.warmed_dictation_providers(revision))
+            .flatten();
+        let providers = match warmed {
+            Some(providers) => providers,
+            None => self.resolve_dictation_providers(&preferences, purpose, pipeline_mode).await?,
         };
-        let mut deferred_llm_error = None;
-        let skip_llm_at_capture = purpose == DictationContextPurpose::AuxiliaryVoice;
-        let active_llm_provider = if pipeline_mode == crate::shared_types::PipelineMode::Deepseek {
-            crate::deepseek_suite::invocation(false)
-        } else if traditional && !skip_llm_at_capture {
-            match self
-                .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
-                .await
-            {
-                Ok(provider) => provider,
-                Err(error) => {
-                    deferred_llm_error = Some(error);
-                    crate::dictation_context::ProviderInvocation::for_provider(
-                        &preferences.active_llm_provider,
-                    )
-                }
-            }
-        } else {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_llm_provider,
-            )
-        };
-        let active_omni_provider = if traditional {
-            crate::dictation_context::ProviderInvocation::for_provider(
-                &preferences.active_omni_provider,
-            )
-        } else {
-            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
-                .await?
-        };
-        let recent_history = if preferences.polish_context_window_minutes == 0 {
+        let deferred_llm_error = providers.llm_error;
+        let recent_history = if options.output_target == DictationOutputTarget::AskComposer
+            || preferences.polish_context_window_minutes == 0
+        {
             Vec::new()
         } else {
             match self
@@ -9682,16 +10223,21 @@ impl OpenLessBackend {
             &preferences,
             &style_pack,
             DictationProviderInvocations::new(
-                active_asr_provider,
-                active_llm_provider,
-                active_omni_provider,
+                providers.asr,
+                providers.llm,
+                providers.omni,
             ),
             hotwords,
             recent_history,
             options,
         );
+        if foreground_output {
+            context.polish.input_scene_prefix = Some(input_scene_prefix);
+        }
+        context.input_app = input_app;
         context.pipeline_mode = pipeline_mode;
         if purpose == DictationContextPurpose::Dictation
+            && options.output_target != DictationOutputTarget::AskComposer
             && !context.polish.translation_active
             && preferences.expression_learning_enabled
         {
@@ -9708,7 +10254,7 @@ impl OpenLessBackend {
                                 if let Some(instructions) =
                                     crate::expression_observation::prompt_instructions(&directions)
                                 {
-                                    context.polish.style_system_prompt.push_str(&instructions);
+                                    context = context.with_expression_instructions(instructions);
                                 }
                             }
                             Err(error) => log::warn!("expression profile unavailable: {error}"),
@@ -9763,6 +10309,124 @@ impl OpenLessBackend {
         Ok(context)
     }
 
+    fn dictation_provider_revision(&self) -> (u64, u64) {
+        (
+            self.preferences_revision.load(Ordering::Acquire),
+            self.provider_credentials_revision.load(Ordering::Acquire),
+        )
+    }
+
+    fn warmed_dictation_providers(&self, revision: (u64, u64)) -> Option<ResolvedDictationProviders> {
+        let warm = self.dictation_provider_warmth.lock().unwrap();
+        let warm = warm.as_ref()?;
+        (warm.revision == revision
+            && self.dictation_provider_revision() == revision
+            && warm.until > std::time::Instant::now())
+            .then(|| warm.providers.clone())
+            .flatten()
+    }
+
+    pub async fn warm_dictation_provider(self: &Arc<Self>) {
+        let revision = self.dictation_provider_revision();
+        let until = std::time::Instant::now() + DICTATION_PROVIDER_WARMTH;
+        let token = {
+            let mut warm = self.dictation_provider_warmth.lock().unwrap();
+            if let Some(existing) = warm.as_mut().filter(|warm| {
+                warm.revision == revision && warm.until > std::time::Instant::now()
+            }) {
+                existing.until = until;
+                self.expire_dictation_warmth(until);
+                return;
+            }
+            let token = Arc::new(());
+            *warm = Some(DictationProviderWarmth {
+                token: token.clone(),
+                revision,
+                until,
+                providers: None,
+            });
+            token
+        };
+        self.expire_dictation_warmth(until);
+        let preferences = self.get_preferences();
+        let mode = crate::shared_types::effective_pipeline_mode(
+            preferences.multimodal_pipeline_enabled,
+            preferences.pipeline_mode,
+        );
+        let result = tokio::time::timeout(
+            DICTATION_PROVIDER_WARMTH,
+            self.resolve_dictation_providers(&preferences, DictationContextPurpose::Dictation, mode),
+        )
+        .await;
+        let mut slot = self.dictation_provider_warmth.lock().unwrap();
+        if slot.as_ref().is_some_and(|warm| Arc::ptr_eq(&warm.token, &token)) {
+            match (result, self.dictation_provider_revision() == revision) {
+                (Ok(Ok(providers)), true) => slot.as_mut().unwrap().providers = Some(providers),
+                _ => { slot.take(); }
+            }
+        }
+    }
+
+    pub fn retain_dictation_warmth(self: &Arc<Self>) {
+        let Some(until) = self.dictation_provider_warmth.lock().unwrap().as_mut().and_then(|warm| {
+            let now = std::time::Instant::now();
+            if warm.until <= now || warm.revision != self.dictation_provider_revision() {
+                return None;
+            }
+            warm.until = now + DICTATION_PROVIDER_WARMTH;
+            Some(warm.until)
+        }) else { return };
+        self.expire_dictation_warmth(until);
+    }
+
+    fn expire_dictation_warmth(self: &Arc<Self>, until: std::time::Instant) {
+        let backend = Arc::downgrade(self);
+        self.deps.task_spawner.spawn(Box::pin(async move {
+            tokio::time::sleep_until(until.into()).await;
+            if let Some(backend) = backend.upgrade() {
+                let mut warm = backend.dictation_provider_warmth.lock().unwrap();
+                if warm.as_ref().is_some_and(|warm| warm.until <= std::time::Instant::now()) {
+                    warm.take();
+                }
+            }
+        }));
+    }
+
+    async fn resolve_dictation_providers(
+        &self,
+        preferences: &crate::UserPreferences,
+        purpose: DictationContextPurpose,
+        mode: crate::shared_types::PipelineMode,
+    ) -> Result<ResolvedDictationProviders, BackendError> {
+        use crate::{dictation_context::ProviderInvocation, shared_types::PipelineMode};
+        let traditional = mode != PipelineMode::Multimodal;
+        let asr = if traditional && purpose != DictationContextPurpose::QaText {
+            self.resolve_dictation_asr_provider(preferences).await?
+        } else {
+            ProviderInvocation::for_provider(&preferences.active_asr_provider)
+        };
+        let mut llm_error = None;
+        let llm = if mode == PipelineMode::Deepseek {
+            crate::deepseek_suite::invocation(false)
+        } else if traditional && purpose != DictationContextPurpose::AuxiliaryVoice {
+            match self.resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider).await {
+                Ok(provider) => provider,
+                Err(error) => {
+                    llm_error = Some(error);
+                    ProviderInvocation::for_provider(&preferences.active_llm_provider)
+                }
+            }
+        } else {
+            ProviderInvocation::for_provider(&preferences.active_llm_provider)
+        };
+        let omni = if traditional {
+            ProviderInvocation::for_provider(&preferences.active_omni_provider)
+        } else {
+            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider).await?
+        };
+        Ok(ResolvedDictationProviders { asr, llm, omni, llm_error })
+    }
+
     async fn resolve_session_provider(
         &self,
         slot: ProviderSlot,
@@ -9785,12 +10449,18 @@ impl OpenLessBackend {
             error.message
         );
         let mut state = self.state.write().expect("backend state lock poisoned");
-        if state.dictation.session_id != Some(session_id) {
-            return;
-        }
-        state.dictation.phase = DictationPhase::Failed;
-        state.dictation.message = Some(format!("{:?}", error.code));
-        let snapshot = state.dictation.clone();
+        let Some(snapshot) = state.session_mut(session_id) else { return; };
+        snapshot.phase = DictationPhase::Failed;
+        snapshot.message = Some(if error.message == "transcription provider returned an empty transcript" {
+            "empty_transcript".to_string()
+        } else if error.code == BackendErrorCode::InvalidState && error.is_target_unavailable() {
+            "input_target_changed".to_string()
+        } else { format!("{:?}", error.code) });
+        self.main_dictation_trace.record(
+            session_id,
+            format_args!("stage=terminal phase=failed code={:?}", error.code),
+        );
+        let snapshot = state.session(session_id).unwrap().clone();
         self.events.publish(
             Some(session_id),
             BackendEventKind::DictationStateChanged(snapshot),
@@ -9810,16 +10480,17 @@ fn ensure_running(state: &MutableState) -> Result<(), BackendError> {
     }
 }
 
+fn ensure_capture_session(state: &MutableState, session_id: SessionId) -> Result<(), BackendError> {
+    ensure_active_session(state, session_id)?;
+    if state.dictation.session_id == Some(session_id) { Ok(()) } else {
+        Err(BackendError::new(BackendErrorCode::Cancelled, "recording progress belongs to a submitted segment"))
+    }
+}
+
 fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<(), BackendError> {
     ensure_running(state)?;
-    if state.dictation.session_id == Some(session_id)
-        && !matches!(
-            state.dictation.phase,
-            DictationPhase::Idle
-                | DictationPhase::Completed
-                | DictationPhase::Cancelled
-                | DictationPhase::Failed
-        )
+    if state.session(session_id).is_some_and(|snapshot| !matches!(snapshot.phase,
+        DictationPhase::Idle | DictationPhase::Completed | DictationPhase::Cancelled | DictationPhase::Failed))
     {
         Ok(())
     } else {
@@ -9832,6 +10503,8 @@ fn ensure_active_session(state: &MutableState, session_id: SessionId) -> Result<
 
 #[cfg(test)]
 mod tests {
+    include!("recording_overlap_tests.rs");
+    include!("sync_dictation_fence_tests.rs");
     use std::sync::{Arc, Mutex};
 
     use futures_util::future::BoxFuture;
@@ -10083,11 +10756,28 @@ mod tests {
         assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
         let mut prefs = backend.get_preferences();
         prefs.expression_learning_enabled = true;
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
         backend.set_preferences(prefs).unwrap();
         assert!(backend.get_preferences().expression_learning_enabled);
         let context = capture().await.unwrap();
         assert!(context.polish.style_system_prompt.contains("用户经多次编辑"), "translation={} prompt={:?}", context.polish.translation_active, context.polish.style_system_prompt);
+        let translated = context.with_translation_requested(true);
+        assert!(!translated.polish.style_system_prompt.contains("用户经多次编辑"));
+        let normal = translated.with_translation_requested(false);
+        assert_eq!(normal.polish.style_system_prompt, context.polish.style_system_prompt);
+        let mut translated_options = options.clone();
+        translated_options.translation_requested = true;
+        // Enable an effective target while keeping the original profile frozen.
+        let mut prefs = backend.get_preferences();
+        prefs.translation_target_language = "English".into();
+        prefs.working_languages = vec!["简体中文".into()];
+        backend.set_preferences(prefs).unwrap();
+        let translated_start = backend.capture_dictation_context(&translated_options, DictationContextPurpose::Dictation).await.unwrap();
+        assert!(translated_start.polish.translation_active);
+        assert!(!translated_start.polish.style_system_prompt.contains("用户经多次编辑"));
         backend.clear_expression_profile().unwrap();
+        assert!(translated_start.with_translation_requested(false).polish.style_system_prompt.contains("用户经多次编辑"));
         assert!(backend.expression_profile_directions().unwrap().is_empty());
         assert!(!capture().await.unwrap().polish.style_system_prompt.contains("用户经多次编辑"));
     }
@@ -10659,6 +11349,10 @@ mod tests {
     }
 
     fn backend() -> (TestBackend, Arc<FakeHost>) {
+        backend_with_original_protection(false)
+    }
+
+    fn backend_with_original_protection(enabled: bool) -> (TestBackend, Arc<FakeHost>) {
         let host = Arc::new(FakeHost::default());
         let data_dir = TestDataDir::new("facade");
         let backend = OpenLessBackend::new(
@@ -10676,8 +11370,19 @@ mod tests {
                 local_asr_runtime: None,
                 voice_activation_runtime: None,
                 marketplace_config: None,
-                selection_runtime: None,
-                selection_polisher: None,
+                selection_runtime: enabled.then(|| {
+                    Arc::new(crate::testing::FixtureSelectionRuntime::successful(
+                        crate::SelectionCapture {
+                            text: "fixture".into(),
+                            source_app: None,
+                        },
+                        InsertOutcome::Inserted,
+                    )) as Arc<dyn crate::SelectionRuntimeAdapter>
+                }),
+                selection_polisher: enabled.then(|| {
+                    Arc::new(crate::testing::FixtureTextPolisher::successful("fixture"))
+                        as Arc<dyn crate::TextPolisher>
+                }),
                 qa_runtime: None,
             },
         )
@@ -10791,7 +11496,7 @@ mod tests {
 
     #[tokio::test]
     async fn voice_workflows_share_one_busy_lease_and_release_it_on_terminal_paths() {
-        let (backend, _) = backend();
+        let (backend, _) = backend_with_original_protection(true);
         let mut preferences = backend.get_preferences();
         preferences.testing_features_enabled = true;
         preferences.coding_agent_enabled = true;
@@ -11909,6 +12614,11 @@ mod tests {
                 ..BackendConfig::default()
             },
             BackendDependencies {
+                selection_polisher: Some(Arc::new(crate::testing::FixtureTextPolisher::successful("unused"))),
+                selection_runtime: Some(Arc::new(crate::testing::FixtureSelectionRuntime::successful(
+                    crate::SelectionCapture { text: "fixture".into(), source_app: None },
+                    InsertOutcome::Inserted,
+                ))),
                 voice_activation_runtime: None,
                 dictation_engine: Arc::new(engine),
                 ..BackendDependencies::unsupported()
@@ -12389,6 +13099,11 @@ mod tests {
                 ..BackendConfig::default()
             },
             BackendDependencies {
+                selection_polisher: Some(Arc::new(crate::testing::FixtureTextPolisher::successful("unused"))),
+                selection_runtime: Some(Arc::new(crate::testing::FixtureSelectionRuntime::successful(
+                    crate::SelectionCapture { text: "fixture".into(), source_app: None },
+                    InsertOutcome::Inserted,
+                ))),
                 voice_activation_runtime: None,
                 dictation_engine: Arc::new(engine),
                 ..BackendDependencies::unsupported()
@@ -14439,6 +15154,31 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn delayed_completed_callback_cannot_reset_or_observe_a_new_session() {
+        struct ReleaseAwareEngine;
+        impl DictationEngine for ReleaseAwareEngine {
+            fn start(
+                &self,
+                id: SessionId,
+                context: Arc<DictationContext>,
+                progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<(), BackendError>> {
+                FakeEngine.start(id, context, progress)
+            }
+            fn stop_recording(&self, _: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+                boxed(async { Ok(true) })
+            }
+            fn finish(
+                &self,
+                id: SessionId,
+                progress: Arc<dyn EngineProgressSink>,
+            ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+                FakeEngine.finish(id, progress)
+            }
+            fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                FakeEngine.cancel(id)
+            }
+        }
+
         struct BlockingCommit {
             entered: Arc<tokio::sync::Notify>,
             release: Arc<(Mutex<bool>, std::sync::Condvar)>,
@@ -14487,6 +15227,8 @@ mod tests {
             }
         }
 
+        // This fixture acknowledges device release before delaying observation;
+        // a legacy engine without that acknowledgement must retain capture ownership.
         // Settings effects may synchronously wait for native hotkey registration.
         // Leave executor workers available while stop waits on that native
         // gate, so cancellation and a successor can make progress normally.
@@ -14505,7 +15247,7 @@ mod tests {
                     voice_activation_runtime: None,
                     host_actions: host.clone(),
                     text_inserter: Arc::new(FakeInserter),
-                    dictation_engine: Arc::new(FakeEngine),
+                    dictation_engine: Arc::new(ReleaseAwareEngine),
                     credential_store: Arc::new(
                         crate::credentials::InMemoryCredentialStore::default(),
                     ),
@@ -14862,6 +15604,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ask_composer_has_no_draft_or_terminal_history_side_effect_at_cap() {
+        use crate::testing::FixtureDictationEngine;
+        let data = TestDataDir::new("ask-composer-history-cap");
+        let backend = backend_with_dictation_engine(
+            data.path().to_owned(),
+            Arc::new(FixtureDictationEngine::successful("spoken sentinel", "ordinary polish")),
+        );
+        let mut preferences = backend.get_preferences();
+        preferences.history_max_entries = Some(5);
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        for _ in 0..5 {
+            let id = backend.start_dictation().await.unwrap();
+            backend.stop_dictation_session(id).await.unwrap();
+        }
+        let original = backend.list_history().unwrap();
+        assert_eq!(original.len(), 5);
+        backend.shutdown().await.unwrap();
+
+        for (engine, succeeds) in [
+            (FixtureDictationEngine::successful("Ask-only speech", "Ask-only composer text"), true),
+            (FixtureDictationEngine::failing(BackendError::new(BackendErrorCode::Provider, "fixture failure")), false),
+        ] {
+            let backend = backend_with_dictation_engine(data.path().to_owned(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let id = SessionId::new();
+            backend.start_dictation_for_ask_composer(id, || true).await.unwrap();
+            assert_eq!(backend.list_history().unwrap(), original);
+            assert_eq!(backend.stop_dictation_session(id).await.is_ok(), succeeds);
+            assert_eq!(backend.list_history().unwrap(), original);
+            let cancelled_id = SessionId::new();
+            backend.start_dictation_for_ask_composer(cancelled_id, || true).await.unwrap();
+            backend.cancel_dictation(Some(cancelled_id)).await.unwrap();
+            assert_eq!(backend.list_history().unwrap(), original);
+            backend.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn stop_time_translation_updates_only_the_frozen_polish_choice() {
         use crate::testing::FixtureEngineAction;
 
@@ -15034,6 +15815,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_translation_toggle_never_claims_an_ineffective_target_or_a_new_session() {
+        let data = TestDataDir::new("translation-toggle-effective");
+        let engine = crate::testing::FixtureDictationEngine::successful("raw", "polished");
+        let backend = backend_with_dictation_engine(data.path().into(), Arc::new(engine.clone()));
+        backend.start().await.unwrap();
+        for language in ["", "English"] {
+            let mut prefs = backend.get_preferences();
+            prefs.translation_target_language = language.into();
+            prefs.working_languages = vec!["English".into()];
+            backend.set_preferences(prefs).unwrap();
+            let id = backend.start_dictation().await.unwrap();
+            for _ in 0..2 {
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                assert!(!backend.snapshot().dictation.translation_active);
+            }
+            backend.stop_dictation().await.unwrap();
+            let next = backend.start_dictation().await.unwrap();
+            assert!(backend.toggle_dictation_translation_for_session(id).is_err());
+            assert!(!backend.snapshot().dictation.translation_active);
+            backend.cancel_dictation(Some(next)).await.unwrap();
+        }
+        assert!(engine.contexts().iter().all(|context| !context.polish.translation_active));
+        assert!(backend.list_history().unwrap().iter().all(|entry| !entry.translation_active));
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn translation_requested_during_context_capture_is_session_scoped() {
         struct SlowContext {
             entered: Arc<tokio::sync::Notify>,
@@ -15087,7 +15895,10 @@ mod tests {
             });
             entered.notified().await;
             if requested {
-                let result = backend.update_dictation_translation_requested(true).await;
+                let id = backend.snapshot().dictation.session_id.unwrap();
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                let result = backend.toggle_dictation_translation_for_session(id);
                 release.notify_one();
                 assert!(
                     result.is_ok(),
@@ -16624,6 +17435,8 @@ mod tests {
             "openless-core-empty-transcript-history-{}",
             uuid::Uuid::new_v4().simple()
         ));
+        let polisher = Arc::new(crate::testing::FixtureTextPolisher::failing(
+            BackendError::new(BackendErrorCode::InvalidArgument, "polish input must not be empty")));
         let engine = crate::dictation_engine::PipelineDictationEngine::new(
             Arc::new(crate::testing::FixtureAudioRecorder::new(
                 vec![vec![1, 0, 2, 0]],
@@ -16632,9 +17445,7 @@ mod tests {
             Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
                 "   ", 40,
             )),
-            Arc::new(crate::testing::FixtureTextPolisher::successful(
-                "must not be inserted",
-            )),
+            polisher.clone(),
         );
         let backend = OpenLessBackend::new(
             BackendConfig {
@@ -16648,7 +17459,7 @@ mod tests {
                 )),
                 dictation_engine: Arc::new(engine),
                 task_spawner: Arc::new(TokioTaskSpawner),
-                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                credential_store: llm_configured_credentials(),
                 services: crate::domains::BackendServices::unsupported(),
                 local_asr_runtime: None,
                 voice_activation_runtime: None,
@@ -16659,7 +17470,11 @@ mod tests {
             },
         )
         .unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.polish_skip_max_chars = 0;
+        backend.set_preferences(prefs).unwrap();
         backend.start().await.unwrap();
+        backend.activate_style_pack(crate::style_packs::BUILTIN_STYLE_PACK_STRUCTURED_ID).unwrap();
 
         let session_id = backend.start_dictation().await.unwrap();
         let error = backend
@@ -16677,6 +17492,9 @@ mod tests {
             crate::types::HistoryInsertStatus::Failed
         );
         assert!(backend.list_activity().unwrap().is_empty());
+        assert!(polisher.inputs().is_empty());
+        assert!(history[0].llm_provider.is_none());
+        assert!(history[0].polish_ms.is_none());
 
         let _ = std::fs::remove_dir_all(data_dir);
     }
@@ -16698,7 +17516,7 @@ mod tests {
                     InsertOutcome::Inserted,
                 )),
                 dictation_engine: Arc::new(crate::testing::FixtureDictationEngine::failing(
-                    BackendError::new(BackendErrorCode::Provider, "fixture ASR failure"),
+                    BackendError::new(BackendErrorCode::Provider, "fixture ASR timeout after release"),
                 )),
                 task_spawner: Arc::new(TokioTaskSpawner),
                 credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
@@ -16713,6 +17531,8 @@ mod tests {
         )
         .unwrap();
         backend.start().await.unwrap();
+        assert!(!backend.main_dictation_trace_enabled());
+        backend.enable_main_dictation_trace();
 
         let session_id = backend.start_dictation().await.unwrap();
         backend
@@ -16736,7 +17556,56 @@ mod tests {
         assert_eq!(history[0].raw_transcript, "draft before provider failure");
         assert!(history[0].final_text.is_empty());
         assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
-        assert!(backend.start_dictation().await.is_ok());
+        let successor = backend.start_dictation().await.unwrap();
+        assert_ne!(session_id, successor);
+        assert_eq!(
+            backend.main_dictation_trace.previous(successor),
+            Some(Some(session_id)),
+        );
+        let late = backend.engine_progress_sink().publish(
+            session_id,
+            EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                text: "late prior delta".into(),
+                offset: 0,
+                is_final: false,
+            }),
+        );
+        assert!(late.is_err());
+        backend
+            .engine_progress_sink()
+            .publish(
+                successor,
+                EngineProgress::TranscriptDelta(crate::TranscriptDelta {
+                    text: "discard this on explicit cancel".into(),
+                    offset: 0,
+                    is_final: false,
+                }),
+            )
+            .unwrap();
+        backend.cancel_dictation(Some(successor)).await.unwrap();
+        let preserved = backend.list_history().unwrap();
+        assert_eq!(preserved.len(), 1);
+        assert_eq!(preserved[0].id, session_id.to_string());
+        assert_eq!(preserved[0].raw_transcript, "draft before provider failure");
+
+        // Five is the smallest supported cap for ordinary dictation history.
+        let mut preferences = backend.get_preferences();
+        preferences.history_max_entries = Some(5);
+        backend.set_preferences(preferences).unwrap();
+        for _ in 0..4 {
+            let mut fixture_row = preserved[0].clone();
+            fixture_row.id = SessionId::new().to_string();
+            backend.append_history(fixture_row, 0, Some(5)).unwrap();
+        }
+        let last = backend.start_dictation().await.unwrap();
+        backend
+            .stop_dictation()
+            .await
+            .expect_err("fixture times out after release");
+        let retained = backend.list_history().unwrap();
+        assert_eq!(retained.len(), 5);
+        assert_eq!(retained[0].id, last.to_string());
+        assert!(!retained.iter().any(|row| row.id == session_id.to_string()));
 
         let _ = std::fs::remove_dir_all(data_dir);
     }
@@ -18984,6 +19853,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn long_recording_final_asr_is_saved_before_polishing_begins() {
+        for elapsed_ms in [300_000, 300_001] {
+            let (backend, _) = backend();
+            backend.start().await.unwrap();
+            let session = backend.start_dictation().await.unwrap();
+            let progress = backend.engine_progress_sink();
+            progress
+                .publish(
+                    session,
+                    EngineProgress::RecordingLevel {
+                        elapsed_ms,
+                        level: 0.5,
+                    },
+                )
+                .unwrap();
+            progress
+                .publish(session, EngineProgress::Stage(EngineStage::Transcribing))
+                .unwrap();
+            let raw = format!("{}final detail", "complete transcript. ".repeat(1_500));
+            progress
+                .publish(
+                    session,
+                    EngineProgress::TranscriptDelta(crate::types::TranscriptDelta {
+                        text: raw.clone(),
+                        offset: 0,
+                        is_final: true,
+                    }),
+                )
+                .unwrap();
+            let entry = backend
+                .list_history()
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.id == session.to_string());
+            if elapsed_ms > crate::long_recording::THRESHOLD_MS {
+                let entry = entry.unwrap();
+                assert_eq!(entry.raw_transcript, raw);
+                assert_eq!(entry.duration_ms, Some(elapsed_ms));
+                assert!(entry.final_text.is_empty());
+                assert_eq!(entry.insert_status, HistoryInsertStatus::NotRequested);
+            } else {
+                assert!(
+                    entry.is_none(),
+                    "normal foreground dictation must not gain an early history row"
+                );
+            }
+            assert_eq!(
+                backend.snapshot().dictation.phase,
+                DictationPhase::Transcribing
+            );
+            backend.cancel_dictation(Some(session)).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn late_engine_progress_is_rejected_after_session_cancellation() {
         let (backend, _) = backend();
         backend.start().await.unwrap();
@@ -18994,6 +19918,10 @@ mod tests {
             phase_changed: Arc::clone(&backend.phase_changed),
             text_insertions: Arc::clone(&backend.text_insertions),
             raw_transcripts: Mutex::new(HashMap::new()),
+            history: Arc::clone(&backend.history),
+            history_revision: Arc::clone(&backend.history_revision),
+            clock: Arc::clone(&backend.clock),
+            preferences: Arc::clone(&backend.preferences),
         };
         backend.cancel_dictation(Some(session)).await.unwrap();
 
@@ -20000,7 +20928,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_restore_cancelled_apply_ticket_stays_busy_until_native_completion() {
-        let (backend, _) = backend();
+        let (backend, _) = backend_with_original_protection(true);
         let service = &backend.services().selection_voice;
         let session = service
             .begin(crate::domains::SelectionCapture {

@@ -6,13 +6,23 @@
 
 ### macOS
 
-1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_aarch64.dmg`。
+1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_aarch64.dmg`（Apple Silicon）或 `OpenLess_<版本>_x64.dmg`（Intel）。系统要求 macOS 14 或更新。
 2. 打开 dmg，将 OpenLess.app 拖入「应用程序」文件夹。
 3. 双击启动。
 
+也可以通过 Homebrew 安装稳定版：
+
+```bash
+brew tap Open-Less/openless https://github.com/Open-Less/openless
+brew install --cask openless
+brew update && brew upgrade openless
+```
+
+正式发布按[发布规范](RELEASING.zh.md)检查签名与公证。单独交付的 Dev 构建可能只有临时签名。
+
 ### Windows
 
-1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_x64-setup.exe`。
+1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_x64-setup.exe` 或 `OpenLess_<版本>_x64_en-US.msi`。
 2. 运行安装程序，按提示完成安装。
 3. 从开始菜单启动 OpenLess。
 
@@ -20,7 +30,7 @@
 
 Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 
-1. 暂未随 Release 提供安装包：Linux 打包在 L01–L12 真机验收完成前保持暂停，可先从源码构建（见 [README](README.zh.md) 的构建章节）。
+1. 暂未随 Release 提供安装包：Linux 打包在 L01–L12 真机验收完成前保持暂停，可先从源码构建（见[全平台构建指南](openless-all/README.zh.md#共享后端与-linux-宿主)）。
 2. 需要 glibc ≥ 2.39（Ubuntu 24.04 或同级发行版）。
 3. 全局快捷键由 fcitx5 插件提供，须在 fcitx5 中启用 OpenLess 插件并配置按键；没有应用内更新与 AppImage。
 
@@ -79,10 +89,7 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 
 ### 填入凭据
 
-不会配火山 ASR 的话，先看这篇图文引导：  
-[OpenLess 火山 ASR 配置](docs/volcengine-setup.md)
-
-用讯飞实时语音转写的话，看 [OpenLess 讯飞 ASR 配置](docs/xfyun-asr.md)（AppID + API Key，设置 → AI 与模型 → 语音识别渠道 → 讯飞实时语音转写）。
+火山、讯飞、百炼和其他供应商的配置集中在[语音与模型服务设置](docs/guides/speech-services.md)。讯飞实时转写使用同一个讯飞应用提供的 AppID 和 API Key。
 
 打开 OpenLess → **设置**，填入以下字段：
 
@@ -135,6 +142,10 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 
 ---
 
+## 随便问（桌面端）
+
+在 macOS 或 Windows 按录音快捷键和空格打开「随便问」。可以输入问题，也可以使用录音胶囊把转写填入草稿，确认后再发送。问题在同一个窗口展开答案。写作或编辑指令只有在应用核实原输入目标后才写回。未能确认写入时，生成内容会留在「随便问」，可手动复制。详见[桌面入口契约](docs/ask-unified-entry-contract.md)。
+
 ## 词典
 
 词典用于提高特定词汇的识别准确率（产品名、人名、专有名词等）。
@@ -150,6 +161,14 @@ Linux 使用原生 egui 宿主，不依赖 Tauri 或 WebKitGTK。
 主窗口 → **历史**，可查看所有录音记录，包括原始转写和润色结果。
 
 ---
+
+## 手机远程输入
+
+在电脑开启远程输入，用手机打开电脑显示的地址。按[手机远程输入指南](docs/guides/remote-input.md)核对证书，再输入配对码、授权麦克风并录音。
+
+## 加密云同步
+
+在「设置 → 云服务」登录 GitHub，阅读加密云同步的范围告知后再开启。设置、已登记的服务 API 密钥和历史文本先在本机加密再上传。请保存同步密码。新设备已有云端快照时，先预览恢复内容，再确认导入。
 
 ## 更换快捷键
 

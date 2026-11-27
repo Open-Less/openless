@@ -111,6 +111,46 @@ export function summarizeCacheUsage(records: ServiceUsageRecord[]): CacheUsageSu
   };
 }
 
+const modelPurposes = [
+  'dictationPostprocess',
+  'quickNote',
+  'translation',
+  'selection',
+  'question',
+  'other',
+] as const;
+
+export function summarizeModelUsageByPurpose(records: ServiceUsageRecord[]) {
+  const groups = new Map<string, ServiceUsageRecord[]>(modelPurposes.map((purpose) => [purpose, []]));
+  for (const record of records) {
+    if (record.kind !== 'llm' && record.kind !== 'multimodal') continue;
+    const purpose = record.purpose === 'dictation' && record.kind === 'multimodal'
+      ? 'dictationPostprocess'
+      : record.purpose;
+    (groups.get(purpose) ?? groups.get('other')!).push(record);
+  }
+
+  return modelPurposes.map((purpose) => {
+    const rows = groups.get(purpose)!;
+    const { rate, comparableRecords } = summarizeCacheUsage(rows);
+    const total = (field: 'inputTokens' | 'outputTokens' | 'cachedInputTokens' | 'cacheWriteInputTokens') => {
+      const known = rows.map((record) => record[field]).filter(
+        (value): value is number => value != null && Number.isSafeInteger(value) && value >= 0,
+      );
+      return { value: sumKnown(known), count: known.length };
+    };
+    return {
+      purpose,
+      totalRecords: rows.length,
+      input: total('inputTokens'),
+      output: total('outputTokens'),
+      reads: total('cachedInputTokens'),
+      writes: total('cacheWriteInputTokens'),
+      hitRate: { value: rate, count: comparableRecords },
+    };
+  });
+}
+
 export function reportedCacheHitRate(records: ServiceUsageRecord[]): number | null {
   return summarizeCacheUsage(records).rate;
 }

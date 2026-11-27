@@ -291,6 +291,37 @@ impl ActiveLLMProvider {
         matches!(self, Self::OpenAI(_) | Self::Codex(_))
     }
 
+    pub(crate) async fn selection_streaming<F, C>(
+        &self,
+        system: String,
+        user: String,
+        on_delta: F,
+        should_cancel: C,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
+        let input_chars = user.chars().count();
+        let messages = vec![
+            json!({"role":"system", "content":system}),
+            json!({"role":"user", "content":user}),
+        ];
+        match self {
+            Self::OpenAI(p) => {
+                p.chat_completion_messages_streaming_checked(
+                    messages,
+                    StreamingTimeouts::for_input(input_chars),
+                    on_delta,
+                    should_cancel,
+                    true,
+                )
+                .await
+            }
+            Self::Codex(p) => p.codex_responses(messages, on_delta, should_cancel).await,
+        }
+    }
+
     pub async fn polish_streaming<F, C>(
         &self,
         raw_text: &str,
@@ -946,6 +977,29 @@ impl OpenAICompatibleLLMProvider {
         body
     }
 
+    pub(crate) fn ask_config(&self) -> &OpenAICompatibleConfig {
+        &self.config
+    }
+
+    pub(crate) fn ask_request(
+        &self,
+        messages: Vec<Value>,
+        configure: impl FnOnce(&mut Value),
+    ) -> Result<reqwest::RequestBuilder, LLMError> {
+        self.config
+            .protocol
+            .validate()
+            .and_then(|_| self.config.protocol.validate_headers(&self.config.extra_headers))
+            .map_err(|error| LLMError::ParseError(error.message))?;
+        let url = self.config.protocol.format.url(&self.config.base_url)?;
+        let mut body = self.chat_body(true, messages);
+        configure(&mut body);
+        Ok(self
+            .authorize(crate::net::credential_http_for_url(&url).post(url), &body)
+            .header("Accept", "text/event-stream")
+            .json(&body))
+    }
+
     /// Shared HTTP send + body parsing. chat_completion / chat_completion_with_polish_history
     /// both call here after building their body, avoiding a 30-line send/parse duplication.
     /// `budget` is the total budget for this call, chosen by the caller: polish scales
@@ -1106,6 +1160,21 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
+        self.chat_completion_messages_streaming_checked(messages, timeouts, on_delta, should_cancel, false).await
+    }
+
+    async fn chat_completion_messages_streaming_checked<F, C>(
+        &self,
+        messages: Vec<Value>,
+        timeouts: StreamingTimeouts,
+        on_delta: F,
+        should_cancel: C,
+        require_complete: bool,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
         if let Some(access) = &self.siwc_access {
             return access
                 .infer(
@@ -1168,13 +1237,15 @@ impl OpenAICompatibleLLMProvider {
                     result.map_err(|_| LLMError::Timeout)?.map_err(llm_error_from_reqwest)?
                 }
             };
+            #[cfg(test)]
+            live_acceptance::observe_error_code(&body_text);
             return Err(LLMError::InvalidResponse {
                 status: status.as_u16(),
                 body: safe_str_slice(&body_text, BODY_PREVIEW_LIMIT.min(body_text.len()))
                     .to_string(),
             });
         }
-        let mut events = TextEventStream::new(self.config.protocol.format);
+        let mut events = TextEventStream::new(self.config.protocol.format).require_complete(require_complete);
         let mut full_text = String::new();
         let mut delta_count = 0usize;
         let mut cancelled = false;
@@ -1649,6 +1720,7 @@ impl CodexOAuthLLMProvider {
         let mut utf8_pending: Vec<u8> = Vec::new();
         let mut full_text = String::new();
         let mut final_text = String::new();
+        let mut completed = false;
         let mut cancelled = false;
         loop {
             if should_cancel() {
@@ -1663,6 +1735,7 @@ impl CodexOAuthLLMProvider {
             while let Some(idx) = buffer.find("\n\n") {
                 let event = buffer[..idx].to_string();
                 buffer.drain(..idx + 2);
+                validate_codex_completion(&event, &mut completed)?;
                 handle_codex_sse_event(&event, &mut full_text, &mut final_text, &on_delta);
             }
         }
@@ -1670,9 +1743,13 @@ impl CodexOAuthLLMProvider {
             finish_utf8_sse_chunks(&mut buffer, &mut utf8_pending)?;
         }
         if !buffer.trim().is_empty() {
+            validate_codex_completion(&buffer, &mut completed)?;
             handle_codex_sse_event(&buffer, &mut full_text, &mut final_text, &on_delta);
         }
 
+        if !completed || cancelled {
+            return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+        }
         if full_text.is_empty() && !final_text.is_empty() {
             full_text = final_text;
         }
@@ -1844,6 +1921,13 @@ fn should_retry_transient(is_connect: bool, is_request: bool, is_timeout: bool) 
 pub(crate) async fn send_with_transient_retry(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LLMError> {
+    #[cfg(test)]
+    if live_acceptance::active() {
+        let attempt = live_acceptance::before_send()?;
+        let response = request.send().await.map_err(llm_error_from_reqwest);
+        println!("LIVE_HTTP {}", serde_json::json!({"attempt":attempt, "status":response.as_ref().ok().map(|response| response.status().as_u16()), "final_url":response.as_ref().ok().map(|response| response.url().as_str())}));
+        return response;
+    }
     const RETRY_DELAY_MS: u64 = 500;
     let Some(initial) = request.try_clone() else {
         // try_clone failed (e.g. stream body is not cloneable) -> skip retry, send once.
@@ -1945,6 +2029,29 @@ fn codex_input_from_chat_messages(messages: &[Value]) -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+fn validate_codex_completion(event: &str, completed: &mut bool) -> Result<(), LLMError> {
+    for data in event.lines().filter_map(|line| line.strip_prefix("data:")) {
+        if let Ok(value) = serde_json::from_str::<Value>(data.trim()) {
+            match value["type"].as_str().unwrap_or_default() {
+                "response.failed" | "response.incomplete" | "error" => {
+                    return Err(LLMError::ParseError("llmResponseIncomplete".into()))
+                }
+                "response.completed" => {
+                    if value["response"]["status"]
+                        .as_str()
+                        .is_some_and(|status| status != "completed")
+                    {
+                        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+                    }
+                    *completed = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_codex_sse_event<F>(
@@ -2443,6 +2550,12 @@ pub(crate) fn extract_assistant_content_raw(body: &str) -> Result<String, LLMErr
     let first = choices
         .first()
         .ok_or_else(|| LLMError::ParseError("choices array is empty".into()))?;
+    if first["finish_reason"]
+        .as_str()
+        .is_some_and(|reason| reason != "stop")
+    {
+        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+    }
     let content = first
         .get("message")
         .and_then(|m| m.get("content"))
@@ -3839,13 +3952,10 @@ mod tests {
     }
 
     // ──────────────── Conversation-aware polish chat message construction ────────────────
-    // Core concern: give the LLM context but keep it from echoing that context back.
-    // "Do not repeat" is enforced by two defenses:
-    //   1. role=assistant marks historical polished output, so the LLM treats it as
-    //      already-said
-    //   2. polish_context_instruction appended to the system prompt explicitly forbids
-    //      repeating
-    // The 3 tests below lock the construction path; any regression fails immediately.
+    // Keep historical input/output separate from the current user message. The
+    // system instruction limits history to understanding the current input; it
+    // must still allow the current style to produce the same result again.
+    // The tests below lock message construction and that instruction contract.
 
     #[test]
     fn build_polish_history_messages_empty_prior_falls_back_to_two_messages() {
@@ -3909,7 +4019,7 @@ mod tests {
         // Key invariant: historical polish must sit on the assistant role, never merged
         // into the current user message. If polish ends up in the user role (e.g. a
         // refactoring typo), the LLM takes it as new user input and may polish it again
-        // — repeating prior text and violating the "no repetition" goal.
+        // — treating historical text as the current task.
         let prior = vec![("我说点什么".into(), "我说点什么。".into())];
         let msgs = build_polish_history_messages("SYS", &prior, "现在说的话");
 
@@ -3960,24 +4070,27 @@ mod tests {
     }
 
     #[test]
-    fn polish_context_instruction_explicitly_forbids_repeating_prior_assistant_output() {
-        // Second defense: the system prompt must contain an explicit "do not repeat
-        // prior assistant output" instruction. Chat structure alone is not enough —
-        // some models still echo prior turns in long contexts. The wording may change;
-        // these keywords must not.
+    fn polish_context_instruction_limits_history_without_overriding_current_style() {
+        // History must not become the current task or extra output. This is not a
+        // blanket ban on repeated text: a fixed-output style (e.g. "一一一") must
+        // still produce its required result even when history contains that result.
         let s = prompts::polish_context_instruction();
-        assert!(s.contains("不要"), "需要中文显式禁止指令");
         assert!(
-            s.contains("复读") || s.contains("重复") || s.contains("不要把上文带进来"),
-            "需要明确禁止复读语义"
+            s.contains("历史只用于理解当前输入"),
+            "历史只能提供理解当前输入所需的语境，不能成为本轮任务或答案"
         );
         assert!(
-            s.contains("assistant") || s.contains("已经整理"),
-            "需要点名是 assistant role 的历史输出 / 整理后内容"
+            s.contains("不得覆盖当前风格包的任务或输出要求"),
+            "历史不能覆盖当前风格包要求"
         );
         assert!(
-            s.contains("当前") && s.contains("最新"),
-            "需要明确：只输出当前最新一条"
+            s.contains("每次只处理**当前最新一条** user message"),
+            "只能处理当前最新用户消息"
+        );
+        assert!(s.contains("不要附带历史消息"), "输出不能夹带历史消息");
+        assert!(
+            s.contains("当前风格包要求的结果即使与历史输出相同，也应照常输出"),
+            "当前风格要求的相同结果必须仍可输出，不能笼统禁止重复"
         );
     }
 
@@ -5626,4 +5739,43 @@ mod tests {
 
         server.join().unwrap();
     }
+}
+
+// Only the explicitly selected ignored live test enables this probe. It bounds
+// actual HTTP sends (including translation fallback), disables network retries,
+// and observes the public response model without retaining raw SSE or reasoning.
+#[cfg(test)]
+pub(crate) mod live_acceptance {
+    use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Mutex};
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static SENDS: AtomicUsize = AtomicUsize::new(0);
+    static RESPONSE_MODEL: Mutex<Option<String>> = Mutex::new(None);
+    pub fn begin() { SENDS.store(0, Ordering::SeqCst); ACTIVE.store(true, Ordering::SeqCst); }
+    pub fn active() -> bool { ACTIVE.load(Ordering::SeqCst) }
+    pub fn before_send() -> Result<usize, super::LLMError> {
+        let previous = SENDS.fetch_add(1, Ordering::SeqCst);
+        if previous >= if std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some() { 1 } else { 10 } {
+            return Err(super::LLMError::Network("live acceptance request limit reached".into()));
+        }
+        Ok(previous + 1)
+    }
+    pub fn observe_model(value: &serde_json::Value) {
+        if active() {
+            if let Some(model) = value["model"].as_str() {
+                *RESPONSE_MODEL.lock().unwrap() = crate::usage_ledger::sanitized_identifier(model);
+            }
+        }
+    }
+    pub fn observe_error_code(body: &str) {
+        if !active() { return; }
+        let value = serde_json::from_str::<serde_json::Value>(body).ok();
+        let code = value.as_ref().and_then(|value| value.pointer("/error/code"));
+        let safe = code.filter(|code| match code {
+            serde_json::Value::Number(_) | serde_json::Value::Null => true,
+            serde_json::Value::String(code) => matches!(code.as_str(), "invalid_api_key" | "authentication_error" | "insufficient_balance" | "model_not_found" | "invalid_request_error" | "invalid_parameter" | "permission_denied" | "rate_limit_exceeded"),
+            _ => false,
+        });
+        println!("LIVE_ERROR {}", serde_json::json!({"error_code":safe}));
+    }
+    pub fn take_model() -> Option<String> { RESPONSE_MODEL.lock().unwrap().take() }
 }

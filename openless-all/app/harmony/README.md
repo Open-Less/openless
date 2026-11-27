@@ -2,12 +2,12 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-ArkTS / ArkWeb Stage project that packages the React frontend offline into a HAP.
-`openless-core` is integrated through ArkWeb JavaScript Proxy → ArkTS → Node-API → Rust C ABI.
+Native ArkUI Stage project packaged as a HAP.
+`openless-core` is integrated through ArkTS → Node-API → Rust C ABI.
 Startup snapshot, capability query, settings read and field transaction writes, history and activity statistics, dictionary add/update/delete and enabled state, correction rule reads, style list, and startup video flag are wired up.
 Data uses real file storage in the app sandbox, and HarmonyOS IPC never falls back to browser mock data. Unimplemented commands report an explicit error.
 System microphone enumeration, authorization query, and PCM volume monitoring are wired up; the provider catalog, channel management, model list, and connection test are supported. Credentials are stored encrypted through the HarmonyOS Asset Store and restored at startup into the Rust in-memory adapter; channel metadata is persisted separately.
-Network status keeps the desktop's real HTTP probe; external links go to the system browser, and the WebView intercepts navigation to external sites. Debug logs are exported through the system file picker.
+Network status keeps the desktop's real HTTP probe. External links go to the system browser. Debug logs are exported through the system file picker.
 The input method's AudioCapturer → PCM native bridge → core ASR/polishing pipeline → result preview → InputClient confirmed write is wired up. Real online recognition still requires a usable channel to be configured, after which it must be accepted on device.
 
 ## Current Completion Boundary
@@ -28,7 +28,7 @@ This project uses the input method only and does not integrate an accessibility 
 
 ## Input Method Panel
 
-`OpenLessInputMethod` is a system input method extension, and `pages/InputMethodPanel` is the native ArkUI keyboard panel, which does not go through the main settings page's WebView. librime 1.17.0, shared with Android, is integrated through Node-API, supporting offline pinyin, candidates, paging, space confirmation, Chinese/English switching, digits and punctuation, code backspace, and deletion through the system input box. Fcitx5 was not introduced, and no accessibility is used.
+`OpenLessInputMethod` is a system input method extension, and `pages/InputMethodPanel` is its native ArkUI keyboard panel. librime 1.17.0, shared with Android, is integrated through Node-API, supporting offline pinyin, candidates, paging, space confirmation, Chinese/English switching, digits and punctuation, code backspace, and deletion through the system input box. Fcitx5 was not introduced, and no accessibility is used.
 
 Enable "OpenLess Input Method" in the system settings' input method management, then switch to it in an ordinary input box. Only the input method extension and the existing network/microphone permissions are declared; no accessibility service is registered. The system-assigned InputClient is unbound on inputStop; queued keystrokes are not sent to an already unbound client; logs do not record input content.
 
@@ -65,13 +65,30 @@ References: [IME Kit](https://developer.huawei.com/consumer/cn/doc/harmonyos-gui
 
 The input method extension has its own isolated sandbox; identical `filesDir` strings in the main app and the input method do not mean a shared configuration file. After main app startup and after configuration writes, the whitelisted voice settings and channel metadata are published to the app-exclusive Asset Store; before keyboard recording they are imported into its own backend, and the existing secure credentials are then restored. Snapshot shards respect the Asset Store's 1024-byte per-entry limit and become visible to readers only after the manifest is committed; an update during a read is retried, and mixed versions are not accepted. Snapshots contain no API Key, user dictionary, history, or cloud sync configuration. An unchanged snapshot does not overwrite the polishing mode selected separately on the keyboard. First use requires opening the main app first to publish the configuration. `harmony-voice-configuration.test.mjs` covers sharding, concurrent updates, and the size limit; a native test uses two independent data directories to verify that after the main app's multimodal settings are imported, a keyboard voice session can be started; it does not replace real online recognition acceptance.
 
-Build from the repository root:
+## Native ArkUI
+
+Phones, tablets, and 2-in-1 PCs use the same pages. `common/Breakpoint.ets` reads the window size and listens to `windowSizeChange` for rotation, split screen, and resizing.
+
+| Size class | Window width | Navigation |
+| --- | --- | --- |
+| `sm` | < 600 vp | Bottom tabs |
+| `md` | 600–839 vp | Bottom tabs and a width-limited content column |
+| `lg` | 840–1079 vp | Labeled sidebar |
+| `xl` | ≥ 1080 vp | Labeled sidebar with wider content |
+
+Navigation lives in `components/AppShell.ets`, with state written through `common/Store.ets`. The native pages use the shared `openless-core` JSON contract through `data/Api.ets` and `HarmonyApi.invokeAsync`. Light and dark theme tokens live in `common/Tokens.ets` and the corresponding color resources.
+
+`aa start -a EntryAbility -b openless.hm.com --ps route settings --ps layout sm` opens Settings and pins the layout. The launch override accepts `sm`, `md`, and `lg`.
+
+## Building the HAP
+
+Run from the repository root.
 
 ```bash
 bash openless-all/app/scripts/build-harmony-app.sh
 ```
 
-Requirements: frontend npm dependencies installed, HarmonyOS Command Line Tools, Python 3.
+The build requires HarmonyOS Command Line Tools and Python 3.
 The toolchain defaults to `~/.local/share/harmony/current` and can be set through `OPENLESS_HARMONY_TOOLCHAIN`.
 The first Rust build requires `rustup target add aarch64-unknown-linux-ohos`.
 The cache defaults to `/data-win/openless-cache` and can be set through `OPENLESS_CACHE_ROOT`.
@@ -93,16 +110,8 @@ The signing directory defaults to `~/.local/share/harmony/signing/local-test` an
 A Profile for another package name cannot be used directly. Signing material must not be committed to the repository.
 A successful compile does not mean a real-device run has been verified.
 
-A normal build does not automatically run system probes and dictionary/voice/style-package self-checks when the WebView starts, avoiding contention with the first screen and with user operations for the backend. To diagnose a problem, set `OPENLESS_HARMONY_STARTUP_PROBES=1` explicitly; only diagnostic builds inject the original startup probe script.
-
-The HarmonyOS build uses a single-file IIFE and a deferred ordinary script, and removes the crossorigin attribute from resource tags, avoiding module load failures caused by the rawfile's opaque origin; desktop and Android builds are unaffected.
-
-Pages are loaded with `$rawfile('web/index.html')`, with JavaScript and DOM Storage enabled.
-Reference: [Huawei web page loading documentation](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/web-page-loading).
-
 Device runtime data is at the app's `filesDir/openless`, and runtime cache at `cacheDir/openless`; the unified directory on the computer is used for development build cache.
-The WebView passes request tickets through synchronous request/takeResult, ArkTS executes system operations asynchronously, and Rust commands run in the background through Node-API async work. Avoid returning a Promise directly from the JavaScript Proxy, which different WebView versions parse incorrectly.
-Microphone volume is returned through the local WebView's custom event, and the capturer is released after the list is closed. On API 24, input device switching follows system routing, and a microphone that is not on the current route cannot be forced.
+On API 24, input device switching follows system routing, and a microphone that is not on the current route cannot be forced.
 
 The panel follows the Xiaoyi input method layout: light grey background, white rounded keycaps, a compact toolbar, and no permanent brand text. The toolbar's layout button switches between standard, split, and floating keyboards, and the choice is saved locally; the standard and split modes have a separate number row, and when landscape space is insufficient the number row is hidden and key heights are compressed. Split mode includes a blank centre, spaces on both sides, duplicated G/V keys, and bottom entries for input method switching, punctuation, emoji, and digits.
 

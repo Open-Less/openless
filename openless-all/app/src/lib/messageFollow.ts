@@ -4,26 +4,46 @@ export function installMessageFollow(root: HTMLElement) {
   const content = root.querySelector<HTMLElement>('[data-slot="message-scroller-content"]');
   if (!viewport || !content) return () => {};
   let following = true;
-  let movedAway = false;
-  let previousHeight = viewport.scrollHeight;
-  let firstLayout = true;
+  let touchY: number | undefined;
+  let scrollbarPress = false;
+  let lastScrollTop = viewport.scrollTop;
   let frame = 0;
-  const distance = () =>
-    Math.max(0, viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop);
-  const userScroll = () => {
-    following = false;
-    movedAway = distance() > 1;
+  const distance = () => viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+  const scrollAway = () => {
+    // WebKit can apply an accelerated wheel gesture before the listener runs.
+    // Treat an upward gesture at the top of an overflowing thread as reading too.
+    if (viewport.scrollHeight - viewport.clientHeight > 1) following = false;
+  };
+  const wheel = (event: WheelEvent) => {
+    if (event.deltaY < 0) scrollAway();
+  };
+  const touchStart = (event: TouchEvent) => {
+    touchY = event.touches[0]?.clientY;
+  };
+  const touchMove = (event: TouchEvent) => {
+    if (event.touches.length !== 1) return;
+    const nextY = event.touches[0].clientY;
+    if (touchY != null && nextY > touchY) scrollAway();
+    touchY = nextY;
   };
   const keydown = (event: KeyboardEvent) => {
-    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key))
-      userScroll();
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey))
+      scrollAway();
+  };
+  const pointerdown = (event: PointerEvent) => {
+    if (event.target !== viewport || event.button !== 0 || event.pointerType !== 'mouse') return;
+    const x = event.clientX - viewport.getBoundingClientRect().left;
+    scrollbarPress = x < viewport.clientLeft || x >= viewport.clientLeft + viewport.clientWidth;
+    lastScrollTop = viewport.scrollTop;
+  };
+  const release = () => {
+    scrollbarPress = false;
   };
   const scrolled = () => {
-    if (!following && distance() > 1) movedAway = true;
-    if (!following && movedAway && distance() <= 1) following = true;
-  };
-  const pointerDown = (event: PointerEvent) => {
-    if (event.target === viewport) userScroll();
+    const current = viewport.scrollTop;
+    if (distance() <= 1) following = true;
+    else if (scrollbarPress && current < lastScrollTop) scrollAway();
+    lastScrollTop = current;
   };
   const clicked = (event: MouseEvent) => {
     if (
@@ -33,38 +53,36 @@ export function installMessageFollow(root: HTMLElement) {
       following = true;
   };
   const resize = new ResizeObserver(() => {
-    const beforeChange = Math.max(0, previousHeight - viewport.clientHeight - viewport.scrollTop);
-    previousHeight = viewport.scrollHeight;
-    // Content growth can make the previous-height gap negative while the reader
-    // is still above the bottom. Only the current geometry can restore follow.
-    if (!following && movedAway && distance() <= 1) following = true;
-    const shouldFollow = following && (firstLayout || beforeChange <= 40);
-    firstLayout = false;
-    if (shouldFollow) {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (!following) return;
-        viewport.scrollTop = viewport.scrollHeight;
-      });
-    } else if (beforeChange > 40) {
-      following = false;
-    }
+    // Consecutive resize deliveries can see the old scroll position before the
+    // next paint. A temporary geometry gap is not a reader scrolling away.
+    if (!following) return;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      if (following) viewport.scrollTop = viewport.scrollHeight;
+    });
   });
   resize.observe(content);
+  resize.observe(viewport);
   viewport.addEventListener('scroll', scrolled, { passive: true });
-  viewport.addEventListener('wheel', userScroll, { passive: true });
-  viewport.addEventListener('touchmove', userScroll, { passive: true });
+  viewport.addEventListener('wheel', wheel, { passive: true });
+  viewport.addEventListener('touchstart', touchStart, { passive: true });
+  viewport.addEventListener('touchmove', touchMove, { passive: true });
   viewport.addEventListener('keydown', keydown);
-  viewport.addEventListener('pointerdown', pointerDown);
+  viewport.addEventListener('pointerdown', pointerdown);
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
   root.addEventListener('click', clicked, true);
   return () => {
     resize.disconnect();
     cancelAnimationFrame(frame);
     viewport.removeEventListener('scroll', scrolled);
-    viewport.removeEventListener('wheel', userScroll);
-    viewport.removeEventListener('touchmove', userScroll);
+    viewport.removeEventListener('wheel', wheel);
+    viewport.removeEventListener('touchstart', touchStart);
+    viewport.removeEventListener('touchmove', touchMove);
     viewport.removeEventListener('keydown', keydown);
-    viewport.removeEventListener('pointerdown', pointerDown);
+    viewport.removeEventListener('pointerdown', pointerdown);
+    window.removeEventListener('pointerup', release);
+    window.removeEventListener('pointercancel', release);
     root.removeEventListener('click', clicked, true);
   };
 }

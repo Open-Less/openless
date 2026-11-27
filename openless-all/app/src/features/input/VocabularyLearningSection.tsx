@@ -118,9 +118,6 @@ export function VocabularyLearningSection() {
           />
         </SettingRow>
       ))}
-      <p style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
-        {t('settings.vocabularyLearning.changeHint')}
-      </p>
       <button
         type="button"
         style={btnGhostStyle}

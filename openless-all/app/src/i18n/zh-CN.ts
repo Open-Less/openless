@@ -5,11 +5,22 @@ import { siwcZhCN as siwc } from './siwc';
 
 import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
+import { askEntrySettingsZhCN as askEntrySettings } from './askEntrySettings';
 
 export const zhCN = {
+  shiftTranslation: {
+    title: '录音翻译',
+    description: 'Shift 开关与连按次数',
+    count: 'Shift 连按次数',
+    scope:
+      '录音时独立短按相同次数的 Shift 可开启或取消翻译。仅适用于默认 Shift 翻译快捷键；Shift 用作录音键时不启用。',
+    times_one: '{{count}} 次',
+    times_other: '{{count}} 次',
+  },
   desktopGuide,
   siwc,
   experimentalAsr,
+  askEntrySettings,
   uiRefinement,
   voiceEdit: {
     title: '语音编辑会话',
@@ -112,6 +123,7 @@ export const zhCN = {
     delete: '删除云端备份',
     working: '正在处理…',
     cancelTask: '取消当前任务',
+    cancelSync: '取消同步',
     cancelRequested: '已请求取消，正在等待当前任务结束。',
     done: '同步设置已更新。',
     restored: '已恢复云端资料，请核对本设备的专属设置。',
@@ -132,7 +144,8 @@ export const zhCN = {
     currentPassword: '当前同步密码',
     confirmPassword: '再次输入新密码',
     setSyncPasswordTitle: '设置云同步密码',
-    setSyncPasswordDescription: 'OpenLess 将用此密码在本机加密数据并创建云端备份。创建成功后才会开启同步。',
+    setSyncPasswordDescription:
+      'OpenLess 将用此密码在本机加密数据并创建云端备份。创建成功后才会开启同步。',
     confirmSyncPassword: '再次输入同步密码',
     confirmAndContinue: '确认并继续',
     revealPassword: '显示密码（{{field}}）',
@@ -144,7 +157,7 @@ export const zhCN = {
     disableDescription:
       '关闭后停止后续同步，云端备份和本机资料都会保留。删除云端备份是另一项独立操作。',
     confirmDisable: '关闭同步',
-    refreshBackup: '查看或刷新云端备份',
+    refreshBackup: '查看云端备份',
     deleteTitle: '删除云端加密备份？',
     deleteDescription:
       '仅删除当前账号的云端备份，本机资料保留。以后在其他设备恢复前，需要重新创建备份。',
@@ -157,7 +170,8 @@ export const zhCN = {
     restoreMode: '恢复方式',
     merge: '合并，并逐项处理冲突',
     replace: '使用云端资料替换本机同步资料',
-    replaceWarning: '此操作会替换同步范围内的本机资料。若要保留本机修改，请选择合并。',
+    replaceWarning: '此操作会覆盖本机同步范围内的数据。若要保留本机修改，请选择‘合并’。',
+    mergeOverwriteDirection: '发生冲突时，选择本机版本会在合并同步时覆盖对应的云端条目，选择云端版本会覆盖对应的本机条目。',
     restoreCheck: '我已检查恢复方式和冲突处理选择。',
     applyRestore: '确认恢复',
     conflictProgress: '已处理 {{selected}} / {{total}} 项冲突',
@@ -304,8 +318,11 @@ export const zhCN = {
     durationMinutes: '{{value}} 分钟',
   },
   capsule: {
+    emptyTranscript: '空稿 · 未识别到语音',
+    transcribing: '处理中',
     asking: '随便问',
     thinking: 'thinking',
+    slowConnection: '连接比平常慢',
     using: 'using',
     cancelled: '已取消',
     error: '出错了',
@@ -314,10 +331,10 @@ export const zhCN = {
     translationChangeFailed: '语言切换失败，请重新选择。',
     translating: '正在翻译',
     selectionPolish: {
-      polishing: '正在润色...',
+      polishing: '正在润色…',
       replaced: '已替换',
-      noSelection: '未选中内容',
-      failed: '润色失败，请重试',
+      noSelection: '未选中文本',
+      failed: '润色失败',
     },
   },
   selectionPolishPreview: {
@@ -381,6 +398,7 @@ export const zhCN = {
     mobileRecordStart: '开始录音',
     mobileRecordStop: '结束并提交',
     composerPlaceholder: '输入问题，Enter 发送',
+    voiceInputPlaceholder: '你正在进行语音输入',
     composerSend: '发送',
     statusIdle: '按 {{recordHotkey}} 提问',
     statusRecording: '录音中',
@@ -468,7 +486,7 @@ export const zhCN = {
       versionDate: 'v{{version}} · {{date}}',
       stats: '★ {{likes}} · ↓ {{downloads}}',
       actions: {
-        update: '更新',
+        update: '更新风格包',
         withdraw: '下架',
       },
       loadFailed: '我的发布加载失败：{{err}}',
@@ -751,6 +769,19 @@ export const zhCN = {
     retranscribe: '重新转录',
     retranscribing: '转录中…',
     retranscribeFailed: '重新转录失败：{{err}}',
+    retranscribeErrors: {
+      NoSpeech: '识别服务未返回文字；原录音已保留',
+      Missing: '原录音文件不存在',
+      InvalidAudio: '录音为空或格式损坏',
+      Permission: '无法读取录音，请检查文件权限',
+      Active: '请先停止这段录音',
+      Busy: '语音服务正忙，请稍后重试',
+      Unsupported: '当前渠道不支持重新转录',
+      Configuration: '请检查当前识别渠道设置',
+      Storage: '无法读取或保存录音记录',
+      Provider: '识别服务请求失败，请检查渠道或网络后重试',
+      InvalidId: '这条记录的录音标识无效',
+    },
     showRaw: '查看原文',
     hideRaw: '隐藏原文',
     rawLabel: '原文',
@@ -809,7 +840,7 @@ export const zhCN = {
     dismiss: '关闭',
   },
   vocab: {
-    selectAllVisible: '选择当前结果',
+    selectAllVisible: '选择所有结果',
     selecting: '选择',
     doneSelecting: '完成',
     disabledWord: '已停用',
@@ -1101,6 +1132,14 @@ export const zhCN = {
     },
   },
   askAnything: {
+    shortcutBehavior: {
+      title: '提问快捷键行为',
+      desc: '使用当前录音快捷键加提问附加键。单独按录音快捷键仍会在光标处听写。',
+      record: '打开并立即录音',
+      open: '仅打开，再按一次录音',
+      draft: '打开并聚焦文字框',
+      failed: '无法保存提问快捷键行为。',
+    },
     dictation: '口述',
     translation: '翻译',
     question: '随便问',
@@ -1113,6 +1152,11 @@ export const zhCN = {
     selectionHint: '选中文字会作为本次问题的上下文；没有选区也可以提问。关闭对话窗口后开始新会话。',
   },
   selectionAsk: {
+    desktopContext: {
+      title: '向「随便问」提供应用名称',
+      description: '唤起「随便问」时，记录前台和已打开应用的名称，并在发送问题时提供给模型。不读取窗口内容。',
+      saveFailed: '无法更新「随便问」的桌面上下文权限。',
+    },
     title: '随便问',
     desc: '选中文字后语音提问，支持多轮追问。',
     shortcutSettings: '快捷键设置',
@@ -1134,7 +1178,7 @@ export const zhCN = {
     },
     history: {
       title: '保存历史',
-      desc: '开启后在本地保存问答记录，默认关闭。',
+      desc: '开启后在此设备上保存「随便问」的历史记录，默认关闭。',
     },
     howto: {
       title: '使用方法',
@@ -1217,7 +1261,7 @@ export const zhCN = {
     },
     generalPages: {
       recordingTitle: '麦克风与录音',
-      recordingDesc: '麦克风监听与识别，以及监听与提示。',
+      recordingDesc: '选择麦克风，设置录音与提示音。',
       capsuleTitle: '胶囊样式',
       capsuleDesc: '胶囊开关、多屏显示、样式，以及原文的流式显示。',
       textInputTitle: '文字插入',
@@ -1226,6 +1270,7 @@ export const zhCN = {
       phoneDesc: '连接手机或其他设备进行远程输入。',
     },
     advancedPages: {
+      polishStrategyTitle: '润色策略',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInputTitle: '文字插入',
@@ -1233,10 +1278,9 @@ export const zhCN = {
       voiceEnhancementTitle: '语音增强与播放抑制',
       cursorContextTitle: '感知',
       startupDiagnosticsTitle: '启动诊断',
-      cursorContextHint: '光标上下文默认开启。如果不希望润色请求携带附近文字，可以在这里关闭。',
+      cursorContextHint: '默认开启。',
     },
     expressionLearning: {
-      clearHint: '清除后，正在进行的听写可能仍使用开始时已捕获的偏好。',
       lineBreaksMore: '更常分行',
       lineBreaksLess: '减少分行',
       exclamationsMore: '更常使用感叹号',
@@ -1247,7 +1291,7 @@ export const zhCN = {
       title: '表达习惯',
       enabled: '学习表达习惯',
       description:
-        '仅在本机观察听写后的排版修改；表达习惯数据只保存抽象统计，不保存观察到的文本。历史记录另行管理。重复且一致的分行、感叹号和句末标点偏好达到稳定阈值后，会作为简短形式指令发送给所选文字模型；关闭后立即停止学习，并从下一次听写起停止应用；正在进行的听写可能仍使用已捕获的偏好。',
+        '学习分行和标点习惯，用于后续润色。',
       status: '已形成 {{count}} 项稳定偏好',
       clear: '清除表达习惯',
       error: '无法读取或保存表达习惯，请重试。',
@@ -1268,19 +1312,17 @@ export const zhCN = {
       maxPhraseCharsHint: '自动建议中原词和替换词的长度上限，2–32 个字符；不影响手动加词。',
       seconds: '{{count}} 秒',
       characters: '{{count}} 个字符',
-      changeHint:
-        '更改参数会结束当前观察并清除待确认建议，下次听写生效。恢复参数不会改变启用开关。',
       reset: '恢复默认参数',
       saveError: '保存失败，请重试。',
       description:
-        '插入后在本机观察当前输入框内的修改，最长 60 秒，确认后才加入词典。观察文本不会发给模型；排除密码框和已知敏感应用。Windows、Android 的支持取决于编辑器；Android 需开启无障碍服务。关闭后停止观察。',
+        '从听写后的手动改词中学习，确认后加入词典。',
     },
     dataStorage: {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
-        '润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
+        '润色时将光标附近的文字提供给模型作参考。',
     },
     localMigration: {
       title: '本地配置迁移',
@@ -1374,13 +1416,13 @@ export const zhCN = {
         systemAgc: '系统自动增益',
         unavailable: '当前设备不支持',
         androidEffectsHint:
-          'Android 系统音效在软件处理链之前生效。建议避免重复开启同类效果。启动不支持时回退到常规采集。',
+          '使用设备提供的回声消除、降噪和自动增益。',
         effectsActive: '本次录音已启用系统音效。',
         spectrum: '输入／处理后频谱',
         spectrumHint:
-          '仅显示当前增强录音，不会启动麦克风、保存或上传音频。关闭面板或进入后台后停止监测。',
+          '对比录音处理前后的频谱。',
         spectrumLegend: '灰色：输入 · 彩色：处理后 · 20 Hz–24 kHz',
-        spectrumWaiting: '开启语音增强并开始录音后显示频谱。',
+        spectrumWaiting: '等待录音',
         presets: '均衡器预设',
         choosePreset: '选择预设',
         preset_normal: '平直',
@@ -1393,11 +1435,11 @@ export const zhCN = {
         aecOff: '关闭',
         aecLight: '轻量（省 CPU）',
         aecModel: '模型（更强）',
-        aecModelHint: '模型版抑制更强，但约是轻量版的 3 倍 CPU；老机器建议用轻量。',
-        aecHint: '外放时压掉扬声器回授；需要扬声器参考信号，戴耳机可以关掉。',
+        aecModelHint: '增强回声抑制，CPU 占用较高。',
+        aecHint: '抑制扬声器播放声音进入麦克风产生的回声。',
         buffer: '输出缓冲区',
         title: '语音增强设置',
-        description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
+        description: '调整降噪、回声抑制、音量与均衡器。',
         noise: '降噪算法',
         dereverb: '梳状滤波',
         equalizer: '均衡器',
@@ -1410,10 +1452,10 @@ export const zhCN = {
         target: '目标电平',
         attack: '启动速度',
         decay: '释放速度',
-        vadHint: '衰减低音量片段，不会停止录音。门限过高可能丢失轻声。',
+        vadHint: '降低低音量片段的音量。',
         threshold: '语音门限',
         tone: '音色与房间调整',
-        combHint: '梳状滤波沿用 MicYou 的简单延迟相减，可能改变音色，建议从 0% 开始。',
+        combHint: '调节声音的共鸣与音色。',
         preamp: '均衡器前置增益',
         order: '处理顺序',
         up: '上移',
@@ -1422,24 +1464,25 @@ export const zhCN = {
       },
       echoCancellationLabel: '播放回声抑制',
       echoCancellationDesc:
-        '保持系统声音播放，使用本机播放参考抑制回声。macOS 需 14.6 或更新版本及系统音频录制权限；不支持的设备、蓝牙路径或 Linux ALSA 环境回退为普通麦克风录音。下次开始采集时生效。',
+        '使用本机播放参考，抑制录音中的系统声音回声。下次录音生效。',
       audioEnhancementLabel: '语音增强',
       audioEnhancementDesc:
-        '应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。',
+        '降低背景噪声，并自动调整音量。下次录音生效。',
       voiceActivationLabel: '语音唤醒听写',
       voiceActivationDesc:
         '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',
       voiceActivationLocalOnly:
         '本地识别：说“开始语音录入”开始，说“完成语音录入”结束。需要已安装本地 Zipformer 模型。',
-      voiceActivationHotkeyLinked: "与录音快捷键联动",
-      voiceActivationHotkeyLinkedDesc: "单击录音快捷键开启或暂停唤醒监听，替代原录音手势。启动应用后先暂停；暂停时关闭后台预热，其他正在录音的任务不受影响。等待唤醒仅本地处理，正式听写仍使用当前服务。",
-      voiceActivationDisabled: "已关闭语音唤醒",
-      voiceActivationPaused: "已临时暂停唤醒监听",
-      voiceActivationPausing: "正在停止唤醒监听…",
-      voiceActivationStarting: "正在启动唤醒监听…",
-      voiceActivationListening: "正在等待唤醒命令",
-      voiceActivationDictating: "正在听写或收尾",
-      voiceActivationError: "无法启动唤醒监听，请检查模型、麦克风权限和设备。",
+      voiceActivationHotkeyLinked: '与录音快捷键联动',
+      voiceActivationHotkeyLinkedDesc:
+        '单击录音快捷键开启或暂停唤醒监听，替代原录音手势。启动应用后先暂停；暂停时关闭后台预热，其他正在录音的任务不受影响。等待唤醒仅本地处理，正式听写仍使用当前服务。',
+      voiceActivationDisabled: '已关闭语音唤醒',
+      voiceActivationPaused: '已临时暂停唤醒监听',
+      voiceActivationPausing: '正在停止唤醒监听…',
+      voiceActivationStarting: '正在启动唤醒监听…',
+      voiceActivationListening: '正在等待唤醒命令',
+      voiceActivationDictating: '正在听写或收尾',
+      voiceActivationError: '无法启动唤醒监听，请检查模型、麦克风权限和设备。',
       voiceActivationMultimodalModels: '此处准备语音唤醒模型，听写仍使用当前多模态服务。',
       voiceActivationModelMissing: '请先在“AI 与模型”的本地模型页准备 Zipformer。',
       voiceActivationDownloadZipformer: '前往 AI 与模型下载 Zipformer',
@@ -1513,14 +1556,16 @@ export const zhCN = {
       polishSkipMaxCharsLabel: '短句跳过润色（最大字数）',
       polishSkipMaxCharsDesc:
         '转写不超过 N 个字（不计空白）时直接插入原文，不调用润色模型。0 = 关闭。翻译模式始终润色。',
-      polishStrategyEnabledLabel: '使用自定义润色策略',
+      polishStrategyEnabledLabel: '启用自定义策略',
       polishStrategyEnabledDesc:
         '在 ASR 后运行受限的本地策略；异常会回退到默认润色规则，脚本无法访问文件、网络或凭据。',
-      polishStrategyScriptLabel: '润色策略脚本',
+      polishStrategyEdit: '修改',
+      polishStrategyEditorTitle: '修改润色策略',
+      polishStrategyScriptLabel: '脚本',
       polishStrategyScriptDesc:
         '定义 strategy(input)，返回 skip、polish 或 request。缺失的语言、置信度和模型值为 ()。',
       polishStrategyScriptPlaceholder:
-        'fn strategy(input) { if input["charCount"] <= 3 { #{ action: "skip" } } else { #{ action: "polish" } } }',
+        'fn strategy(input) {\n  if input["charCount"] <= 3 {\n    #{ action: "skip" }\n  } else {\n    #{ action: "polish" }\n  }\n}',
       polishStrategySkillCopy: '复制 Agent 编写说明',
       polishStrategySkillCopied: '已复制 Agent 编写说明',
       polishStrategySkillCopyFailed: '复制失败，请检查剪贴板权限',
@@ -2307,6 +2352,7 @@ export const zhCN = {
     backToAdvanced: '返回高级功能',
     back: '返回',
     advancedPages: {
+      polishStrategy: '按识别结果控制润色。',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
       webSearchTitle: 'Web Search',
       liveInput: '配置实时原文在输入框中的显示。',
@@ -2317,7 +2363,7 @@ export const zhCN = {
       multimodal: '管理多模态识别的实验性开关。',
       debug: '保留调试录音、探测光标上下文和导出日志。',
       voiceEnhancement: '配置高级音频处理、降噪与播放回声抑制。',
-      cursorContext: '管理光标上下文、短句行为和手改学词。',
+      cursorContext: '管理光标上下文、手改学词与表达习惯。',
       startupDiagnostics: '查看启动耗时、后端握手和延迟探测结果。',
     },
     descriptions: {
@@ -2340,7 +2386,7 @@ export const zhCN = {
       appearance: '主题 深色 浅色 暗色 语言 字号 排版 布局 热力图',
       privacy: '权限 麦克风 辅助功能 历史 录音 存储 隐私 导出',
       advanced:
-        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 高级功能 手改学词',
+        'debug logs diagnostics experiments models cursor context 调试 日志 诊断 实验 模型 光标上下文 manual edits vocabulary learning Beta 高级功能 手改学词 润色策略 Rhai script',
       about: '版本 Beta 稳定 更新 升级',
     },
 
@@ -2582,6 +2628,10 @@ export const zhCN = {
     activePill: '当前使用',
     setDefault: '设为默认',
     downloading: '下载中',
+    cancelDownload: '取消下载',
+    cancelDownloadTitle: '取消下载 {{name}}',
+    cancellingDownload: '正在取消下载…',
+    downloadFailed: '模型下载失败',
     startDownload: '开始下载',
     downloadNewModel: '下载新模型',
     activeModelLabel: '使用中的模型',

@@ -22,7 +22,6 @@
 @import './vendor/shadcn-tailwind.css';
 
 @source './';
-@source '../QaPanel.tsx';
 
 /* ─── shadcn 主题变量（zinc，浅色固定；纯白 —— 用户拍板与官方 demo 卡片一致）── */
 :root {

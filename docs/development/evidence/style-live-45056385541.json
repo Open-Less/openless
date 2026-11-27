@@ -1,0 +1,62 @@
+{
+  "run_url": "https://github.com/Open-Less/openless/actions/runs/45056385541",
+  "commit": "f10c62b6",
+  "timestamp_utc": "2026-11-22T18:42:23Z",
+  "channel": "official DeepSeek acceptance; not verified user Ark channel",
+  "endpoint": "https://api.deepseek.com/v1",
+  "requested_model": "deepseek-flash",
+  "response_model": null,
+  "build_without_credentials": "passed",
+  "ordinary_platform_ci": "skipped, not validated by this run",
+  "live_result": "failed at first case with BackendErrorCode::Provider",
+  "actual_http_send_count": null,
+  "http_count_limitation": "first case only; live disables retry; counter was bounded but not logged in this revision",
+  "cases": [
+    {
+      "case": "scope",
+      "style_id": "openless.intent-reconstruction",
+      "translation": false,
+      "input": "我想优化官网文档。后来想了想，首页视频和文字也都要一起整理，范围应该是整个官网内容。不要跳转，保持在当前页面展示。这样可以吗？",
+      "output": null,
+      "expected_semantics": "整体范围应为官网内容，保留页面内展示、不跳转，末尾仍是问题",
+      "observed": "scope: official request failed, code=Provider",
+      "semantic_review": "not evaluated: no successful model output"
+    },
+    {
+      "case": "replace",
+      "observed": "not run after first provider failure",
+      "semantic_review": "not evaluated"
+    },
+    {
+      "case": "alternatives",
+      "observed": "not run after first provider failure",
+      "semantic_review": "not evaluated"
+    },
+    {
+      "case": "retract",
+      "observed": "not run after first provider failure",
+      "semantic_review": "not evaluated"
+    },
+    {
+      "case": "simple_builtin_translation",
+      "observed": "not run after first provider failure",
+      "semantic_review": "not evaluated"
+    },
+    {
+      "case": "question_custom_translation",
+      "observed": "not run after first provider failure",
+      "semantic_review": "not evaluated"
+    },
+    {
+      "case": "unresolved",
+      "observed": "not run after first provider failure",
+      "semantic_review": "not evaluated"
+    },
+    {
+      "case": "long",
+      "observed": "not run after first provider failure",
+      "semantic_review": "not evaluated"
+    }
+  ],
+  "limits": "No second trigger or paid retry; provider classification does not distinguish credential, model or service failure; no hidden reasoning, credentials or raw SSE saved."
+}

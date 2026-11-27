@@ -4,10 +4,9 @@
 #
 #   scripts/verify-harmony-hap.sh <hap|app> [toolchain] [versionName] [versionCode] [--allow-unsigned]
 #
-# Checks the things that silently go wrong in a HAP build: a missing ArkWeb
-# bundle, a stale version stamp, a missing native library, and - when the Huawei
-# signing tool is available - an invalid signature. An App Pack (`.app`, what
-# AppGallery accepts) is unwrapped first and checked the same way.
+# Checks the native libraries, Rime data, version stamp, and absence of ArkWeb
+# assets. It also checks the signature when the Huawei signing tool is available.
+# An App Pack (`.app`) is unwrapped first and checked the same way.
 set -euo pipefail
 
 hap=${1:?usage: verify-harmony-hap.sh <hap> [toolchain] [versionName] [versionCode]}

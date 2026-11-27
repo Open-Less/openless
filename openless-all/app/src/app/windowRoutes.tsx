@@ -3,11 +3,15 @@ import { Capsule } from '../features/capsule/Capsule';
 import { CapsuleTranscriptOverlay } from '../features/capsule/LiveTranscriptPill';
 import { AudioCueListener } from '../features/capsule/AudioCue';
 import type { OS } from '../runtime/environment';
-import { QaPanel, VoiceEditPanel } from './destinations';
+import { loadMainShell, VoiceEditPanel } from './destinations';
 
-const MainWindow = lazy(() =>
-  import('./MainWindow').then((module) => ({ default: module.MainWindow })),
-);
+const loadMainWindow = () => import('./MainWindow');
+const MainWindow = lazy(() => loadMainWindow().then((module) => ({ default: module.MainWindow })));
+
+export function preloadMainWindow() {
+  // Fetch both main-route chunks while the native handshake and language load are in flight.
+  return Promise.allSettled([loadMainWindow(), loadMainShell()]);
+}
 const SelectionVoiceIntentPicker = lazy(() =>
   import('../features/selection-intent/SelectionVoiceIntentPicker').then((module) => ({
     default: module.SelectionVoiceIntentPicker,
@@ -18,7 +22,6 @@ export type WindowKind =
   | 'main'
   | 'capsule'
   | 'capsule-rail'
-  | 'qa'
   | 'voice-edit'
   | 'selection-voice-intent'
   | 'less-computer'
@@ -29,7 +32,6 @@ export function resolveWindowKind(params: URLSearchParams): WindowKind {
   switch (kind) {
     case 'capsule':
     case 'capsule-rail':
-    case 'qa':
     case 'voice-edit':
     case 'selection-voice-intent':
     case 'less-computer':
@@ -66,12 +68,6 @@ export function WindowRoutes({
           <Capsule os={os} />
           <AudioCueListener />
         </>
-      );
-    case 'qa':
-      return (
-        <Suspense fallback={null}>
-          <QaPanel />
-        </Suspense>
       );
     case 'selection-voice-intent':
       return (

@@ -18,6 +18,11 @@ on:
     branches: [main, beta]
   workflow_dispatch:
     inputs:
+      live_acceptance:
+        description: Paid official-provider acceptance only (skips ordinary platform checks)
+        type: choice
+        options: ['off', style, style-diagnostic, search]
+        default: 'off'
       platform:
         description: Platforms to check (macos runs only macOS gates)
         type: choice
@@ -37,7 +42,7 @@ on:
 # Supersede a PR or an equivalent manual request. Keep different manual
 # platform/runner selections independent, and preserve baseline push evidence.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}-${{ inputs.windows_build_jobs || '2' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.platform || 'all' }}-${{ inputs.macos_runner || 'macos-latest' }}-${{ inputs.windows_build_jobs || '2' }}-${{ inputs.live_acceptance || 'off' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
@@ -45,10 +50,12 @@ jobs:
   # 跳过对应 job：判定脚本对任何未知情况（没有基线、git 失败、空 diff）都返回
   # true。push / tag / 手动运行不带基线，因此始终全量验证。
   changes:
+    if: github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off'
     name: Changed areas
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only') && 'macos-latest' || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
+      desktop-only: ${{ steps.detect.outputs.desktop-only }}
       tauri: ${{ steps.detect.outputs.tauri }}
       msrv: ${{ steps.detect.outputs.msrv }}
       harmony: ${{ steps.detect.outputs.harmony }}
@@ -62,13 +69,18 @@ jobs:
           # 需要基线提交才能算出差异，客户端不再重复 fetch。
           fetch-depth: 0
 
+      - name: Validate release mirror contracts
+        run: python3 -B openless-all/app/scripts/test_release_mirror.py
+
       - name: Detect changed areas
         id: detect
         working-directory: openless-all/app
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DESKTOP_ONLY: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only') }}
         run: |
           set -euo pipefail
+          echo "desktop-only=$DESKTOP_ONLY" | tee -a "$GITHUB_OUTPUT"
           for area in tauri msrv harmony frontend android capsule ios-device; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
@@ -84,7 +96,7 @@ jobs:
     # Keep existing check-run names for branch protection compatibility.
     name: test
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -146,7 +158,7 @@ jobs:
     # same two VMs instead of adding ~8 minutes of tests before a ~15 minute build.
     # Both checks still have to pass; this workflow does not publish the IPA.
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -222,7 +234,7 @@ jobs:
     needs: [changes]
     # One worker per browser keeps timing-sensitive tests isolated; the two
     # engines run on separate runners instead of serialising ~15 minutes.
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     # A hung Chromium/WebKit process must not hold the runner after the step cap.
     # Includes cold browser setup and leaves time to upload a failed trace.
@@ -301,11 +313,11 @@ jobs:
           if-no-files-found: ignore
 
   # Preserve the existing required-check name. A skipped browser matrix is only
-  # acceptable when the change classifier explicitly says it is out of scope.
+  # acceptable when the classifier or the requested CI scope excludes it.
   ui-motion:
     name: UI motion (Chromium + WebKit)
     needs: [changes, ui-motion-browsers]
-    if: always()
+    if: (github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && !(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -326,7 +338,7 @@ jobs:
   android-check:
     needs: [changes]
     # Android compiles its own Rust graph: a bundle-only change cannot break it.
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.android != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.android != 'false'
     name: Android cargo check
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -669,7 +681,7 @@ jobs:
   #     real HAP, which is what actually type-checks the ArkTS sources.
   harmony-check:
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
     name: Harmony (ArkTS contracts, Rust host, HAP)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -704,9 +716,8 @@ jobs:
           node scripts/harmony-symbol-gesture.test.mjs
           node scripts/harmony-rime-startup.test.mjs
           node scripts/harmony-native-ui.test.mjs
-      # No web bundle and no `npm ci` here any more: the HAP ships a native ArkUI
-      # UI, so `package-harmony-hap.sh` -> `build-harmony-app.sh` only needs the
-      # Rust core for `aarch64-unknown-linux-ohos` and the pinned SDK.
+      # The HAP ships native ArkUI, so packaging builds the Rust host with the
+      # pinned SDK and skips the React bundle.
       - uses: dtolnay/rust-toolchain@stable
         with:
           # Tier-2 OHOS target; `rustup target list` above lists it for stable.
@@ -774,7 +785,7 @@ jobs:
           workspaces: openless-all/app -> target
           # Pull requests restore the beta tree and never write their own copy:
           # `refs/pull/<n>/merge` scopes are never restored again and only evict
-          # the branch caches (see docs/ci-trigger-and-cache-policy.md).
+          # the branch caches (see docs/development/delivery.md).
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
       - run: cargo check --locked -p openless-native-capsule
       - run: cargo test --locked -p openless-capsule --features ui,host
@@ -942,6 +953,17 @@ jobs:
         timeout-minutes: 30
         if: runner.os != 'Windows'
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --timings
+
+      - name: Run input and official style integration contracts
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        run: |
+          cargo test --locked -p openless-core --target-dir src-tauri/target --test prompt_contract
+          cargo test --locked -p openless-core --target-dir src-tauri/target --test dictation_target_capture
+          cargo test --locked -p openless-core --target-dir src-tauri/target --test selection_contract normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams
+          cargo test --locked -p openless-core --target-dir src-tauri/target --test settings_field_updates
+          cargo test --locked -p openless-core --target-dir src-tauri/target --lib long_recording
+          cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test clipboard_delivery
 
       - name: Compile Rust backend unit tests (Windows)
         # A Windows runner can link the lib test binary, but on a clean image lacking an optional
@@ -1185,8 +1207,8 @@ jobs:
     # Keep the existing Windows required check dependent on both compilers.
     name: Windows checks
     needs: [changes, cross-platform, windows-msrv]
-    if: always() && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos')
-    runs-on: ubuntu-latest
+    if: (github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos')
+    runs-on: ${{ needs.changes.outputs.desktop-only == 'false' && 'ubuntu-latest' || 'macos-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require stable and MSRV results
@@ -1208,3 +1230,40 @@ jobs:
           else
             test "$MSRV_RESULT" = success
           fi
+
+  live-acceptance:
+    name: Optional official-provider live acceptance
+    if: github.event_name == 'workflow_dispatch' && inputs.live_acceptance != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build acceptance without credentials
+        run: cargo test --locked -p openless-core --lib --no-run
+      - name: Run explicitly selected bounded acceptance
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LIVE_ACCEPTANCE: ${{ inputs.live_acceptance }}
+        run: |
+          set -euo pipefail
+          case "$LIVE_ACCEPTANCE" in
+            style) target=style_live_official_deepseek ;;
+            style-diagnostic) target=style_live_official_deepseek; export OPENLESS_LIVE_FIRST_ONLY=1 ;;
+            search) target=hybrid_live_official_deepseek ;;
+            *) exit 2 ;;
+          esac
+          cargo test --locked -p openless-core --lib "$target" -- --list --ignored | grep -q "$target: test"
+          cargo test --locked -p openless-core --lib "$target" -- --ignored --nocapture --test-threads=1 | tee live-acceptance.log
+      - name: Preserve public output evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-provider-live-acceptance
+          path: openless-all/app/live-acceptance.log
+          if-no-files-found: ignore

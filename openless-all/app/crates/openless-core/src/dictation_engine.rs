@@ -5,7 +5,7 @@
 //! [`crate::ports`]; they never duplicate session or fallback decisions.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use futures_util::future::{BoxFuture, Shared};
@@ -28,6 +28,10 @@ const BUFFERED_TRANSCRIPTION_STOP_HEADROOM_BYTES: usize = 1024 * 1024;
 const BUFFERED_TRANSCRIPTION_STOP_THRESHOLD_BYTES: usize =
     MAX_BUFFERED_TRANSCRIPTION_PCM_BYTES - BUFFERED_TRANSCRIPTION_STOP_HEADROOM_BYTES;
 const BUFFERED_TRANSCRIPTION_FORWARD_CHUNK_BYTES: usize = 64 * 1024;
+
+#[cfg(test)]
+#[path = "long_recording_tests.rs"]
+mod long_recording_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolishFailurePolicy {
@@ -193,8 +197,9 @@ impl PipelineDictationEngine {
         }
     }
 
-    /// Once capture is running, local model loading must not hold the public
-    /// session in Starting: Stop must release the microphone before inference is ready.
+    /// Once capture is running, local model loading or waiting for its native
+    /// executor must not hold the public session in Starting: Stop must release
+    /// the microphone before inference is ready.
     /// Cloud routes and stable (record-first) mode keep their existing behavior.
     pub fn with_local_startup_spawner(mut self, spawner: Arc<dyn crate::TaskSpawner>) -> Self {
         self.local_startup_spawner = Some(spawner);
@@ -269,8 +274,7 @@ impl DictationEngine for PipelineDictationEngine {
         let sessions = Arc::clone(&self.sessions);
         let pending_captures = Arc::clone(&self.pending_captures);
         let local_startup_spawner = self.local_startup_spawner.clone().filter(|_| {
-            crate::experimental_asr::ExperimentalAsrModel::from_provider(&context.asr.provider_type)
-                .is_some()
+            crate::dictation_context::is_local_asr_provider(&context.asr.provider_type)
         });
         Box::pin(async move {
             let session = Arc::new(PipelineSession::new(Arc::clone(&context)));
@@ -695,7 +699,7 @@ impl DictationEngine for PipelineDictationEngine {
             }
             let context = session.context();
 
-            let (recording, transcription, prepared) = {
+            let (recording, transcription, prepared, buffered) = {
                 let mut resources = session
                     .resources
                     .lock()
@@ -704,6 +708,7 @@ impl DictationEngine for PipelineDictationEngine {
                     resources.recording.take(),
                     resources.transcription.clone(),
                     resources.prepared.clone(),
+                    resources.buffered.clone(),
                 )
             };
             let recording = recording.ok_or_else(|| {
@@ -729,6 +734,17 @@ impl DictationEngine for PipelineDictationEngine {
                     "[dictation] recorder stop failed; transcribing the captured audio anyway: {error}"
                 );
             }
+            let captured_pcm_bytes = buffered
+                .as_ref()
+                .map_or(0, |buffer| buffer.received_pcm_bytes());
+            let captured_duration_ms = crate::long_recording::duration_ms(captured_pcm_bytes);
+            let long_recording = captured_duration_ms > crate::long_recording::THRESHOLD_MS
+                && matches!(
+                    context.output_target,
+                    DictationOutputTarget::ForegroundApp
+                        | DictationOutputTarget::QuickNote
+                        | DictationOutputTarget::Undecided
+                );
             if context.output_target == crate::dictation_context::DictationOutputTarget::QuickNote {
                 if let Some(archive) = archive.as_ref() {
                     if let Err(error) = archive.promote_to_quick_note().await {
@@ -737,7 +753,7 @@ impl DictationEngine for PipelineDictationEngine {
                         );
                     }
                 }
-            } else if context.recording.archive_successful_recording {
+            } else if context.recording.archive_successful_recording || long_recording {
                 if let Some(archive) = archive.as_ref() {
                     if let Err(error) = archive.demote_to_ordinary_recording().await {
                         log::warn!(
@@ -853,7 +869,7 @@ impl DictationEngine for PipelineDictationEngine {
                     standby,
                 } => {
                     let cancelled = session.cancelled.load(Ordering::Acquire);
-                    let prepared = prepared.ok_or_else(|| {
+                    let prepared = prepared.clone().ok_or_else(|| {
                         BackendError::new(
                             BackendErrorCode::Internal,
                             "transcription provider preparation is unavailable",
@@ -861,11 +877,19 @@ impl DictationEngine for PipelineDictationEngine {
                     })?;
                     // The recording is replayed for a cloud retry (retryable
                     // errors only).
-                    let retry_pcm = if !cancelled && first_error.retryable {
+                    let recover_long = long_recording
+                        && !matches!(
+                            first_error.code,
+                            BackendErrorCode::InvalidArgument
+                                | BackendErrorCode::PermissionDenied
+                                | BackendErrorCode::Cancelled
+                        );
+                    let retry_pcm = if !cancelled && (first_error.retryable || recover_long) {
                         match archive.as_ref().filter(|archive| archive.is_available()) {
-                            Some(archive) => {
-                                archive.read_pcm().await.ok().filter(|pcm| !pcm.is_empty())
-                            }
+                            Some(archive) => archive.read_pcm().await.ok().filter(|pcm| {
+                                !pcm.is_empty()
+                                    && (!long_recording || pcm.len() as u64 == captured_pcm_bytes)
+                            }),
                             None => None,
                         }
                     } else {
@@ -957,6 +981,45 @@ impl DictationEngine for PipelineDictationEngine {
                     }
                 }
             };
+            if long_recording
+                && transcript.text.trim().is_empty()
+                && !session.cancelled.load(Ordering::Acquire)
+            {
+                if let (Some(prepared), Some(archive)) = (
+                    prepared,
+                    archive.as_ref().filter(|archive| archive.is_available()),
+                ) {
+                    if let Ok(pcm) = archive.read_pcm().await {
+                        if pcm.len() as u64 == captured_pcm_bytes {
+                            match retry_transcription(
+                                prepared,
+                                Arc::clone(&session),
+                                session_id,
+                                Arc::clone(&progress),
+                                pcm,
+                                CLOUD_RETRY,
+                            )
+                            .await
+                            {
+                                Ok((recovered, label, metadata)) => {
+                                    transcript = recovered;
+                                    asr_call_label = label.or(asr_call_label);
+                                    asr_metadata = metadata;
+                                }
+                                Err((error, label)) => {
+                                    remove_session(&sessions, session_id, &session);
+                                    let mut failure =
+                                        EngineFailure::new(error, EngineFailureStage::Transcribing);
+                                    failure.duration_ms = Some(captured_duration_ms);
+                                    failure.has_audio_recording = has_audio_recording;
+                                    failure.asr_call_label = label.or(asr_call_label);
+                                    return Err(failure);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let asr_elapsed_ms = asr_started.elapsed().as_millis() as u64;
             let asr_ms = Some(asr_elapsed_ms);
             // 「听写很慢」时要能一句话看出慢在 ASR 还是慢在润色。
@@ -969,7 +1032,7 @@ impl DictationEngine for PipelineDictationEngine {
                 transcript.text.chars().count(),
             );
             if session.cancelled.load(Ordering::Acquire) {
-                if !context.recording.archive_successful_recording {
+                if !context.recording.archive_successful_recording && !long_recording {
                     discard_ephemeral_archive(archive.as_ref(), &mut has_audio_recording).await;
                 }
                 remove_session(&sessions, session_id, &session);
@@ -998,7 +1061,38 @@ impl DictationEngine for PipelineDictationEngine {
             );
             let asr_transcript =
                 (transcript.text != original_asr_text).then_some(original_asr_text);
-            if !context.recording.archive_successful_recording {
+            if long_recording {
+                transcript.duration_ms = captured_duration_ms;
+                // Validate the saved whole recording before claiming recoverability.
+                // The archive starts with capture, not with the five-minute transition.
+                let saved = match archive.as_ref().filter(|archive| archive.is_available()) {
+                    Some(archive) => archive.pcm_byte_len().await,
+                    None => Err(BackendError::new(
+                        BackendErrorCode::Persistence,
+                        "longRecordingArchiveUnavailable",
+                    )),
+                };
+                if !saved
+                    .as_ref()
+                    .is_ok_and(|bytes| *bytes == captured_pcm_bytes)
+                {
+                    remove_session(&sessions, session_id, &session);
+                    let error = saved.err().unwrap_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::Persistence,
+                            "longRecordingArchiveIncomplete",
+                        )
+                    });
+                    let mut failure = EngineFailure::new(error, EngineFailureStage::Transcribing);
+                    failure.raw_text = Some(transcript.text);
+                    failure.duration_ms = Some(captured_duration_ms);
+                    failure.asr_ms = asr_ms;
+                    failure.has_audio_recording = has_audio_recording;
+                    failure.asr_call_label = asr_call_label;
+                    return Err(failure);
+                }
+            }
+            if !context.recording.archive_successful_recording && !long_recording {
                 if transcript.text.trim().is_empty() {
                     demote_failed_archive(
                         archive.as_ref(),
@@ -1074,17 +1168,18 @@ impl DictationEngine for PipelineDictationEngine {
             let translation_active = context.polish.translation_active;
             let uses_polisher = !strategy_skips
                 && context.uses_llm_polisher()
-                && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
+                && !transcript.text.trim().is_empty()
                 && !skips_polish_for_short_text
-                && (!local_fallback_used || translation_active);
+                && (!local_fallback_used || translation_active || long_recording);
             log::info!(
-                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?}",
+                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?} style_pack_id={}",
                 session_id,
                 uses_polisher,
                 skips_polish_for_short_text,
                 context.insertion.composition_input,
                 translation_active,
                 context.polish.mode,
+                context.polish.style_pack_id,
             );
             // Local recognition makes polish optional: when it fails because
             // the network never answered, the raw transcript is the result.
@@ -1123,6 +1218,15 @@ impl DictationEngine for PipelineDictationEngine {
                 );
                 let output = if let Some(error) = context.deferred_llm_error.clone() {
                     Err(error)
+                } else if long_recording {
+                    polish_long_recording(
+                        Arc::clone(&polisher),
+                        session_id,
+                        polish_context,
+                        transcript.text.clone(),
+                        &session.cancelled,
+                    )
+                    .await
                 } else {
                     polisher
                         .polish(
@@ -1647,6 +1751,126 @@ async fn retry_transcription(
     progress: Arc<dyn EngineProgressSink>,
     pcm: Vec<u8>,
     plan: ReplayPlan,
+) -> Result<AsrAttempt, (BackendError, Option<crate::auxiliary::AsrCallLabel>)> {
+    if crate::long_recording::duration_ms(pcm.len() as u64) <= crate::long_recording::THRESHOLD_MS {
+        return retry_transcription_segment(
+            prepared, session, session_id, progress, pcm, plan, true,
+        )
+        .await;
+    }
+    let mut text = String::new();
+    let mut label = None;
+    let mut metadata = crate::ports::TranscriptMetadata::default();
+    for chunk in pcm.chunks(crate::long_recording::RECOVERY_CHUNK_BYTES) {
+        let (part, part_label, part_metadata) = retry_transcription_segment(
+            Arc::clone(&prepared),
+            Arc::clone(&session),
+            session_id,
+            Arc::clone(&progress),
+            chunk.to_vec(),
+            plan,
+            false,
+        )
+        .await?;
+        if !text.is_empty() && !part.text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&part.text);
+        label = part_label.or(label);
+        metadata = part_metadata;
+    }
+    Ok((
+        crate::ports::TranscriptOutput {
+            text,
+            duration_ms: crate::long_recording::duration_ms(pcm.len() as u64),
+        },
+        label,
+        metadata,
+    ))
+}
+
+pub(crate) async fn polish_long_recording(
+    polisher: Arc<dyn TextPolisher>,
+    session_id: SessionId,
+    context: Arc<DictationContext>,
+    raw_text: String,
+    cancelled: &AtomicBool,
+) -> Result<crate::ports::PolishOutput, BackendError> {
+    let mut context = (*context).clone();
+    context.polish.llm_thinking_enabled = false;
+    // Keep the selected style and every input character; reduce reasoning work,
+    // not the amount of user content sent to the model.
+    if let Some(overrides) = &mut context.polish.polish_request_overrides {
+        overrides.reasoning_effort = None;
+    }
+    let context = Arc::new(context);
+    let mut result = crate::ports::PolishOutput::text(String::new());
+    let mut sources = Vec::new();
+    let mut all_have_source = true;
+    for chunk in crate::long_recording::text_chunks(&raw_text) {
+        if chunk.trim().is_empty() {
+            result.text.push_str(chunk);
+            sources.push(chunk.to_string());
+            continue;
+        }
+        let mut accepted = None;
+        for attempt in 0..2 {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(cancelled_error("long recording polishing was cancelled"));
+            }
+            // Unverified or abandoned attempts must never reach native input.
+            let output = polisher
+                .polish(
+                    session_id,
+                    Arc::clone(&context),
+                    chunk.to_string(),
+                    Arc::new(DiscardTextStream),
+                )
+                .await;
+            match output {
+                Ok(output) if !output.text.trim().is_empty() => {
+                    accepted = Some(output);
+                    break;
+                }
+                Err(error)
+                    if attempt == 0
+                        && error.code != BackendErrorCode::Cancelled
+                        && (error.retryable || error.message.contains("llmResponseIncomplete")) => {
+                }
+                Err(error) => return Err(error),
+                Ok(_) if attempt == 0 => {}
+                Ok(_) => {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "llmResponseIncomplete",
+                    ))
+                }
+            }
+        }
+        let output = accepted.expect("a polishing attempt either returned or completed");
+        if !result.text.is_empty() {
+            result.text.push_str("\n\n");
+        }
+        result.text.push_str(&output.text);
+        match output.source_text {
+            Some(source) => sources.push(source),
+            None => all_have_source = false,
+        }
+        result.llm_call_label = output.llm_call_label.or(result.llm_call_label);
+    }
+    result.source_text = (all_have_source && !sources.is_empty()).then(|| sources.join("\n\n"));
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn retry_transcription_segment(
+    prepared: Arc<dyn PreparedTranscription>,
+    session: Arc<PipelineSession>,
+    session_id: SessionId,
+    progress: Arc<dyn EngineProgressSink>,
+    pcm: Vec<u8>,
+    plan: ReplayPlan,
+    publish_partials: bool,
 ) -> Result<
     (
         crate::ports::TranscriptOutput,
@@ -1664,10 +1888,14 @@ async fn retry_transcription(
                 return Err((error, last_label));
             }
         }
-        let partials: Arc<dyn TextStreamSink> = Arc::new(TranscriptProgressForwarder {
-            session_id,
-            progress: Arc::clone(&progress),
-        });
+        let partials: Arc<dyn TextStreamSink> = if publish_partials {
+            Arc::new(TranscriptProgressForwarder {
+                session_id,
+                progress: Arc::clone(&progress),
+            })
+        } else {
+            Arc::new(DiscardTextStream)
+        };
         let transcription = match prepared.start(partials).await {
             Ok(transcription) => transcription,
             Err(_) if session.cancelled.load(Ordering::Acquire) => {
@@ -1719,7 +1947,26 @@ async fn retry_transcription(
                 last_label,
             ));
         }
-        transcription.consume_pcm_chunk(&pcm);
+        if !publish_partials && session.context().asr.provider_type == "volcengine" {
+            // Use the existing archived-audio replay pacing for this realtime endpoint.
+            for (index, chunk) in pcm
+                .chunks(crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES)
+                .enumerate()
+            {
+                if index != 0 {
+                    if let Err(error) =
+                        cancellable_backoff(&session, std::time::Duration::from_millis(100)).await
+                    {
+                        let _ =
+                            cancel_transcription_once(&session, Arc::clone(&transcription)).await;
+                        return Err((error, last_label));
+                    }
+                }
+                transcription.consume_pcm_chunk(chunk);
+            }
+        } else {
+            transcription.consume_pcm_chunk(&pcm);
+        }
         let transcription_result = transcription.finish().await;
         let metadata = transcription.transcript_metadata();
         for notification in transcription.take_progress_notifications() {
@@ -1871,6 +2118,7 @@ struct BufferedTranscriptionInner {
     progress: Arc<dyn RecordingProgressSink>,
     limit_notified: AtomicBool,
     has_nonzero_pcm: AtomicBool,
+    received_pcm_bytes: AtomicU64,
     limit_threshold_bytes: usize,
     state: Mutex<BufferedTranscriptionState>,
 }
@@ -1913,6 +2161,7 @@ impl BufferedTranscriptionSession {
                 progress,
                 limit_notified: AtomicBool::new(false),
                 has_nonzero_pcm: AtomicBool::new(false),
+                received_pcm_bytes: AtomicU64::new(0),
                 limit_threshold_bytes,
                 state: Mutex::new(BufferedTranscriptionState::Buffering(Vec::new())),
             }),
@@ -2113,6 +2362,9 @@ impl Drop for NotifyOnDrop {
 
 impl AudioConsumer for BufferedTranscriptionSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        self.inner
+            .received_pcm_bytes
+            .fetch_add(pcm.len() as u64, Ordering::Relaxed);
         if !self.inner.has_nonzero_pcm.load(Ordering::Relaxed) && pcm.iter().any(|byte| *byte != 0)
         {
             self.inner.has_nonzero_pcm.store(true, Ordering::Release);
@@ -2218,6 +2470,10 @@ impl TranscriptionSession for BufferedTranscriptionSession {
 }
 
 impl BufferedTranscriptionSession {
+    fn received_pcm_bytes(&self) -> u64 {
+        self.inner.received_pcm_bytes.load(Ordering::Acquire)
+    }
+
     fn take_cancel_state(
         &self,
     ) -> (
@@ -3732,7 +3988,11 @@ mod tests {
     #[tokio::test]
     async fn local_model_loading_never_blocks_stop_or_cancel_of_the_microphone() {
         use crate::experimental_asr::ExperimentalAsrModel;
-        for model in ExperimentalAsrModel::ALL {
+        let providers = ExperimentalAsrModel::ALL
+            .map(|model| model.provider_type())
+            .into_iter()
+            .chain(["sherpa-onnx-local", "foundry-local-whisper", "apple-speech"]);
+        for provider in providers {
             for cancel in [false, true] {
                 let stops = Arc::new(AtomicUsize::new(0));
                 let pcm = Arc::new(Mutex::new(Vec::new()));
@@ -3760,7 +4020,7 @@ mod tests {
                     .with_local_startup_spawner(Arc::new(crate::TokioTaskSpawner)),
                 );
                 let mut context = (*raw_dictation_context()).clone();
-                context.asr.provider_type = model.provider_type().into();
+                context.asr.provider_type = provider.into();
                 let id = SessionId::new();
                 let progress = Arc::new(RecordingProgress::default());
                 tokio::time::timeout(

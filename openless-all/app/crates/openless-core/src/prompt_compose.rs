@@ -212,7 +212,7 @@ pub fn context_premise(
     }
     if let Some(name) = app {
         lines.push(format!(
-            "当前前台应用：{name}。请按这个应用的常见沟通风格调整语气——例如邮件类 app 偏正式、聊天类 app 偏口语、IDE / 文档类 app 偏技术或结构化。\u{4E0D}主动加入与用户原意无关的客套话。"
+            "当前前台应用：{name}。应用信息只辅助理解输入场景；输出遵循本次任务的明确要求。"
         ));
     }
     if let Some(line) = script_line {
@@ -409,14 +409,14 @@ pub fn compose_qa_system_prompt(
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
-    front_app: Option<&str>,
+    _front_app: Option<&str>,
 ) -> String {
     let mut system_prompt = prompts::qa_system_prompt();
     if let Some(premise) = context_premise(
         working_languages,
         chinese_script_preference,
         output_language_preference,
-        front_app,
+        None,
     ) {
         system_prompt = format!("{}\n\n{}", system_prompt, premise);
     }
@@ -630,7 +630,9 @@ mod stable_prompt_prefix_tests {
                 OutputLanguagePreference::Auto,
                 Some(app),
             );
-            assert_prefix_and_app(&qa, &qa_prefix, app);
+            assert!(qa.starts_with(&qa_prefix));
+            assert!(!qa.contains(&format!("当前前台应用：{app}")));
+            assert!(qa.contains("环境未知时不要下判断"));
         }
         assert_eq!(
             compose_translate_prompts("text", "English", &[], ChineseScriptPreference::Auto, None)

@@ -74,8 +74,10 @@ for (const profile of [
     const geometry = await selects.evaluateAll((elements) =>
       elements.map((element) => {
         const control = element.getBoundingClientRect();
-        const label = element.closest('.ol-setting-row')!
-          .querySelector('.ol-setting-row-label')!.getBoundingClientRect();
+        const label = element
+          .closest('.ol-setting-row')!
+          .querySelector('.ol-setting-row-label')!
+          .getBoundingClientRect();
         return {
           x: control.x,
           width: control.width,
@@ -91,3 +93,28 @@ for (const profile of [
     }
   });
 }
+
+test('the settings language popup paints one search field and filters languages', async ({
+  page,
+}) => {
+  await page.goto('/?os=mac');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: '外观与语言', exact: true }).click();
+  await settleNavigation(dialog);
+  const language = dialog.locator('.ol-select-trigger[aria-label="语言"]');
+  await language.click();
+  const popup = page.locator('.ol-select-positioner[data-open] .ol-select-popup');
+  const search = popup.getByPlaceholder('搜索语言…');
+  await expect(search).toBeFocused();
+  await expect(search.locator('..')).toHaveClass(/\bol-field\b/);
+  await expect(search).toHaveCSS('box-shadow', 'none');
+  await expect(search).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(search).toHaveCSS('border-top-width', '0px');
+  await search.fill('Deutsch');
+  await expect(popup.getByRole('option')).toHaveCount(1);
+  await expect(popup.getByRole('option', { name: 'Deutsch' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(popup).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+});

@@ -1,3 +1,5 @@
+import { platform } from '@base-ui/utils/platform';
+
 const FOCUSABLE =
   'a[href], button, textarea, select, input:not([type="hidden"]), [contenteditable="true"], [tabindex]';
 
@@ -13,6 +15,20 @@ export interface ModalLayer {
   returnFocus: HTMLElement | null;
   priority: number;
   closing: boolean;
+}
+
+interface PopupTransition {
+  trigger: HTMLElement;
+  container?: HTMLElement;
+  popup: () => HTMLElement | null;
+  escape: () => boolean;
+  invalidate: () => void;
+}
+
+interface RegisteredPopupTransition extends PopupTransition {
+  surface: HTMLElement;
+  composing: boolean;
+  compositionEnd?: number;
 }
 
 function canFocus(element: HTMLElement | null): element is HTMLElement {
@@ -32,6 +48,77 @@ export function createModalStack() {
   let active = false;
   let restoreToPage: HTMLElement | null = null;
   let clickTarget: HTMLElement | null = null;
+  let popupEscape: KeyboardEvent | undefined;
+  let popupTransition: RegisteredPopupTransition | null = null;
+  let listening = false;
+
+  function currentSurface() {
+    return top?.overlay ?? content ?? document.body;
+  }
+
+  function validTransition(owner: RegisteredPopupTransition) {
+    return owner.surface === currentSurface() && owner.surface.isConnected &&
+      owner.surface.contains(owner.trigger) && canFocus(owner.trigger) &&
+      (!owner.container || (owner.container.isConnected && !owner.container.closest('[inert], [hidden], [aria-hidden="true"]')));
+  }
+
+  function releaseTransition(owner: RegisteredPopupTransition, invalidate = false) {
+    if (popupTransition !== owner) return;
+    popupTransition = null;
+    window.clearTimeout(owner.compositionEnd);
+    syncInputListeners();
+    if (invalidate) owner.invalidate();
+  }
+
+  function currentTransition() {
+    if (popupTransition && !validTransition(popupTransition)) releaseTransition(popupTransition, true);
+    return popupTransition;
+  }
+
+  function onCompositionStart() {
+    const owner = currentTransition();
+    if (!owner) return;
+    window.clearTimeout(owner.compositionEnd);
+    owner.composing = true;
+  }
+
+  function onCompositionEnd() {
+    const owner = currentTransition();
+    if (!owner) return;
+    window.clearTimeout(owner.compositionEnd);
+    owner.composing = true;
+    // Match useDismiss: 0/1ms do not protect Safari's next-task IME keydown.
+    // This guards composition only; it does not defer or retry dismissal.
+    owner.compositionEnd = window.setTimeout(() => { owner.composing = false; }, platform.engine.webkit ? 5 : 0);
+  }
+
+  function onMouseDown(event: MouseEvent) {
+    const owner = currentTransition();
+    if (owner && event.target instanceof Node && !owner.trigger.contains(event.target) && !owner.popup()?.contains(event.target)) {
+      releaseTransition(owner, true);
+    }
+  }
+
+  function syncInputListeners() {
+    const next = !!top || !!popupTransition;
+    if (listening === next) return;
+    listening = next;
+    if (next) {
+      window.addEventListener('keydown', rememberPopupEscape, true);
+      window.addEventListener('mousedown', onMouseDown, true);
+      window.addEventListener('compositionstart', onCompositionStart, true);
+      window.addEventListener('compositionend', onCompositionEnd, true);
+      document.addEventListener('keydown', onKeydown);
+      document.addEventListener('focusin', onFocusIn);
+    } else {
+      window.removeEventListener('keydown', rememberPopupEscape, true);
+      window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('compositionstart', onCompositionStart, true);
+      window.removeEventListener('compositionend', onCompositionEnd, true);
+      document.removeEventListener('keydown', onKeydown);
+      document.removeEventListener('focusin', onFocusIn);
+    }
+  }
 
   function focusLayer(layer: ModalLayer) {
     const preferred = layer.focus();
@@ -71,27 +158,35 @@ export function createModalStack() {
         restoreToPage = null;
       }
     }
-    if (active !== !!top) {
-      active = !!top;
-      if (active) {
-        document.addEventListener('keydown', onKeydown);
-        document.addEventListener('focusin', onFocusIn);
-      } else {
-        document.removeEventListener('keydown', onKeydown);
-        document.removeEventListener('focusin', onFocusIn);
-      }
-      listeners.forEach((listener) => listener());
-    }
+    active = !!top;
+    currentTransition();
+    syncInputListeners();
+    if (before !== top) listeners.forEach((listener) => listener());
   }
 
   function onFocusIn(event: FocusEvent) {
     if (top && event.target instanceof Node && !top.overlay.contains(event.target)) focusLayer(top);
   }
 
+  function rememberPopupEscape(event: KeyboardEvent) {
+    // Remember ownership before the popup library handles Escape on the document.
+    popupEscape = event.key === 'Escape' && top?.overlay.querySelector(OPEN_POPUP) ? event : undefined;
+    if (event.key !== 'Escape') return;
+    const owner = currentTransition();
+    if (!owner) return;
+    // Retain the same event's layer ownership even before data-open exists.
+    popupEscape = event;
+    if (event.defaultPrevented || event.isComposing || owner.composing) return;
+    if (owner.escape()) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
   function onKeydown(event: KeyboardEvent) {
     if (!top || event.defaultPrevented || event.isComposing) return;
     if (event.key === 'Escape') {
-      if (top.overlay.querySelector(OPEN_POPUP)) return;
+      if (popupEscape === event || top.overlay.querySelector(OPEN_POPUP)) return;
       event.preventDefault();
       event.stopPropagation();
       top.close();
@@ -121,6 +216,14 @@ export function createModalStack() {
   }
 
   return {
+    claimPopupTransition(request: PopupTransition) {
+      if (popupTransition) releaseTransition(popupTransition, true);
+      const owner: RegisteredPopupTransition = { ...request, surface: currentSurface(), composing: false };
+      if (!validTransition(owner)) return null;
+      popupTransition = owner;
+      syncInputListeners();
+      return () => releaseTransition(owner);
+    },
     captureClick(target: EventTarget | null) {
       const control = target instanceof Element ? target.closest<HTMLElement>(FOCUSABLE) : null;
       clickTarget = canFocus(control) ? control : null;
@@ -128,6 +231,7 @@ export function createModalStack() {
     captureKey() {
       clickTarget = null;
     },
+    getTopOverlay: () => top?.overlay ?? null,
     getReturnFocus() {
       // Safari mouse clicks do not focus buttons. Keep the initiating control
       // for the current surface so dismissal can return to it in that engine.
@@ -141,6 +245,7 @@ export function createModalStack() {
     setContent(node: HTMLElement | null) {
       content = node;
       if (content) content.inert = active;
+      currentTransition();
     },
     register(layer: ModalLayer) {
       layers.push(layer);

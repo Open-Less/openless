@@ -4,8 +4,6 @@ import { readFile } from 'node:fs/promises';
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const [
   types,
-  qaPanel,
-  qaApi,
   inputApi,
   remoteIpc,
   remoteStatusController,
@@ -37,6 +35,7 @@ const [
   channelList,
   providerLabels,
   historyCommand,
+  historyRetranscription,
   credentialCommands,
   credentialPersistence,
   hostDocumentMacos,
@@ -48,8 +47,6 @@ const [
   mobileSelection,
 ] = await Promise.all([
   read('src/lib/types.ts'),
-  read('src/features/qa/QaPanel.tsx'),
-  read('src/api/qa.ts'),
   read('src/api/input.ts'),
   read('src/lib/ipc/remote-server.ts'),
   read('src/features/remote-input/useRemoteInputStatus.ts'),
@@ -81,6 +78,7 @@ const [
   read('src/features/providers/ChannelList.tsx'),
   read('src/features/providers/labels.ts'),
   read('src-tauri/src/commands/history.rs'),
+  read('src-tauri/src/commands/history_retranscription.rs'),
   read('src-tauri/src/commands/credentials.rs'),
   read('src-tauri/src/persistence/credentials.rs'),
   read('src-tauri/src/host_document/macos.rs'),
@@ -97,7 +95,6 @@ const [
 
 for (const kind of ['awaiting_approval', 'cancelled', 'error']) {
   assert.match(types, new RegExp(`\\| '${kind}'`), `QaStateKind must retain ${kind}`);
-  assert.match(qaPanel, new RegExp(`case '${kind}':`), `QaPanel must handle ${kind}`);
 }
 for (const field of [
   'sessionId',
@@ -112,13 +109,6 @@ for (const field of [
 ]) {
   assert.match(types, new RegExp(`\\b${field}\\?`), `QaStatePayload is missing ${field}`);
 }
-assert.match(
-  qaApi,
-  /listenTauriEvent<QaStatePayload>\('qa:state'/,
-  'QA API must type the state event',
-);
-assert.match(qaPanel, /listenQaStateChanges\(/, 'QA must subscribe through its domain API');
-
 const remoteStatus = remoteIpc.match(/export interface RemoteInputStatus \{([\s\S]*?)\n\}/)?.[1];
 assert.ok(remoteStatus, 'RemoteInputStatus interface must exist');
 const remoteFields = [...remoteStatus.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]);
@@ -594,11 +584,26 @@ assert.doesNotMatch(
 );
 assert.match(
   historyCommand,
+  /#\[path = "history_retranscription\.rs"\]\s*mod retranscription;/,
+  'the history command must load its production retranscription implementation',
+);
+assert.match(
+  historyCommand,
+  /pub async fn retranscribe_recording\([^]*?retranscription::retranscribe_recording_with_path\(&core, session_id, existing_recording_path\)\.await/,
+  'the registered history command must forward Core and the real recording resolver',
+);
+assert.match(
+  historyRetranscription,
+  /pub\(super\) async fn retranscribe_recording_with_path\(\s*core: &openless_core::OpenLessBackend,/,
+  'the extracted implementation must receive the same shared Core backend',
+);
+assert.match(
+  historyRetranscription,
   /core\.apply_history_retranscription\(/,
   'history retranscription mutation and attribution must be owned by Core',
 );
 assert.doesNotMatch(
-  historyCommand,
+  `${historyCommand}\n${historyRetranscription}`,
   /entry\.(?:raw_transcript|final_text|asr_provider|asr_model|llm_provider|llm_model|polish_ms)\s*=/,
   'the Tauri history command must not mutate retranscription records',
 );

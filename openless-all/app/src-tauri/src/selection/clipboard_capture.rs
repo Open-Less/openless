@@ -15,7 +15,8 @@ pub(super) trait ClipboardCapture {
 
     /// `None` means the text format is absent; access failures must return `Err`.
     fn backup_text(&mut self) -> Result<Option<String>, Self::Error>;
-    fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome);
+    fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome, u64);
+    fn sequence(&self) -> u64;
     fn restore_text(&mut self, text: &str);
 }
 
@@ -25,12 +26,14 @@ pub(super) fn capture_with_restore<C: ClipboardCapture>(
     // An unreadable backup must never be treated as an empty clipboard: copying now could
     // destroy text that we cannot restore after the target app's Ctrl+C eventually succeeds.
     let original = clipboard.backup_text()?;
-    let (post_ok, outcome) = clipboard.copy_selection();
+    let (post_ok, outcome, copied_sequence) = clipboard.copy_selection();
 
     // Equal text does not imply an unchanged clipboard: a browser or Word may also have
-    // added HTML/RTF. Restore after every observed change, including unreadable copies.
-    // If the sequence never moved, avoid the unnecessary Clipboard History write.
-    if !matches!(&outcome, ClipboardPollOutcome::Unchanged) {
+    // added HTML/RTF. Restore an observed change only while the same copy still owns the
+    // clipboard; a newer external copy takes priority over this temporary borrow.
+    if !matches!(&outcome, ClipboardPollOutcome::Unchanged)
+        && clipboard.sequence() == copied_sequence
+    {
         clipboard.restore_text(original.as_deref().unwrap_or(""));
     }
 
@@ -69,6 +72,8 @@ mod tests {
         copy_result: Option<(bool, ClipboardPollOutcome)>,
         copies: usize,
         restores: usize,
+        sequence: u64,
+        newer_copy: bool,
     }
 
     impl FakeClipboard {
@@ -80,6 +85,8 @@ mod tests {
                 copy_result: Some((true, outcome)),
                 copies: 0,
                 restores: 0,
+                sequence: 1,
+                newer_copy: false,
             }
         }
     }
@@ -94,7 +101,7 @@ mod tests {
             Ok(self.has_text.then(|| self.contents.text.clone()))
         }
 
-        fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome) {
+        fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome, u64) {
             self.copies += 1;
             let result = self.copy_result.take().expect("copy requested only once");
             match &result.1 {
@@ -110,7 +117,17 @@ mod tests {
                 }
                 ClipboardPollOutcome::Unchanged => {}
             }
-            result
+            self.sequence += 1;
+            let copied_sequence = self.sequence;
+            if self.newer_copy {
+                self.contents = ClipboardContents::plain("new external copy");
+                self.sequence += 1;
+            }
+            (result.0, result.1, copied_sequence)
+        }
+
+        fn sequence(&self) -> u64 {
+            self.sequence
         }
 
         fn restore_text(&mut self, text: &str) {
@@ -118,6 +135,21 @@ mod tests {
             self.has_text = true;
             self.contents = ClipboardContents::plain(text);
         }
+    }
+
+    #[test]
+    fn newer_external_copy_is_not_replaced_by_capture_restore() {
+        let mut clipboard = FakeClipboard::new(
+            "original",
+            ClipboardPollOutcome::Captured("selection".into()),
+        );
+        clipboard.newer_copy = true;
+        assert!(capture_with_restore(&mut clipboard).is_ok());
+        assert_eq!(
+            clipboard.contents,
+            ClipboardContents::plain("new external copy")
+        );
+        assert_eq!(clipboard.restores, 0);
     }
 
     #[test]

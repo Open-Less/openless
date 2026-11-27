@@ -19,6 +19,7 @@ fn startup_and_enum_wire_shapes_match_the_canonical_contract() {
             backend: BackendSnapshot {
                 running: true,
                 dictation: DictationStateSnapshot::default(),
+                processing_dictations: Vec::new(),
                 vocabulary_revision: 0,
                 history_revision: 0,
                 style_pack_revision: 0,

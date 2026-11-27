@@ -1129,19 +1129,6 @@ fn spawn_switch_style_pack() {
     coordinator.switch_to_previous_style_pack();
 }
 
-fn spawn_finalize_qa_from_overlay() {
-    let Some(coordinator) = COORDINATOR.get().cloned() else {
-        log::warn!("[android-native] coordinator unavailable");
-        return;
-    };
-    log::info!("[android-native] finalize_qa_from_overlay requested");
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = coordinator.finalize_qa_from_overlay().await {
-            log::warn!("[android-native] finalize_qa_from_overlay failed: {error}");
-        }
-    });
-}
-
 fn spawn_finalize_voice_edit_from_overlay() {
     let Some(coordinator) = COORDINATOR.get().cloned() else {
         return;
@@ -1585,14 +1572,6 @@ mod jni_exports {
         _class: JClass,
     ) {
         spawn_switch_style_pack();
-    }
-
-    #[no_mangle]
-    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeFinalizeQaFromOverlay(
-        _env: *mut JNIEnv,
-        _class: JClass,
-    ) {
-        spawn_finalize_qa_from_overlay();
     }
 
     #[no_mangle]

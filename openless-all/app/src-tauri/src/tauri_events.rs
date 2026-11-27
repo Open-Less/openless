@@ -33,7 +33,8 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
         loop {
             match events.recv().await {
                 Ok(event) => {
-                    let _ = app.emit("backend:event", &event);
+                    let emitted = app.emit("backend:event", &event).is_ok();
+                    backend_for_events.trace_main_dictation_app_route(&event, emitted);
                     if let Some(coordinator) =
                         app.try_state::<Arc<crate::coordinator::Coordinator>>()
                     {
@@ -198,6 +199,13 @@ async fn forward_legacy_event(
             let _ = app.emit("vocab:updated", ());
         }
         BackendEventKind::DictationStateChanged(snapshot) => {
+            let current = backend.snapshot();
+            if current.dictation.session_id.is_some_and(|id| Some(id) != snapshot.session_id) {
+                return;
+            }
+            if current.dictation.session_id.is_none()
+                && current.processing_dictations.first().is_some_and(|job| job.session_id != snapshot.session_id)
+            { return; }
             capsule_owners.transcription_notice = None;
             if snapshot.phase != DictationPhase::Idle {
                 capsule_owners.qa_voice = None;
@@ -208,6 +216,15 @@ async fn forward_legacy_event(
             }
             emit_dictation_state(app, backend, snapshot)
         }
+        BackendEventKind::DictationJobsChanged(jobs) => {
+            let _ = app.emit("dictation:jobs", &jobs);
+            let current = backend.snapshot();
+            if current.dictation.session_id.is_none() {
+                if let Some(job) = jobs.first() {
+                    emit_dictation_state(app, backend, job.clone());
+                }
+            }
+        }
         BackendEventKind::VoiceActivationStateChanged(state) => {
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                 coordinator.present_voice_activation_feedback(&state);
@@ -216,35 +233,21 @@ async fn forward_legacy_event(
         }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
-            capsule_owners.transcription_notice = None;
-            capsule_owners.qa_voice = None;
-            capsule_owners.qa_capsule = None;
             if selection_voice_blocks_dictation_capsule(app) {
                 return;
             }
+            let Some(payload) = crate::capsule_feedback::dictation_completion_payload(
+                &result,
+                &backend.snapshot().dictation,
+                backend.get_preferences().capsule_style,
+            ) else {
+                return;
+            };
+            capsule_owners.transcription_notice = None;
+            capsule_owners.qa_voice = None;
+            capsule_owners.qa_capsule = None;
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
-                let message = match &result.inserted {
-                    openless_core::DictationInsertStatus::Inserted => "已输入",
-                    openless_core::DictationInsertStatus::PasteSent => "已发送粘贴，请确认",
-                    openless_core::DictationInsertStatus::CopiedFallback => "已复制，请手动粘贴",
-                    openless_core::DictationInsertStatus::NotRequested => "处理完成",
-                };
-                coordinator.present_core_capsule(CapsulePayload {
-                    session_id: Some(result.session_id.to_string()),
-                    state: CapsuleState::Done,
-                    level: 0.0,
-                    elapsed_ms: result.duration_ms,
-                    message: Some(message.to_string()),
-                    inserted_chars: Some(
-                        u32::try_from(result.polished_text.chars().count()).unwrap_or(u32::MAX),
-                    ),
-                    translation: false,
-                    operating: false,
-                    warming: false,
-                    capsule_style: backend.get_preferences().capsule_style,
-                    selection_polish: false,
-                    qa: false,
-                });
+                coordinator.present_core_capsule(payload);
             }
         }
         BackendEventKind::RecordingControlRequested(request) => {
@@ -272,6 +275,9 @@ async fn forward_legacy_event(
             });
         }
         BackendEventKind::InsertFallback(fallback) => {
+            if backend.snapshot().dictation.session_id.is_some_and(|id| Some(id) != session_id) {
+                return;
+            }
             if let Some(text) = fallback.copied_text {
                 if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                     coordinator.show_core_insert_fallback(text, &fallback.reason);
@@ -542,6 +548,8 @@ fn map_dictation_state(
     };
     let message = match snapshot.phase {
         DictationPhase::Failed => Some(match snapshot.message.as_deref() {
+            Some("empty_transcript") => "未识别到语音，录音已保留，可在历史中重新转录".to_string(),
+            Some("input_target_changed") => "输入位置已变化或无法确认，未自动输入；结果已保留在历史记录".to_string(),
             Some("PermissionDenied") => "请允许麦克风权限后重试".to_string(),
             Some("Busy") => "另一个语音任务正在进行".to_string(),
             Some("Cancelled") => "已取消".to_string(),
@@ -602,6 +610,12 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
         coordinator.tauri_host().refresh_native_capsule_theme();
     }
     let _ = app.emit("prefs:changed", &preferences);
+    #[cfg(not(mobile))]
+    let _ = app.emit_to(
+        tauri::EventTarget::webview_window(crate::ask_window::LABEL),
+        "ask:window",
+        serde_json::json!({"type": "themeChanged", "themeMode": preferences.theme_mode}),
+    );
 }
 
 fn transcription_notice_payload(
@@ -835,6 +849,7 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut Ca
     }
     emit_preferences(app, backend);
     let snapshot = backend.snapshot();
+    let _ = app.emit("dictation:jobs", &snapshot.processing_dictations);
     if let Some((owner, _)) = owners
         .qa_capsule
         .filter(|_| snapshot.dictation.phase == DictationPhase::Idle)
@@ -849,7 +864,9 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut Ca
             });
         }
     } else {
-        emit_dictation_state(app, backend, snapshot.dictation.clone());
+        emit_dictation_state(app, backend, if snapshot.dictation.session_id.is_none() {
+            snapshot.processing_dictations.first().cloned().unwrap_or_else(|| snapshot.dictation.clone())
+        } else { snapshot.dictation.clone() });
     }
     let _ = app.emit("credentials:changed", snapshot.credentials);
     let _ = app.emit("vocab:updated", ());
@@ -1511,6 +1528,7 @@ mod tests {
     #[test]
     fn internal_failure_tokens_are_not_shown_to_users() {
         for token in [
+            "empty_transcript",
             "InvalidArgument",
             "InvalidState",
             "Busy",

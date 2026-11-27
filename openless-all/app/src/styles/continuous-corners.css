@@ -1,7 +1,7 @@
 /* One radius for interface surfaces; shader geometry and inline help text stay unclipped. */
 :where(
-  button,
-  input,
+  button:not(:where(.qa-prompt button, .qa-conversation .qa-close)),
+  input:not(.ol-field-control),
   select,
   textarea,
   dialog,
@@ -19,7 +19,6 @@
   .ol-pressable,
   .ol-select-trigger,
   .ol-select-popup,
-  .ol-select-search,
   .ol-select-item,
   .ol-switch-thumb,
   .ol-style-icon-edit,
@@ -53,7 +52,6 @@
   .ol-model-dialog-mirror select,
   .ol-model-close,
   .ol-model-filters button,
-  .ol-language-search,
   .ol-language-choice,
   .ol-language-check,
   .ol-voice-edit-card,
@@ -71,12 +69,10 @@
   .ol-chip,
   .ol-seg,
   .ol-seg-item,
-  .ol-search,
   .ol-like,
   .ol-like-bloom,
   .ol-range:focus-visible,
-  .ol-word-card,
-  .ol-word-card-hits,
+  .ol-word-card-face,
   .ol-word-card-action,
   .ol-segmented,
   .ol-segmented-indicator,
@@ -112,7 +108,7 @@
   .ol-intent-instruction,
   .ol-settings-return,
   .ol-settings-sections > .ol-card,
-  .ol-settings-search-field,
+  .ol-field,
   .ol-shortcuts-filters button,
   .ol-shortcut-binding,
   .ol-shortcut-recording,
@@ -120,15 +116,11 @@
   .ol-choice-chips button,
   .ol-advanced-settings-detail > .ol-experimental-models,
   .ol-model-channel-link,
-  .ol-download-card,
-  .ol-download-heading button,
   .ol-startup-mark span,
   .ol-startup-retry,
   .ol-advanced-settings-inline .ol-startup-diagnostics pre,
   .ol-skeleton,
-  .qa-prompt,
-  .qa-voice-pod,
-  .qa-answer-panel,
+  .qa-answer-panel:not(.qa-conversation),
   .qa-user-avatar,
   .qa-user-message p,
   .qa-thinking-dot,
@@ -145,8 +137,8 @@
 
 @supports (corner-shape: superellipse(1.5)) {
   :where(
-    button,
-    input,
+    button:not(:where(.qa-prompt button, .qa-conversation .qa-close)),
+    input:not(.ol-field-control),
     select,
     textarea,
     dialog,
@@ -164,7 +156,6 @@
     .ol-pressable,
     .ol-select-trigger,
     .ol-select-popup,
-    .ol-select-search,
     .ol-select-item,
     .ol-switch-thumb,
     .ol-style-icon-edit,
@@ -198,7 +189,6 @@
     .ol-model-dialog-mirror select,
     .ol-model-close,
     .ol-model-filters button,
-    .ol-language-search,
     .ol-language-choice,
     .ol-language-check,
     .ol-voice-edit-card,
@@ -216,12 +206,10 @@
     .ol-chip,
     .ol-seg,
     .ol-seg-item,
-    .ol-search,
     .ol-like,
     .ol-like-bloom,
     .ol-range:focus-visible,
-    .ol-word-card,
-    .ol-word-card-hits,
+    .ol-word-card-face,
     .ol-word-card-action,
     .ol-segmented,
     .ol-segmented-indicator,
@@ -257,7 +245,7 @@
     .ol-intent-instruction,
     .ol-settings-return,
     .ol-settings-sections > .ol-card,
-    .ol-settings-search-field,
+    .ol-field,
     .ol-shortcuts-filters button,
     .ol-shortcut-binding,
     .ol-shortcut-recording,
@@ -265,15 +253,11 @@
     .ol-choice-chips button,
     .ol-advanced-settings-detail > .ol-experimental-models,
     .ol-model-channel-link,
-    .ol-download-card,
-    .ol-download-heading button,
     .ol-startup-mark span,
     .ol-startup-retry,
     .ol-advanced-settings-inline .ol-startup-diagnostics pre,
     .ol-skeleton,
-    .qa-prompt,
-    .qa-voice-pod,
-    .qa-answer-panel,
+    .qa-answer-panel:not(.qa-conversation),
     .qa-user-avatar,
     .qa-user-message p,
     .qa-thinking-dot,
@@ -338,10 +322,6 @@
   --ol-corner-radius: calc(var(--ol-radius) - 4px);
 }
 
-/* Nested controls use the container's radius less its inset. */
-.ol-seg > .ol-seg-item {
-  --ol-corner-radius: var(--ol-button-radius);
-}
 .ol-segmented > :is(.ol-segmented-indicator, .ol-service-view-indicator, .ol-segmented-option) {
   --ol-corner-radius: var(--ol-button-radius);
 }
@@ -385,7 +365,7 @@ html
     .ol-segmented-option,
     .ol-select-popup,
     .ol-select-trigger,
-    .ol-settings-search-field
+    .ol-field
   ) {
   clip-path: none !important;
   border-radius: var(--ol-corner-radius, var(--ol-radius)) !important;

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::edit_plan::{apply_edit_plan, EditApplyError, EditPlan};
+use crate::edit_plan::{apply_selection_edit_plan, EditApplyError, EditPlan};
 use crate::types::SessionId;
 
 const MAX_TURNS: usize = 64;
@@ -277,7 +277,7 @@ impl VoiceEditSession {
         if preview_before.trim().is_empty() {
             return Err(VoiceEditError::EmptyDraft);
         }
-        let preview_after = apply_edit_plan(&preview_before, &edit_plan)?;
+        let preview_after = apply_selection_edit_plan(&preview_before, &edit_plan)?;
         let context = self
             .context
             .as_mut()

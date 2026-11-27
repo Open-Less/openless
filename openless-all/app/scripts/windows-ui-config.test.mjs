@@ -247,7 +247,7 @@ assertMatch(
 
 assertMatch(
   coordinatorRs,
-  /let visible = !matches!\(state,\s*CapsuleState::Idle\);/,
+  /fn capsule_window_action\([\s\S]*?else if show_capsule && !matches!\(state,\s*CapsuleState::Idle\) \{\s*CapsuleWindowAction::ShowCapsule\s*\} else \{\s*CapsuleWindowAction::HideCapsule/,
   'capsule should stay visible until the unified idle hide path runs',
 );
 assertMatch(
@@ -301,7 +301,7 @@ assertMatch(
 );
 
 if (
-  !/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation \|\| qa,\s*capsuleStyle\);/.test(
+  !/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation,\s*capsuleStyle\);/.test(
     capsuleTsx,
   )
 ) {
@@ -372,7 +372,7 @@ assertMatch(
   'typeless translation row should prevent badge overlap and clipping',
 );
 
-const conditionalReturn = capsuleTsx.indexOf('if (insertFallback)');
+const conditionalReturn = capsuleTsx.indexOf('if (insertFallback');
 const transcriptVisibilityHook = capsuleTsx.indexOf(
   'setCapsuleTranscriptVisible(transcriptVisible)',
 );
