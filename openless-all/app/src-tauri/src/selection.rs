@@ -26,6 +26,7 @@ mod target_position;
 #[path = "selection/direct_delivery.rs"]
 mod direct_delivery;
 #[path = "selection/bound_native.rs"]
+#[cfg(any(target_os = "macos", test))]
 pub(crate) mod bound_native;
 #[cfg(target_os = "windows")]
 use clipboard_capture::ClipboardPollOutcome;
@@ -741,7 +742,9 @@ fn macos_target_is_current(target: &MacosSelectionTarget, pid: i32) -> bool {
                     .as_ref()
                     .is_some_and(|element| {
                         element.is_current() && target.dictation_ax_window.as_ref()
-                            .is_some_and(|window| element.belongs_to_window(window))
+                            .is_some_and(|window| {
+                                element.belongs_to_window(window) && window.is_focused_window(pid)
+                            })
                     })
         })
 }
@@ -1593,6 +1596,20 @@ mod macos_ax {
         }
         pub(super) fn belongs_to_window(&self, window: &Self) -> bool {
             self.window().is_some_and(|current| current.same_as(window))
+        }
+        pub(super) fn is_focused_window(&self, pid: i32) -> bool {
+            unsafe {
+                let application = AXUIElementCreateApplication(pid);
+                if application.is_null() { return false; }
+                AXUIElementSetMessagingTimeout(application, 0.2);
+                let focused = element_attribute(application, b"AXFocusedWindow\0");
+                CFRelease(application as CFTypeRef);
+                focused.is_some_and(|focused| {
+                    let same = CFEqual(self.0 as CFTypeRef, focused) != 0;
+                    CFRelease(focused);
+                    same
+                })
+            }
         }
         pub(super) fn identity_hash(&self) -> usize {
             unsafe { CFHash(self.0 as CFTypeRef) }
