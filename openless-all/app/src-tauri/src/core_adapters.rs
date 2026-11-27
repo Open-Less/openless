@@ -1289,14 +1289,11 @@ impl TauriSelectionRuntime {
             next_capture_generation: AtomicU64::new(1),
         }
     }
-}
-
-#[cfg(not(mobile))]
-impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
-    fn capture(
+    fn capture_with_authorization(
         &self,
         session_id: SessionId,
         supplied_text: Option<String>,
+        authorization: Option<openless_core::SelectionCaptureAuthorization>,
     ) -> BoxFuture<'static, Result<openless_core::SelectionCapture, BackendError>> {
         if supplied_text.is_some() {
             return Box::pin(async {
@@ -1311,6 +1308,14 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
         // already cancellable, and can never publish over a later generation.
         let mut reservation = {
             let mut targets = self.targets.lock();
+            // Core revokes A before making cancellation/B visible. Check under
+            // the same lock that serializes A/B reservation, before touching B.
+            // An unlocked "still active" check before this section is not enough.
+            if authorization.as_ref().is_some_and(|authority| !authority.allows(session_id)) {
+                return Box::pin(async {
+                    Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture revoked"))
+                });
+            }
             if targets.contains_key(&session_id) {
                 return Box::pin(async {
                     Err(BackendError::new(BackendErrorCode::Busy,
@@ -1341,12 +1346,17 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
             }
         };
         Box::pin(async move {
-            if reservation.cancelled.load(Ordering::Acquire) {
+            if reservation.cancelled.load(Ordering::Acquire)
+                || authorization.as_ref().is_some_and(|authority| !authority.allows(session_id))
+            {
                 return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture expired"));
             }
             let cancelled = Arc::clone(&reservation.cancelled);
+            let worker_authorization = authorization.clone();
             let (capture, mut target) = tauri::async_runtime::spawn_blocking(move || {
-                if cancelled.load(Ordering::Acquire) {
+                if cancelled.load(Ordering::Acquire)
+                    || worker_authorization.as_ref().is_some_and(|authority| !authority.allows(session_id))
+                {
                     return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture expired"));
                 }
                 bridge.capture()
@@ -1359,6 +1369,7 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
             let slot = targets.get_mut(&session_id).filter(|slot| {
                 slot.generation == reservation.generation
                     && !slot.cancelled.load(Ordering::Acquire)
+                    && authorization.as_ref().is_none_or(|authority| authority.allows(session_id))
             });
             let Some(slot) = slot else {
                 target.cancelled.store(true, Ordering::Release);
@@ -1375,6 +1386,26 @@ impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
             reservation.armed = false;
             Ok(capture)
         })
+    }
+}
+
+#[cfg(not(mobile))]
+impl openless_core::SelectionRuntimeAdapter for TauriSelectionRuntime {
+    fn capture(
+        &self,
+        session_id: SessionId,
+        supplied_text: Option<String>,
+    ) -> BoxFuture<'static, Result<openless_core::SelectionCapture, BackendError>> {
+        self.capture_with_authorization(session_id, supplied_text, None)
+    }
+
+    fn capture_authorized(
+        &self,
+        session_id: SessionId,
+        supplied_text: Option<String>,
+        authorization: openless_core::SelectionCaptureAuthorization,
+    ) -> BoxFuture<'static, Result<openless_core::SelectionCapture, BackendError>> {
+        self.capture_with_authorization(session_id, supplied_text, Some(authorization))
     }
 
     fn protect_original(
@@ -6852,6 +6883,146 @@ mod tests {
             1
         );
         assert_eq!(bridge.apply_calls.lock().len(), 1);
+    }
+
+    #[cfg(not(mobile))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelled_core_begin_cannot_arrive_after_b_and_replace_its_reservation() {
+        use openless_core::{
+            SelectionCapture, SelectionCaptureAuthorization, SelectionPhase,
+            SelectionPolishOutputMode, SelectionPolishRequest, SelectionRuntimeAdapter,
+        };
+        // Pause before the real adapter sees A. Pausing bridge.capture would
+        // already have reserved A and would miss the Core -> host admission gap.
+        struct BeforeHost {
+            runtime: Arc<TauriSelectionRuntime>,
+            pause: Mutex<Option<(Arc<tokio::sync::Notify>, std::sync::mpsc::Receiver<()>)>>,
+        }
+        impl SelectionRuntimeAdapter for BeforeHost {
+            fn capture(
+                &self, id: SessionId, text: Option<String>,
+            ) -> BoxFuture<'static, Result<SelectionCapture, BackendError>> {
+                self.runtime.capture(id, text)
+            }
+            fn capture_authorized(
+                &self,
+                id: SessionId,
+                text: Option<String>,
+                admission: SelectionCaptureAuthorization,
+            ) -> BoxFuture<'static, Result<SelectionCapture, BackendError>> {
+                let pause = self.pause.lock().take();
+                if let Some((entered, release)) = pause {
+                    entered.notify_one();
+                    if release.recv_timeout(std::time::Duration::from_secs(5)).is_err() {
+                        return Box::pin(async {
+                            Err(BackendError::new(BackendErrorCode::Internal, "fixture admission timeout"))
+                        });
+                    }
+                }
+                self.runtime.capture_authorized(id, text, admission)
+            }
+            fn protect_original(
+                &self, id: SessionId, text: String,
+            ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+                self.runtime.protect_original(id, text)
+            }
+            fn prepare_preview(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                self.runtime.prepare_preview(id)
+            }
+            fn apply(
+                &self, id: SessionId, source: String, replacement: String,
+            ) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+                self.runtime.apply(id, source, replacement)
+            }
+            fn revert(&self, id: SessionId) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+                self.runtime.revert(id)
+            }
+            fn cancel(&self, id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+                self.runtime.cancel(id)
+            }
+        }
+
+        let bridge = Arc::new(TestSelectionPlatformBridge::default());
+        let runtime = Arc::new(TauriSelectionRuntime::with_bridge(bridge.clone()));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (release, released) = std::sync::mpsc::channel();
+        let adapter = Arc::new(BeforeHost {
+            runtime: runtime.clone(),
+            pause: Mutex::new(Some((entered.clone(), released))),
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let mut dependencies = openless_core::BackendDependencies::unsupported();
+        dependencies.selection_runtime = Some(adapter);
+        dependencies.selection_polisher = Some(Arc::new(
+            openless_core::testing::FixtureTextPolisher::successful("B result"),
+        ));
+        dependencies.host_actions = Arc::new(openless_core::NoopHostActions);
+        let backend = Arc::new(openless_core::OpenLessBackend::new(
+            openless_core::BackendConfig {
+                data_dir: directory.path().to_path_buf(), ..Default::default()
+            }, dependencies,
+        ).unwrap());
+        let mut preferences = backend.get_preferences();
+        preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+        backend.update_settings(
+            preferences, openless_core::SettingsUpdateOptions::STRICT, &openless_core::NoopSettingsRuntime,
+        ).unwrap();
+        backend.start().await.unwrap();
+        let mut events = backend.subscribe();
+        let selection = backend.services().selection.clone();
+        let a = tokio::spawn(async move {
+            selection.begin_polish(SelectionPolishRequest {
+                selected_text: None, mode: openless_core::PolishMode::Light, instruction: None,
+            }).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified()).await.unwrap();
+        // Core is accessible while an arbitrary adapter callback is blocked:
+        // no Core state lock is held across that callback.
+        let snapshot_a = backend.services().selection.snapshot().await.unwrap();
+        let a_id = snapshot_a.session_id.unwrap();
+        assert_eq!(snapshot_a.phase, SelectionPhase::Capturing);
+        let mut published_a = false;
+        while let Ok(event) = events.try_recv() {
+            if let openless_core::BackendEventKind::SelectionStateChanged(snapshot) = event.kind {
+                published_a |= snapshot.session_id == Some(a_id) && snapshot.phase == SelectionPhase::Capturing;
+            }
+        }
+        assert!(published_a);
+        assert!(runtime.targets.lock().is_empty(), "A has not reached host reservation");
+        backend.services().selection.cancel(Some(a_id)).await.unwrap();
+
+        let b_id = backend.services().selection.begin_polish(SelectionPolishRequest {
+            selected_text: None, mode: openless_core::PolishMode::Light, instruction: None,
+        }).await.unwrap();
+        assert_ne!(a_id, b_id);
+        assert!(runtime.targets.lock().get(&b_id).unwrap().ready.is_some());
+        // Only now let the cancelled A actually call the real host adapter.
+        release.send(()).unwrap();
+        assert_eq!(tokio::time::timeout(std::time::Duration::from_secs(2), a)
+            .await.unwrap().unwrap().unwrap_err().code, BackendErrorCode::Cancelled);
+        assert!(runtime.targets.lock().get(&b_id).is_some_and(|slot| {
+            slot.ready.is_some() && !slot.cancelled.load(Ordering::Acquire)
+        }));
+        assert_eq!(runtime.next_capture_generation.load(Ordering::Relaxed), 2,
+            "revoked A must not even allocate another host generation");
+        assert_eq!(bridge.capture_calls.load(Ordering::Acquire), 1);
+        assert_eq!(bridge.protect_calls.lock().as_slice(), ["source"]);
+        let before = backend.list_history().unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].id, b_id.to_string());
+        assert_eq!(before[0].raw_transcript, "source");
+        assert_eq!(before[0].final_text, "B result");
+        backend.services().selection.confirm(b_id, None).await.unwrap();
+        assert!(backend.services().selection.confirm(b_id, None).await.is_err());
+        assert_eq!(bridge.apply_calls.lock().as_slice(),
+            [("source".to_string(), "B result".to_string(), true)]);
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].raw_transcript, before[0].raw_transcript);
+        assert_eq!(history[0].final_text, before[0].final_text);
+        backend.shutdown().await.unwrap();
+        drop(backend);
+        drop(directory);
     }
 
     #[cfg(not(mobile))]
