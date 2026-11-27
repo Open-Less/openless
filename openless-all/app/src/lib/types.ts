@@ -858,6 +858,26 @@ export type CapsuleState =
 /** Recording capsule style: 'siri' = flowing Siri light-effect version (default); 'classic' = Openless classic pill version. */
 export type CapsuleStyle = 'siri' | 'classic' | 'typeless';
 
+export interface CapsuleStyleMenuRequest {
+  sessionId: string;
+  requestId: string;
+}
+
+export interface CapsuleStyleMenuIdentity {
+  sessionId: string;
+  menuId: string;
+}
+
+export interface CapsuleStyleMenuOwner extends CapsuleStyleMenuIdentity {
+  windowLabel: string;
+  keyboardAvailable: boolean;
+}
+
+export interface CapsuleStyleMenuKey extends CapsuleStyleMenuIdentity {
+  key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Escape';
+  repeat: boolean;
+}
+
 export interface CapsulePayload {
   qa?: boolean;
   /** Session generation that owns this capsule frame. */

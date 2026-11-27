@@ -14,7 +14,7 @@ import {
 } from '../../api/dictation';
 import { localizedLanguages, nativeLanguageName } from '../../lib/languageCatalog';
 import { isTranslationTargetRedundant } from '../../lib/translationTarget';
-import type { CapsulePickerDeps, CapsulePickerMenu } from './capsulePickerMenu';
+import { CapsulePickerMenu, type CapsulePickerDeps } from './capsulePickerMenu';
 import { useCapsulePickerMenu } from './useCapsulePickerMenu';
 import './CapsuleStyles.css';
 
@@ -27,12 +27,13 @@ export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
   visible = true,
   processing = false,
 }: {
-  pickerController: CapsulePickerMenu;
+  pickerController?: CapsulePickerMenu;
   visible?: boolean;
   processing?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const reduced = useReducedMotion();
+  const [standalonePicker] = useState(() => pickerController ?? new CapsulePickerMenu());
   const [snapshot, setSnapshot] = useState<DictationTranslationTarget | null>(null);
   const [savedTarget, setSavedTarget] = useState('');
   const [busy, setBusy] = useState(false);
@@ -120,7 +121,7 @@ export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
   }, [snapshot?.sessionId]);
 
   const menu = useCapsulePickerMenu({
-    controller: pickerController,
+    controller: pickerController ?? standalonePicker,
     kind: 'language',
     setNativeMenu,
     anchor,
@@ -199,7 +200,7 @@ export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
               onChange={(value) => void change(value)}
               side="top"
               popupStyle={{ width: 240 }}
-              popupClassName="ol-capsule-language-popup"
+              popupClassName="ol-capsule-picker-popup"
             />
           </div>
         </div>

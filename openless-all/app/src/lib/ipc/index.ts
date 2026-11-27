@@ -103,6 +103,7 @@ export {
   setCapsuleTranscriptVisible,
   handleWindowHotkeyEvent,
   getDictationStyleTarget,
+  getCapsuleStyleMenuRequest,
   updateDictationStyle,
   setCapsuleStyleMenu,
 } from './dictation';

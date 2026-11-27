@@ -1,3 +1,9 @@
+import type {
+  CapsuleStyleMenuIdentity,
+  CapsuleStyleMenuKey,
+  CapsuleStyleMenuOwner,
+} from '../../api/contracts';
+
 /**
  * Session-bound lifecycle shared by the capsule's language and style pickers.
  *
@@ -22,7 +28,11 @@ export interface CapsulePickerOwner {
 
 export interface CapsulePickerDeps {
   /** Reserve (`true`) or restore (`false`) the native headroom for a session. */
-  setNativeMenu: (open: boolean, owner: CapsulePickerOwner) => Promise<void>;
+  setNativeMenu: (
+    open: boolean,
+    owner: CapsulePickerOwner,
+    nativeOwner?: CapsuleStyleMenuOwner,
+  ) => Promise<CapsuleStyleMenuOwner | void>;
   /** Whether a native host owns the geometry; the browser preview has none. */
   native: boolean;
   /** Resolves once the anchor and viewport can hold the popup. */
@@ -38,6 +48,12 @@ interface Reservation extends CapsulePickerOwner {
   abort: AbortController;
   nativeWriteStarted: boolean;
   mounted: boolean;
+  nativeOwner?: CapsuleStyleMenuOwner;
+  styleInput?: {
+    keys: CapsuleStyleMenuKey[];
+    closedMenuIds: Set<string>;
+    receiveKey?: (event: CapsuleStyleMenuKey) => void;
+  };
 }
 
 export class CapsulePickerMenu {
@@ -66,6 +82,47 @@ export class CapsulePickerMenu {
     }
   }
 
+  receiveStyleKey(event: CapsuleStyleMenuKey) {
+    const owner = this.styleReservation(event);
+    if (!owner?.styleInput || owner.nativeOwner?.keyboardAvailable === false) return;
+    const input = owner.styleInput;
+    if (input.receiveKey) {
+      input.receiveKey(event);
+    } else if (input.keys.length < 64) {
+      // The host can route keys as soon as it reserves geometry, before the
+      // response returns or React has mounted the list.
+      input.keys.push(event);
+    }
+  }
+
+  receiveStyleClose(event: CapsuleStyleMenuIdentity) {
+    const owner = this.styleReservation(event);
+    if (!owner) return;
+    if (owner.nativeOwner) {
+      owner.nativeWriteStarted = false;
+      this.close('style');
+    } else {
+      owner.styleInput?.closedMenuIds.add(event.menuId);
+    }
+  }
+
+  enableStyleKeys(
+    sessionId: string,
+    requestId: string,
+    receiveKey: (event: CapsuleStyleMenuKey) => void,
+  ) {
+    const owner = this.reservation;
+    if (
+      !owner?.mounted ||
+      !owner.styleInput ||
+      !owner.nativeOwner?.keyboardAvailable ||
+      !this.owns('style', sessionId, requestId)
+    )
+      return;
+    owner.styleInput.receiveKey = receiveKey;
+    for (const key of owner.styleInput.keys.splice(0)) this.receiveStyleKey(key);
+  }
+
   async open(request: CapsulePickerOwner, deps: CapsulePickerDeps) {
     const previous = this.reservation;
     if (
@@ -85,6 +142,7 @@ export class CapsulePickerMenu {
       abort: new AbortController(),
       nativeWriteStarted: false,
       mounted: false,
+      styleInput: request.kind === 'style' ? { keys: [], closedMenuIds: new Set() } : undefined,
     };
     this.reservation = owner;
     try {
@@ -92,8 +150,15 @@ export class CapsulePickerMenu {
         await this.enqueue(async () => {
           if (owner.abort.signal.aborted) return;
           owner.nativeWriteStarted = true;
-          await deps.setNativeMenu(true, owner);
+          const nativeOwner = await deps.setNativeMenu(true, owner);
+          if (!nativeOwner) return;
+          owner.nativeOwner = nativeOwner;
+          if (owner.styleInput?.closedMenuIds.has(nativeOwner.menuId)) {
+            owner.nativeWriteStarted = false;
+            if (this.reservation === owner) this.close(owner.kind);
+          }
         });
+        if (owner.abort.signal.aborted) return;
         await deps.waitForGeometry(owner.abort.signal);
       }
       if (this.reservation !== owner || owner.abort.signal.aborted) return;
@@ -147,6 +212,17 @@ export class CapsulePickerMenu {
     if (this.exiting?.kind === kind) this.release(this.exiting);
   }
 
+  private styleReservation(event: CapsuleStyleMenuIdentity) {
+    const owner = this.reservation;
+    if (
+      owner?.styleInput &&
+      owner.nativeWriteStarted &&
+      owner.sessionId === event.sessionId &&
+      (!owner.nativeOwner || owner.nativeOwner.menuId === event.menuId)
+    )
+      return owner;
+  }
+
   private enqueue(operation: () => Promise<void>) {
     const result = this.tail.catch(() => undefined).then(operation);
     this.tail = result;
@@ -159,10 +235,8 @@ export class CapsulePickerMenu {
     void this.enqueue(async () => {
       if (owner.nativeWriteStarted) {
         owner.nativeWriteStarted = false;
-        await owner.deps.setNativeMenu(false, owner);
+        await owner.deps.setNativeMenu(false, owner, owner.nativeOwner);
       }
-    }).catch((error) =>
-      console.warn('[capsule] failed to restore picker menu geometry', error),
-    );
+    }).catch((error) => console.warn('[capsule] failed to restore picker menu geometry', error));
   }
 }

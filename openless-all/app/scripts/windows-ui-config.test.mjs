@@ -358,7 +358,7 @@ assertMatch(
 );
 assertMatch(
   capsuleTsx,
-  /getClassicCapsuleGeometry\([\s\S]*?transcriptInSameWindow[\s\S]*?badgeBottomOffset/,
+  /getClassicCapsuleGeometry\([\s\S]*?!splitTranscriptRail,?\s*\)\.badgeBottomOffset/,
   'Classic external rail should use the shared badge/body geometry instead of bypassing offset',
 );
 assertMatch(
