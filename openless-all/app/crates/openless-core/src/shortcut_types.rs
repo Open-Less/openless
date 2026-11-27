@@ -926,6 +926,9 @@ pub fn validate_skip_auto_style_hotkey(binding: &ShortcutBinding) -> Result<(), 
     if binding.is_unassigned() { return Ok(()); }
     validate_shortcut_binding(binding).map_err(|error| error.to_string())?;
     reject_side_specific_non_dictation(binding)?;
+    if cfg!(target_os = "windows") && legacy_modifier_trigger(binding).is_some() {
+        return Err("Windows 跳过自动风格快捷键暂仅支持组合键".into());
+    }
     // The native tap path supports physical modifier keys; a generic Shift
     // belongs to translation, and media/Fn have platform system actions.
     if binding.modifiers.is_empty() && legacy_modifier_trigger(binding).is_none() {

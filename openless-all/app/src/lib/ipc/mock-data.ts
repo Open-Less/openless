@@ -98,7 +98,9 @@ export let mockSettings: UserPreferences = {
     primary:
       typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
         ? 'LeftCommand'
-        : 'LeftAlt',
+        : typeof navigator !== 'undefined' && /Win/.test(navigator.platform)
+          ? ''
+          : 'LeftAlt',
     modifiers: [],
   },
   skipAutoStylePickerEnabled: false,

@@ -140,13 +140,6 @@ pub struct ShiftTranslationGesture {
 }
 
 impl ShiftTranslationGesture {
-    /// Lets the host suppress the release of a standalone system modifier even
-    /// when its recording ended between down and up. It must not toggle a new owner.
-    pub fn pending_tap(&self, key: u16, now: Instant) -> bool {
-        self.press.is_some_and(|(pressed, at)| pressed == key
-            && now.saturating_duration_since(at) <= TAP_MAX)
-    }
-
     pub fn reset(&mut self) {
         *self = Self::default();
     }

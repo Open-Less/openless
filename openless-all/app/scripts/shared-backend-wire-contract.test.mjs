@@ -797,6 +797,13 @@ for (const field of ['skip_auto_style', 'style_pack_id', 'style_pack_name']) {
   assert.ok(sharedTypes.includes(`pub ${field}:`), `capsule must expose ${field}`);
 }
 assert.match(coordinatorHotkeys, /set_skip_auto_style_source/);
+const restoreHotkeys = await read('src-tauri/src/coordinator/restore_runtime.rs');
+assert.match(restoreHotkeys, /inner\.skip_auto_style_hotkey\.lock\(\)\.take\(\)/);
+assert.match(
+  restoreHotkeys,
+  /update_skip_auto_style_hotkey_on_main\(inner, target\.skip_auto_style\.clone\(\)\)/,
+  'absolute restore and journal rollback must install the target style binding',
+);
 assert.match(coordinatorHotkeys, /toggle_dictation_style_for_session\(context\.session_id\)/);
 assert.match(styleCommand, /set_capsule_picker_menu_impl\(window, coord, session_id, open, true\)/);
 assert.match(
