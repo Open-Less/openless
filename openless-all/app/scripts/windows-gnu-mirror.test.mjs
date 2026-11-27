@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
@@ -24,13 +25,14 @@ for (const pattern of [
   /Test-Path -LiteralPath \$src -PathType Leaf/,
   /\.openless-mirror-manifest\.txt/,
   /\[IO\.File\]::ReadAllLines\(\$manifestPath, \[Text\.Encoding\]::UTF8\)/,
-  /\$inputs -contains \$previous/,
+  /\[Collections\.Generic\.HashSet\[string\]\]::new\(\[string\[\]\]\$inputs, \[StringComparer\]::OrdinalIgnoreCase\)/,
+  /\$inputSet\.Contains\(\$previous\)/,
   /Resolve-MirrorInput \$previous/,
   /Remove-Item -LiteralPath \$stale -Force/,
   /Get-ChildItem -LiteralPath \$parent -Force/,
   /\$destination\.StartsWith\(\$mirrorPrefix, \[StringComparison\]::OrdinalIgnoreCase\)/,
   /ReparsePoint/,
-  /node_modules\|target\|dist\|\\\.artifacts/,
+  /\$normalized = \$relative -replace '\\\\', '\/'/,
   /\[IO\.File\]::WriteAllLines\(\$manifestPath, \[string\[\]\]\$inputs, \[Text\.UTF8Encoding\]::new\(\$false\)\)/,
   /Join-Path \$MirrorRoot "app"/,
 ])
@@ -39,6 +41,58 @@ assert.ok(
   script.indexOf('Remove-Item -LiteralPath $stale') < script.indexOf('Copy-Item -LiteralPath'),
 );
 assert.ok(script.indexOf('Copy-Item -LiteralPath') < script.indexOf('[IO.File]::WriteAllLines'));
+
+const guard = script.match(/\$normalized -match '([^']+)'/);
+assert.ok(guard, 'protected-cache regex must be extracted from the PowerShell guard');
+const protectedCache = new RegExp(guard[1], 'i');
+const normalize = (path) => path.replaceAll('\\', '/');
+const repositoryInputs = execFileSync(
+  'git',
+  [
+    '-c',
+    'core.quotePath=false',
+    'ls-files',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+    '--',
+    '.',
+  ],
+  { cwd: new URL('../..', import.meta.url), encoding: 'utf8' },
+)
+  .split(/\r?\n/)
+  .filter(Boolean);
+const targetSource = 'app/src-tauri/src/ask_window/target/macos.rs';
+assert.ok(
+  repositoryInputs.includes(targetSource),
+  'real git inputs must include the target module',
+);
+for (const path of repositoryInputs) {
+  for (const variant of [path, path.replaceAll('/', '\\')]) {
+    assert.doesNotMatch(normalize(variant), protectedCache, `repository input: ${variant}`);
+  }
+}
+const protectedCaches = [
+  'node_modules/cached.js',
+  'target/cache',
+  'dist/cache',
+  '.artifacts/cache',
+  'app/node_modules/cached.js',
+  'app/src/nested/node_modules/cached.js',
+  'app/target/cache',
+  'app/src-tauri/target/cache',
+  'app/src-tauri/backend-tests/target/cache',
+  'app/dist/cache',
+  'app/.artifacts/cache',
+  'linux/egui/target/cache',
+  'harmony/rust/target/cache',
+  'ios/CoreHost/target/cache',
+];
+for (const path of protectedCaches) {
+  for (const variant of [path, path.replaceAll('/', '\\')]) {
+    assert.match(normalize(variant), protectedCache, `protected cache: ${variant}`);
+  }
+}
 
 // Filesystem fixture of the manifest algorithm; PowerShell execution belongs
 // to the Windows runner. Only manifest-owned files may be removed.
@@ -51,9 +105,10 @@ const put = (root, path, text = path) => {
   writeFileSync(join(root, path), text);
 };
 const destination = (path) => {
-  const target = resolve(mirror, path);
+  const normalized = normalize(path);
+  const target = resolve(mirror, normalized);
   assert.ok(target.startsWith(mirror + sep), 'input must remain inside mirror');
-  assert.doesNotMatch(path, /(^|[\\/])(node_modules|target|dist|\.artifacts)([\\/]|$)/);
+  assert.doesNotMatch(normalized, protectedCache);
   for (let ancestor = target; ancestor !== mirror; ancestor = dirname(ancestor)) {
     if (existsSync(ancestor)) assert.equal(lstatSync(ancestor).isSymbolicLink(), false);
   }
@@ -68,11 +123,12 @@ const sync = (enumerated) => {
       ),
     ),
   ].sort();
+  const inputSet = new Set(inputs.map((path) => path.toLowerCase()));
   const previous = existsSync(manifest)
     ? readFileSync(manifest, 'utf8').split('\n').filter(Boolean)
     : [];
   for (const path of previous) {
-    if (inputs.includes(path)) continue;
+    if (inputSet.has(path.toLowerCase())) continue;
     const target = destination(path);
     if (existsSync(target) && lstatSync(target).isFile()) rmSync(target);
     for (
@@ -100,17 +156,13 @@ try {
     'windows/ime/input.cpp',
     'linux/egui/Cargo.toml',
     'harmony/rust/Cargo.toml',
+    targetSource,
   ];
   for (const path of original) put(source, path);
   assert.deepEqual(sync([...original, '', '   ']), [...original].sort());
   for (const path of original) assert.equal(readFileSync(join(mirror, path), 'utf8'), path);
   assert.notEqual(readFileSync(manifest)[0], 0xef, 'manifest is UTF-8 without BOM');
-  for (const path of [
-    'app/node_modules/cached.js',
-    'app/src-tauri/target/cache',
-    'app/target/cache',
-    'app/dist/cache',
-  ]) {
+  for (const path of protectedCaches) {
     put(mirror, path, 'keep');
   }
   rmSync(join(source, original[0]));
@@ -122,22 +174,22 @@ try {
   assert.equal(existsSync(join(mirror, 'app/public/retired')), false);
   assert.equal(existsSync(join(mirror, original[1])), false);
   assert.equal(readFileSync(join(mirror, 'app/src/renamed.ts'), 'utf8'), 'renamed');
-  for (const path of [
-    'app/node_modules/cached.js',
-    'app/src-tauri/target/cache',
-    'app/target/cache',
-    'app/dist/cache',
-  ]) {
+  assert.equal(readFileSync(join(mirror, targetSource), 'utf8'), targetSource);
+  for (const path of protectedCaches) {
     assert.equal(readFileSync(join(mirror, path), 'utf8'), 'keep');
   }
   sync([...original, 'app/src/renamed.ts']); // reuse remains idempotent
-  for (const invalid of [
-    '../outside',
-    'app/node_modules/cached.js',
-    'app/src-tauri/target/cache',
-  ]) {
-    writeFileSync(manifest, invalid + '\n');
-    assert.throws(() => sync([]));
+  assert.equal(readFileSync(join(mirror, targetSource), 'utf8'), targetSource);
+  rmSync(join(source, targetSource));
+  sync([...original, 'app/src/renamed.ts']);
+  assert.equal(existsSync(join(mirror, targetSource)), false);
+  assert.equal(existsSync(dirname(join(mirror, targetSource))), false);
+  for (const invalid of ['../outside', ...protectedCaches]) {
+    for (const variant of [invalid, invalid.replaceAll('/', '\\')]) {
+      assert.throws(() => destination(variant));
+      writeFileSync(manifest, variant + '\n');
+      assert.throws(() => sync([]));
+    }
   }
 } finally {
   rmSync(scratch, { recursive: true, force: true });
