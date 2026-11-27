@@ -290,6 +290,7 @@ async fn submitted_segments_release_capture_and_isolate_success_failure_and_canc
                             line_breaks: 1,
                             exclamations: 0,
                             terminal_punctuation: 0,
+                            ..Default::default()
                         },
                     )
                     .unwrap();

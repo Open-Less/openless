@@ -1,7 +1,8 @@
 import { invokeOrMock } from './shared';
 
 export interface StableExpressionDirection {
-  feature: 'lineBreaks' | 'exclamations' | 'terminalPunctuation';
+  feature: 'lineBreaks' | 'exclamations' | 'terminalPunctuation'
+    | 'listUsage' | 'courteousTone' | 'conciseWording';
   direction: -1 | 1;
 }
 

@@ -2980,10 +2980,8 @@ impl EditObservationSink for CoreEditObservationSink {
         if self.generation.load(Ordering::Acquire) != self.expected_generation {
             return false;
         }
-        if !crate::correction_observation::permits_vocabulary_suggestion(&self.typed_text, &edit) {
-            return false;
-        }
-        let rules = crate::host_document::learned_rules_with_max_chars(
+        let rules = crate::correction_observation::vocabulary_candidates(
+            &self.typed_text,
             &edit,
             self.settings.max_phrase_chars as usize,
         );
@@ -3022,10 +3020,15 @@ fn queue_pending_correction_state(
     generation: Option<(&AtomicU64, u64)>,
     suggestion_seconds: u32,
 ) -> Result<Option<PendingCorrection>, BackendError> {
-    if pattern.trim().is_empty() || replacement.trim().is_empty() {
+    if [pattern.as_str(), replacement.as_str()].iter().any(|value| {
+        value.trim().is_empty()
+            || value.chars().count() > 64
+            || value.chars().any(char::is_control)
+            || crate::expression_observation::contains_sensitive_text(value)
+    }) {
         return Err(BackendError::new(
             BackendErrorCode::InvalidArgument,
-            "correction pattern and replacement are required",
+            "correction requires bounded, non-sensitive words",
         ));
     }
     let (suggestion, snapshot) = {
@@ -11321,6 +11324,7 @@ mod tests {
             line_breaks: 1,
             exclamations: 0,
             terminal_punctuation: 0,
+            ..Default::default()
         };
         for index in 0..10 {
             profile
@@ -11510,7 +11514,7 @@ mod tests {
             settings: backend.get_preferences().vocabulary_learning_settings,
             expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
             generation: Arc::clone(&backend.edit_observation_generation),
-            typed_text: "甲".repeat(13),
+            typed_text: "请使用 codx 完成任务".into(),
             pending: Arc::clone(&backend.pending_corrections),
             events: Arc::clone(&backend.events),
         };
@@ -11519,10 +11523,10 @@ mod tests {
             std::time::Duration::from_secs(20)
         );
         let edit = crate::host_document::EditPair {
-            source: "甲".repeat(13),
-            target: "乙".repeat(13),
-            before: String::new(),
-            after: String::new(),
+            source: "x".into(),
+            target: "ex".into(),
+            before: "请使用 cod".into(),
+            after: " 完成任务".into(),
         };
         let before = chrono::Utc::now().timestamp_millis();
         assert!(sink.publish(edit.clone()));
@@ -11581,12 +11585,56 @@ mod tests {
         let vocabulary = backend.list_vocabulary().unwrap();
         assert_eq!(vocabulary.len(), 1);
         assert_eq!(vocabulary[0].phrase, "VIP");
+        assert!(backend.asr_vocabulary_phrases().contains(&"VIP".to_string()));
+        assert!(backend.enabled_vocabulary_phrases().contains(&"VIP".to_string()));
         assert!(backend.list_correction_rules().unwrap().is_empty());
 
         // A matching changed letter is insufficient when the recovered word
         // came from outside this insertion.
         assert!(!sink.publish(crate::host_document::minimal_edit("Zebra", "Vebra").unwrap()));
         assert_eq!(backend.pending_corrections().len(), 1);
+        // Confirmation is the commit boundary. A later recording snapshots
+        // the complete corrected name for ASR and postprocessing, never "x".
+        backend
+            .accept_pending_correction(&suggestions[1].id)
+            .unwrap();
+        assert!(backend.asr_vocabulary_phrases().contains(&"codex".to_string()));
+        assert!(!backend.asr_vocabulary_phrases().contains(&"x".to_string()));
+        assert!(!sink.publish(crate::host_document::EditPair {
+            source: "你好，ZIP和codx".into(),
+            target: "改成下周讨论文档就好了".into(),
+            before: String::new(),
+            after: String::new(),
+        }));
+        assert!(backend.pending_corrections().is_empty());
+        assert_eq!(backend.list_vocabulary().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn dismissed_observation_confirmation_and_sensitive_queue_are_rejected() {
+        let (backend, _) = backend();
+        let sink = CoreEditObservationSink {
+            session_id: SessionId::new(),
+            settings: backend.get_preferences().vocabulary_learning_settings,
+            expected_generation: backend.edit_observation_generation.load(Ordering::Acquire),
+            generation: Arc::clone(&backend.edit_observation_generation),
+            typed_text: "请使用 codx 完成任务".into(),
+            pending: Arc::clone(&backend.pending_corrections),
+            events: Arc::clone(&backend.events),
+        };
+        assert!(sink.publish(crate::host_document::minimal_edit(
+            "请使用 codx 完成任务",
+            "请使用 codex 完成任务",
+        ).unwrap()));
+        let suggestion = backend.pending_corrections().pop().unwrap();
+        backend.disarm_edit_observation();
+        backend.dismiss_pending_corrections();
+        assert!(backend.accept_pending_correction(&suggestion.id).unwrap().is_none());
+        assert!(backend.list_vocabulary().unwrap().is_empty());
+        assert!(backend.queue_pending_correction(
+            "old".into(),
+            "api_key: fixture".into(),
+        ).is_err());
     }
 
     #[test]

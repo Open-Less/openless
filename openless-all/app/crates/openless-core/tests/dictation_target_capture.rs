@@ -1736,6 +1736,7 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
                     line_breaks: 1,
                     exclamations: 0,
                     terminal_punctuation: 0,
+                    ..Default::default()
                 },
             )
             .unwrap();

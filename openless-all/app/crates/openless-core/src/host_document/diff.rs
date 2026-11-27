@@ -1,6 +1,9 @@
 use unicode_normalization::char::is_combining_mark;
 
 const MAX_EDIT_CHARS: usize = 64;
+// Expression edits can span several list items. Lexical LCS remains separately
+// capped at MAX_EDIT_CHARS; observation itself is a bounded linear diff.
+const MAX_OBSERVED_EDIT_CHARS: usize = 16_384;
 const CONTEXT_CHARS: usize = 256;
 const MIN_PATTERN_CHARS: usize = 2;
 const MAX_PHRASE_CHARS: usize = 12;
@@ -28,9 +31,7 @@ pub fn minimal_edit(before_text: &str, after_text: &str) -> Option<EditPair> {
         .count();
     let source: String = old[prefix..old.len() - suffix].iter().collect();
     let target: String = new[prefix..new.len() - suffix].iter().collect();
-    if source.chars().count().max(target.chars().count()) > MAX_EDIT_CHARS
-        || strip_whitespace(&source) == strip_whitespace(&target)
-    {
+    if source.chars().count().max(target.chars().count()) > MAX_OBSERVED_EDIT_CHARS {
         return None;
     }
     let before_start = prefix.saturating_sub(CONTEXT_CHARS);
@@ -43,10 +44,6 @@ pub fn minimal_edit(before_text: &str, after_text: &str) -> Option<EditPair> {
             .iter()
             .collect(),
     })
-}
-
-fn strip_whitespace(value: &str) -> String {
-    value.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +349,37 @@ pub fn edit_is_within_typed_text(edit: &EditPair, typed_text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whitespace_edits_reach_expression_observation_without_becoming_words() {
+        let edit = minimal_edit(
+            "今天先完成这个工作然后再讨论",
+            "今天先完成这个工作\n然后再讨论",
+        )
+        .unwrap();
+        assert!(learned_rules_with_max_chars(&edit, 16).is_empty());
+        assert_eq!(
+            crate::expression_observation::signal_from_observed_edit(
+                "今天先完成这个工作然后再讨论",
+                &edit,
+            )
+            .unwrap()
+            .line_breaks,
+            1
+        );
+        let first = "先检查全部接口参数和返回结果".repeat(8);
+        let second = "再检查所有输入条件和异常分支".repeat(8);
+        let original = format!("{first}\n{second}");
+        let edited = format!("- {first}\n- {second}");
+        let edit = minimal_edit(&original, &edited).unwrap();
+        assert!(learned_rules_with_max_chars(&edit, 16).is_empty());
+        assert_eq!(
+            crate::expression_observation::signal_from_observed_edit(&original, &edit)
+                .unwrap()
+                .list_usage,
+            1
+        );
+    }
 
     #[test]
     fn configurable_phrase_limit_counts_characters_and_expanded_context() {

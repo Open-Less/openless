@@ -1,6 +1,6 @@
 //! Conservative safeguards for locally observed vocabulary suggestions.
 
-use crate::host_document::EditPair;
+use crate::host_document::{EditPair, LearnedRule};
 use regex::Regex;
 use std::sync::OnceLock;
 use unicode_normalization::UnicodeNormalization;
@@ -38,7 +38,15 @@ fn negation_signature(value: &str) -> Vec<&str> {
 /// Refuse suggestions when the observed edit could alter a number, negation,
 /// or sensitive content. The caller still requires explicit user confirmation.
 pub(crate) fn permits_vocabulary_suggestion(inserted: &str, edit: &EditPair) -> bool {
+    let Some(edited) = reconstruct_insertion(inserted, edit) else {
+        return false;
+    };
     if crate::expression_observation::contains_sensitive_text(inserted) {
+        return false;
+    }
+    // A formatting/closed-form expression preference must never become an
+    // ASR hotword, including short inputs below the profile sample threshold.
+    if crate::expression_observation::is_expression_only_edit(inserted, &edited) {
         return false;
     }
     let before = normalized(&format!("{}{}{}", edit.before, edit.source, edit.after));
@@ -57,6 +65,129 @@ pub(crate) fn permits_vocabulary_suggestion(inserted: &str, edit: &EditPair) -> 
     }
     number_signature(&before) == number_signature(&after)
         && negation_signature(&before) == negation_signature(&after)
+}
+
+/// Reconstruct only one unambiguous, insertion-local change. The full anchors
+/// supplied by the host must belong to this insertion, not just a matching word
+/// elsewhere in the document. No surrounding document text is retained.
+pub(crate) fn reconstruct_insertion(inserted: &str, edit: &EditPair) -> Option<String> {
+    if inserted.chars().count() > 16_384
+        || edit.source.chars().count().max(edit.target.chars().count()) > 16_384
+        || edit.source == edit.target
+    {
+        return None;
+    }
+    let mut location = None;
+    for offset in inserted
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(inserted.len()))
+    {
+        let Some(rest) = inserted[offset..].strip_prefix(&edit.source) else {
+            continue;
+        };
+        if !inserted[..offset].ends_with(&edit.before) || !rest.starts_with(&edit.after) {
+            continue;
+        }
+        if location.is_some() {
+            return None;
+        }
+        location = Some(offset);
+    }
+    let start = location?;
+    Some(format!(
+        "{}{}{}",
+        &inserted[..start],
+        edit.target,
+        &inserted[start + edit.source.len()..]
+    ))
+}
+
+/// Candidates are transient data for the confirmation API. They are neither
+/// correction rules nor dictionary entries until the user accepts one.
+pub(crate) fn vocabulary_candidates(
+    inserted: &str,
+    edit: &EditPair,
+    max_chars: usize,
+) -> Vec<LearnedRule> {
+    if !permits_vocabulary_suggestion(inserted, edit) {
+        return Vec::new();
+    }
+    let rules = crate::host_document::learned_rules_with_max_chars(edit, max_chars.min(32));
+    if rules.is_empty() || rules.len() > 2 {
+        return Vec::new();
+    }
+    let unchanged_letters = edit
+        .before
+        .chars()
+        .chain(edit.after.chars())
+        .filter(|c| c.is_alphabetic())
+        .count();
+    let changed_letters: usize = rules
+        .iter()
+        .map(|rule| lexical_distance(&rule.pattern, &rule.replacement))
+        .sum();
+    let total_letters = inserted.chars().filter(|c| c.is_alphabetic()).count();
+    // Compact Han changes need surrounding evidence; otherwise a complete
+    // short sentence rewrite is indistinguishable from a name correction.
+    let han_change = rules.iter().any(|rule| {
+        rule.pattern
+            .chars()
+            .chain(rule.replacement.chars())
+            .any(is_han)
+    });
+    if (han_change
+        && (unchanged_letters < 4
+            || rules.iter().any(|rule| {
+                rule.pattern.chars().filter(|c| is_han(*c)).count() > 4
+                    || rule.replacement.chars().filter(|c| is_han(*c)).count() > 4
+            })))
+        || (rules.len() > 1 && changed_letters * 2 > total_letters)
+        || (changed_letters > 8 && changed_letters * 2 > total_letters)
+    {
+        return Vec::new();
+    }
+    rules
+        .into_iter()
+        .filter(|rule| {
+            inserted.contains(&rule.pattern)
+                && !crate::expression_observation::contains_sensitive_text(&rule.replacement)
+                && lexical_distance_is_small(&rule.pattern, &rule.replacement)
+        })
+        .collect()
+}
+
+fn is_han(c: char) -> bool {
+    matches!(c as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0x20000..=0x3134f)
+}
+
+fn lexical_distance_is_small(source: &str, target: &str) -> bool {
+    let old: Vec<char> = normalized(source).chars().collect();
+    let new: Vec<char> = normalized(target).chars().collect();
+    // Script switches can represent a transliterated proper name, but only in
+    // the compact, anchored Han case already checked above.
+    if old.iter().all(|c| is_han(*c)) != new.iter().all(|c| is_han(*c)) {
+        return old.len().min(new.len()) >= 2 && old.len().max(new.len()) <= 16;
+    }
+    lexical_distance(source, target) <= 2.max(old.len().max(new.len()) / 3)
+}
+
+fn lexical_distance(source: &str, target: &str) -> usize {
+    let old: Vec<char> = normalized(source).chars().collect();
+    let new: Vec<char> = normalized(target).chars().collect();
+    let mut row: Vec<usize> = (0..=new.len()).collect();
+    for (i, a) in old.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, b) in new.iter().enumerate() {
+            let prior = row[j + 1];
+            row[j + 1] = (row[j] + 1)
+                .min(prior + 1)
+                .min(diagonal + usize::from(a != b));
+            diagonal = prior;
+        }
+    }
+    row[new.len()]
 }
 
 #[cfg(test)]
@@ -118,5 +249,49 @@ mod tests {
             "无敏感文本",
             &edit("账户 ", "12345678", "87654321", "")
         ));
+    }
+
+    #[test]
+    fn candidates_require_this_insertion_and_local_lexical_evidence() {
+        assert_eq!(
+            vocabulary_candidates(
+                "请使用 codx 完成这个任务",
+                &edit("请使用 c", "odx", "odex", " 完成这个任务"),
+                16,
+            ),
+            vec![LearnedRule {
+                pattern: "codx".into(),
+                replacement: "codex".into(),
+            }]
+        );
+        assert_eq!(
+            vocabulary_candidates(
+                "今天联系加好讨论项目",
+                &edit("今天联系", "加好", "佳豪", "讨论项目"),
+                16,
+            )[0]
+            .replacement,
+            "佳豪"
+        );
+        for (inserted, pair) in [
+            ("codx 在别处", edit("另一个控件 ", "codx", "codex", "")),
+            ("codx codx", edit("", "codx", "codex", "")),
+            ("明天再说", edit("", "明天再说", "今天先做", "")),
+            (
+                "Please complete this work tomorrow",
+                edit(
+                    "",
+                    "Please complete this work tomorrow",
+                    "Cancel everything now",
+                    "",
+                ),
+            ),
+            (
+                "请你帮忙完成这项工作",
+                edit("", "请你帮忙", "请", "完成这项工作"),
+            ),
+        ] {
+            assert!(vocabulary_candidates(inserted, &pair, 32).is_empty());
+        }
     }
 }
