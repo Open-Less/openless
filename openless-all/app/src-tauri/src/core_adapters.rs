@@ -5765,7 +5765,7 @@ mod mac_insertion_lifecycle_tests {
         // Boolean assertions never print a real editor's text on failure.
         assert!(document.before.ends_with("P6_BEFORE "));
         assert!(document.selection == "P6_SELECTED");
-        assert!(document.after.starts_with(" P6_AFTER"));
+        assert!(document.after.strip_prefix(" P6_AFTER").is_some());
         prefs.cursor_context_enabled = false;
         backend.set_preferences(prefs).unwrap();
         assert!(host.capture_document_context().await.is_none());
