@@ -239,7 +239,18 @@ pub async fn set_capsule_language_menu(
     session_id: openless_core::SessionId,
     open: bool,
 ) -> Result<(), String> {
-    set_capsule_picker_menu_impl(window, coord, session_id, open, false).await
+    set_capsule_picker_menu_impl(window, coord, session_id, open, false, None, None).await.map(|_| ())
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub fn get_capsule_style_menu_request(
+    window: Window,
+) -> Result<Option<crate::capsule_style_menu::Request>, String> {
+    if !crate::capsule_style_menu::capsule_label(window.label()) {
+        return Err("capsule_window_required".into());
+    }
+    Ok(crate::capsule_style_menu::pending(window.label()))
 }
 
 #[cfg(not(mobile))]
@@ -249,8 +260,10 @@ pub async fn set_capsule_style_menu(
     coord: CoordinatorState<'_>,
     session_id: openless_core::SessionId,
     open: bool,
-) -> Result<(), String> {
-    set_capsule_picker_menu_impl(window, coord, session_id, open, true).await
+    request_id: Option<String>,
+    menu_id: Option<String>,
+) -> Result<Option<crate::capsule_style_menu::Owner>, String> {
+    set_capsule_picker_menu_impl(window, coord, session_id, open, true, request_id, menu_id).await
 }
 
 /// Shared geometry, focus policy and session-bound lifecycle for both pickers.
@@ -261,9 +274,11 @@ async fn set_capsule_picker_menu_impl(
     session_id: openless_core::SessionId,
     open: bool,
     style: bool,
-) -> Result<(), String> {
+    request_id: Option<String>,
+    menu_id: Option<String>,
+) -> Result<Option<crate::capsule_style_menu::Owner>, String> {
     let label = window.label().to_string();
-    if label != "capsule" && !label.starts_with("capsule-mirror-") {
+    if !crate::capsule_style_menu::capsule_label(&label) {
         return Err("capsule_window_required".into());
     }
     let core = coord.backend();
@@ -282,7 +297,12 @@ async fn set_capsule_picker_menu_impl(
             let _ = send.send(Err(if style { "recording_style_required" } else { "recording_translation_required" }.into()));
             return;
         }
-        let _ = send.send(capsule.set_translation_menu_open(label, session_id, open));
+        let result = if style {
+            capsule.set_style_menu_open(label, session_id, open, request_id, menu_id)
+        } else {
+            capsule.set_translation_menu_open(label, session_id, open).map(|_| None)
+        };
+        let _ = send.send(result);
     })?;
     receive
         .await

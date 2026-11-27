@@ -57,6 +57,8 @@ mod hotkey;
 mod recording_companion;
 #[path = "../../src/side_aware_combo.rs"]
 mod side_aware_combo;
+#[path = "../../src/capsule_style_menu.rs"]
+mod capsule_style_menu;
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
@@ -70,4 +72,10 @@ async fn skip_auto_style_held_recording_key_uses_real_ask_keyboard_route() {
     );
     hotkey::platform::tests::skip_auto_style_mac_held_ask_controller();
     // Drop desktop: subsequent cases revert to the stock route.
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn style_menu_native_callback_preserves_key_pairs_across_open_close_and_cancel() {
+    hotkey::platform::tests::style_menu_real_callback_preserves_key_pairs_across_open_close_and_cancel();
 }

@@ -600,7 +600,7 @@ pub(crate) fn insert_selection_result(
 }
 
 #[cfg(target_os = "macos")]
-fn macos_front_window_id(pid: i32) -> Option<u32> {
+pub(crate) fn macos_front_window_id(pid: i32) -> Option<u32> {
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::number::CFNumber;
@@ -695,6 +695,18 @@ pub(crate) fn selection_insertion_target_is_current(target: &SelectionInsertionT
             return false;
         }
     }
+    native_input_target_is_current(target)
+}
+
+/// Read-only identity for a nonactivating picker. Unlike insertion validation,
+/// this never compares selection text or clipboard contents.
+pub(crate) fn capture_capsule_menu_input_target() -> Option<SelectionInsertionTarget> {
+    let mut target = capture_selection_insertion_target();
+    target.strict_input_target = true;
+    native_input_target_is_current(&target).then_some(target)
+}
+
+pub(crate) fn capsule_menu_input_target_is_current(target: &SelectionInsertionTarget) -> bool {
     native_input_target_is_current(target)
 }
 

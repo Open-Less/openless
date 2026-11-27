@@ -87,7 +87,7 @@ fn skip_auto_style_hotkey_bridge_loop(
             ComboHotkeyEvent::Released { .. } => {
                 if let Some((Some(id), revision)) = owner.take() {
                     if inner.backend.snapshot().preferences_revision == revision {
-                        let _ = inner.backend.toggle_dictation_style_for_session(id);
+                        handle_skip_auto_style_hotkey(&inner, id);
                     }
                 }
             },
@@ -2221,7 +2221,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             #[cfg(not(mobile))]
             HotkeyEvent::SkipAutoStyleTapped(context) => {
                 if inner.backend.snapshot().preferences_revision == context.preferences_revision {
-                    let _ = inner.backend.toggle_dictation_style_for_session(context.session_id);
+                    handle_skip_auto_style_hotkey(&inner, context.session_id);
                 }
             }
             #[cfg(not(mobile))]
