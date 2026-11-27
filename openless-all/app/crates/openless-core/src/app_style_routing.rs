@@ -122,7 +122,7 @@ pub(crate) fn input_scene_prefix(
             .unwrap_or("未知")
             .to_owned()
     };
-    let name = known(recognized.map(|rule| rule.name).or_else(|| app.map(|app| app.name.as_str())));
+    let name = known(app.map(|app| app.name.as_str()));
     let id = known(app.map(|app| app.id.as_str()));
     let category = known(category.or_else(|| recognized.map(|rule| rule.category.label())));
     let purpose = known(purpose.filter(|value| !value.trim().is_empty()).or_else(|| recognized.map(|rule| rule.purpose)));
@@ -400,10 +400,31 @@ mod tests {
             assert!(assigned.is_empty());
             assert!(prefix.contains("本次输入将交给编程 Agent"));
             assert!(prefix.contains("用户所选风格"));
-            assert!(!prefix.contains("untrusted display name"));
+            assert!(prefix.starts_with(&format!(
+                "当前应用：untrusted display name\n应用标识：macos:{bundle}\n"
+            )));
         }
         let unknown = InputApp::macos("example.unknown", Some("Cursor")).unwrap();
         assert!(!store.selection(&unknown, None).1.contains("本次输入将交给编程 Agent"));
+    }
+
+    #[test]
+    fn routing_preserves_frozen_editor_names_and_empty_name_fallback() {
+        let store = AppStyleStore::in_memory();
+        for (name, expected) in [
+            ("VS Code", "VS Code"),
+            ("Renamed Editor", "Renamed Editor"),
+            ("", "未知"),
+            (" \t", "未知"),
+        ] {
+            let app = InputApp { id: "macos:com.microsoft.VSCode".into(), name: name.into() };
+            let (assigned, prefix) = store.selection(&app, None);
+            assert!(assigned.is_empty());
+            assert!(prefix.starts_with(&format!(
+                "当前应用：{expected}\n应用标识：macos:com.microsoft.VSCode\n应用分类：编程\n"
+            )));
+            assert_eq!(prefix.matches("当前应用：").count(), 1);
+        }
     }
 
     #[test]

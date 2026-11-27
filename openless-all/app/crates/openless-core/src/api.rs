@@ -15467,9 +15467,14 @@ mod tests {
             ..Default::default()
         };
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        for bundle in ["com.todesktop.230313mzl4w4u92", "com.stablyai.orca", "example.unknown"] {
+        for (bundle, name, agent) in [
+            ("com.todesktop.230313mzl4w4u92", "Cursor", true),
+            ("com.stablyai.orca", "Orca", true),
+            ("com.microsoft.VSCode", "VS Code", false),
+            ("example.unknown", "Cursor", false),
+        ] {
             let host = SceneHost {
-                app: crate::app_style_routing::InputApp::macos(bundle, Some("Cursor")).unwrap(),
+                app: crate::app_style_routing::InputApp::macos(bundle, Some(name)).unwrap(),
                 kind: None, reads: reads.clone(),
             };
             let context = backend.capture_dictation_context_with_host(
@@ -15477,7 +15482,9 @@ mod tests {
             ).await.unwrap();
             assert_eq!(context.polish.style_pack_id, preferences.active_style_pack_id);
             let (system, _) = context.effective_polish_prompts("Fictional rename task");
-            assert_eq!(system.contains("本次输入将交给编程 Agent"), bundle != "example.unknown");
+            assert!(system.starts_with(&format!("当前应用：{name}\n应用标识：macos:{bundle}\n")));
+            assert_eq!(system.matches("当前应用：").count(), 1);
+            assert_eq!(system.contains("本次输入将交给编程 Agent"), agent);
         }
         let host = SceneHost {
             app: crate::app_style_routing::InputApp::macos("com.google.Chrome", Some("Chrome")).unwrap(),
