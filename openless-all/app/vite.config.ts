@@ -41,8 +41,9 @@ export default defineConfig(async () => ({
   // files); all other global styles bypass tailwind.
   plugins: [react(), tailwindcss(), micyouNotices()],
   resolve: {
+    dedupe: ['react', 'react-dom', 'react-i18next', 'i18next'],
     alias: {
-      '@android': path.resolve(appRoot, 'android/frontend'),
+      '@android': path.resolve(appRoot, '../android/frontend'),
       '@': path.resolve(appRoot, 'third_party/rare-ui'),
     },
   },
@@ -51,6 +52,7 @@ export default defineConfig(async () => ({
     ? { optimizeDeps: { entries: ['index.html', 'ask-window/index.html', 'e2e/fixtures/*.html'] } }
     : {}),
   server: {
+    fs: { allow: [appRoot, path.resolve(appRoot, '../android/frontend')] },
     port: 1420,
     strictPort: true,
     host: isMobileDev ? '0.0.0.0' : host || false,

@@ -11,13 +11,13 @@ const [ci, tauri, pack, verify, gate, manifest, revisionFile, buildScript, host]
   await Promise.all([
     load('.github/workflows/ci.yml'),
     load('.github/workflows/release-tauri.yml'),
-    load('openless-all/app/scripts/package-linux-egui.sh'),
-    load('openless-all/app/scripts/verify-linux-egui-packages.sh'),
+    load('openless-all/linux/scripts/package-linux-egui.sh'),
+    load('openless-all/linux/scripts/verify-linux-egui-packages.sh'),
     load('openless-all/app/scripts/check-core-deps.ps1'),
-    load('openless-all/app/linux-egui/Cargo.toml'),
-    load('openless-all/app/linux-egui/package-revision'),
-    load('openless-all/app/linux-egui/build.rs'),
-    load('openless-all/app/linux-egui/src/main.rs'),
+    load('openless-all/linux/egui/Cargo.toml'),
+    load('openless-all/linux/egui/package-revision'),
+    load('openless-all/linux/egui/build.rs'),
+    load('openless-all/linux/egui/src/main.rs'),
   ]);
 for (const name of ['check-linux-egui.yml', 'release-linux-egui.yml']) {
   assert.equal(
@@ -56,7 +56,7 @@ assert.match(verify, /sha256sum --check --strict SHA256SUMS/);
 assert.match(verify, /desktop-file-validate/);
 assert.match(verify, /check_elf "\$WORK\/deb\/usr\/bin\/openless"/);
 assert.match(verify, /fcitx5\/libopenless\.so/);
-assert.ok(!existsSync(join(root, 'openless-all/app/linux-egui/src/updater.rs')));
+assert.ok(!existsSync(join(root, 'openless-all/linux/egui/src/updater.rs')));
 assert.doesNotMatch(manifest, /minisign-verify/);
 const debDeps = pack.match(/^Depends: ([^\n]+)/m)?.[1].split(/,\s*/) ?? [];
 for (const dep of ['fcitx5', 'libpipewire-0.3-0', 'libvulkan1', 'liblzma5', 'libwayland-client0']) {
@@ -81,7 +81,7 @@ for (const [file, size] of [
   ['icon.png', '512x512'],
 ]) {
   const [copy, shared] = await Promise.all([
-    readFile(join(root, 'openless-all/app/linux-egui/packaging/icons', file)),
+    readFile(join(root, 'openless-all/linux/egui/packaging/icons', file)),
     readFile(join(root, 'openless-all/app/src-tauri/icons', file)),
   ]);
   assert.deepEqual(copy, shared, `${file} must match the shared icon`);

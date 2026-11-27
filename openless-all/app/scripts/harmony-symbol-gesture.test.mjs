@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 
 const source = readFileSync(
-  new URL('../harmony/entry/src/main/ets/inputmethod/SymbolGesture.ets', import.meta.url),
+  new URL('../../harmony/entry/src/main/ets/inputmethod/SymbolGesture.ets', import.meta.url),
   'utf8',
 );
 const exports = {};

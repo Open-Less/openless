@@ -6,7 +6,7 @@ import {
   patchShizukuDependencies,
   patchShizukuGradle,
   SHIZUKU_API,
-} from './patch-android-shizuku-deps.mjs';
+} from '../../android/scripts/patch-android-shizuku-deps.mjs';
 
 const template = `
 plugins {

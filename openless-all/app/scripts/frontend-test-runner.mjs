@@ -63,7 +63,14 @@ export function runTestFiles(
     const started = performance.now();
     const result = spawn(process.execPath, args, {
       cwd: appRoot,
-      env: process.env,
+      // Type-checking external TSX needs declaration fallbacks; Node must keep
+      // package export conditions when loading the executable test modules.
+      env: testFile.endsWith('.test.ts')
+        ? {
+            ...process.env,
+            TSX_TSCONFIG_PATH: resolve(DEFAULT_APP_ROOT, 'tsconfig.runtime.json'),
+          }
+        : process.env,
       stdio: 'inherit',
       timeout,
       killSignal: 'SIGKILL',

@@ -71,8 +71,8 @@ const [
   read('src-tauri/src/commands/dictionary.rs'),
   read('src-tauri/src/commands/style_packs.rs'),
   read('src-tauri/src/android/native_bridge.rs'),
-  read('android/kotlin/OpenLessNative.kt'),
-  read('android/kotlin/OpenLessOverlayService.kt'),
+  read('../android/kotlin/OpenLessNative.kt'),
+  read('../android/kotlin/OpenLessOverlayService.kt'),
   read('src/app/App.tsx'),
   read('src/features/providers/ProvidersSection.tsx'),
   read('src/features/providers/ChannelList.tsx'),
@@ -82,7 +82,7 @@ const [
   read('src-tauri/src/commands/credentials.rs'),
   read('src-tauri/src/persistence/credentials.rs'),
   read('src-tauri/src/host_document/macos.rs'),
-  read('linux-egui/src/fcitx5.rs'),
+  read('../linux/egui/src/fcitx5.rs'),
   Promise.all([
     read('src/features/local-asr/index.tsx'),
     read('src/features/local-asr/useLocalModelTrial.ts'),
@@ -455,9 +455,11 @@ assert.match(
 );
 
 const invokeHandlers = await read('src-tauri/src/lib.rs');
-const accessibilityVocabulary = await read('android/kotlin/OpenLessAccessibilityService.kt');
-const vocabularyReceiver = await read('android/kotlin/OpenLessVocabularyReceiver.kt');
-const androidManifestGenerator = await read('scripts/merge-android-overlay-manifest.mjs');
+const accessibilityVocabulary = await read('../android/kotlin/OpenLessAccessibilityService.kt');
+const vocabularyReceiver = await read('../android/kotlin/OpenLessVocabularyReceiver.kt');
+const androidManifestGenerator = await read(
+  '../android/scripts/merge-android-overlay-manifest.mjs',
+);
 assert.doesNotMatch(
   accessibilityVocabulary,
   /OpenLessNative\.native(?:Vocabulary|ObserveVocabulary|PendingVocabulary|ResolveVocabulary)/,
@@ -740,7 +742,7 @@ assert.match(
   'the exported JNI symbol and receiver signature must match the Kotlin Voice Edit declaration',
 );
 const androidJni = await read('src-tauri/src/android/jni.rs');
-const warmupActivity = await read('android/kotlin/OpenLessBackendWarmupActivity.kt');
+const warmupActivity = await read('../android/kotlin/OpenLessBackendWarmupActivity.kt');
 assert.match(
   androidJni,
   /"com\.openless\.app\.OpenLessBackendWarmupActivity",\s*"backgroundForVoiceEdit",\s*"\(Landroid\/content\/Context;\)Z"/,

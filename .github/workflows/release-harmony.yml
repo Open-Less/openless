@@ -5,7 +5,7 @@ name: Release HarmonyOS
 #
 # The build uses the official HarmonyOS command-line tools. Huawei's own download
 # page needs an account, but the same archive is mirrored publicly (the mirror
-# sherpa-onnx's own CI uses); `scripts/prepare-harmony-sdk.sh` pins it by SHA-256,
+# sherpa-onnx's own CI uses); `../harmony/scripts/prepare-harmony-sdk.sh` pins it by SHA-256,
 # so the workflow needs no variables and no self-hosted runner. Only the AppGallery
 # signing profile is secret - which it has to be.
 #
@@ -184,7 +184,7 @@ jobs:
           HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
         run: |
           set -euo pipefail
-          bash openless-all/app/scripts/prepare-harmony-sdk.sh
+          bash openless-all/harmony/scripts/prepare-harmony-sdk.sh
           toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
           echo "OPENLESS_HARMONY_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
           echo "HVIGOR_USER_HOME=$toolchain/hvigor-home" >> "$GITHUB_ENV"
@@ -269,7 +269,7 @@ jobs:
         # bundleName or an expired profile would otherwise surface after a
         # six-minute build, or only when a device refuses the install.
         working-directory: openless-all/app
-        run: bash scripts/check-harmony-signing.sh "$OPENLESS_HARMONY_SIGNING_DIR" "${{ inputs.channel }}"
+        run: bash ../harmony/scripts/check-harmony-signing.sh "$OPENLESS_HARMONY_SIGNING_DIR" "${{ inputs.channel }}"
 
       - name: Build, sign and stage the HAP
         working-directory: openless-all/app
@@ -281,7 +281,7 @@ jobs:
             echo "::error::OPENLESS_HARMONY_SIGNING_DIR is unset; the signing step must export it"
             exit 1
           fi
-          bash scripts/package-harmony-hap.sh
+          bash ../harmony/scripts/package-harmony-hap.sh
 
       - name: Verify the packaged HAP
         working-directory: openless-all/app
@@ -296,12 +296,12 @@ jobs:
           toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
           # The Release only carries the unsigned package; the store copy must
           # additionally prove its signature.
-          bash scripts/verify-harmony-hap.sh "$output/OpenLess_harmony_arm64.hap" \
+          bash ../harmony/scripts/verify-harmony-hap.sh "$output/OpenLess_harmony_arm64.hap" \
             "$toolchain" "$version_name" "$version_code" --allow-unsigned
           if [ "${{ inputs.channel }}" != "none" ]; then
             # AppGallery takes the App Pack; a bare HAP is rejected with
             # 204144641 "The suffix name of the software package is incorrect".
-            bash scripts/verify-harmony-hap.sh \
+            bash ../harmony/scripts/verify-harmony-hap.sh \
               "$output/OpenLess_harmony_arm64-signed.app" "$toolchain"
           else
             echo "channel=none: unsigned package only, no signature to verify"
@@ -346,12 +346,12 @@ jobs:
         # signed package is uploaded - the Release carries the unsigned one.
         #
         # Keep this a literal block: a folded `>-` scalar starting with a comment
-        # swallowed the command line (`# ... node scripts/upload-appgallery.mjs`)
+        # swallowed the command line (`# ... node ../harmony/scripts/upload-appgallery.mjs`)
         # and the step died with `--channel: command not found` (127) the first
         # time it ever ran.
         run: |
           set -euo pipefail
-          node scripts/upload-appgallery.mjs \
+          node ../harmony/scripts/upload-appgallery.mjs \
             --channel "${{ inputs.channel }}" \
             --file target/harmony-packages/OpenLess_harmony_arm64-signed.app \
             --skip-if-unconfigured

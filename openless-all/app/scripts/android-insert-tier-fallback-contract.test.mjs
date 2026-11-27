@@ -9,10 +9,10 @@ const tiersPath = fileURLToPath(
 );
 const shizukuPath = fileURLToPath(new URL('../src-tauri/src/android/shizuku.rs', import.meta.url));
 const bridgePath = fileURLToPath(
-  new URL('../android/kotlin/OpenLessShizukuBridge.kt', import.meta.url),
+  new URL('../../android/kotlin/OpenLessShizukuBridge.kt', import.meta.url),
 );
 const clientPath = fileURLToPath(
-  new URL('../android/kotlin/OpenLessShizukuUserServiceClient.kt', import.meta.url),
+  new URL('../../android/kotlin/OpenLessShizukuUserServiceClient.kt', import.meta.url),
 );
 function rustFunctionBody(source, functionSignature) {
   const signatureIndex = source.indexOf(functionSignature);

@@ -4,10 +4,10 @@ members = [
     "crates/openless-core",
     "crates/micyou-dsp",
     "crates/micyou-infer",
-    "linux-egui",
+    "../linux/egui",
     "crates/openless-capsule",
     "native-capsule",
-    "harmony/rust",
+    "../harmony/rust",
 ]
 exclude = [
     "src-tauri",

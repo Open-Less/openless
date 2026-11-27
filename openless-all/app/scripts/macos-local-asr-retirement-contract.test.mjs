@@ -18,7 +18,7 @@ assert.match(router, /cfg\(target_os = "macos"\)[^]*?apple_speech::PROVIDER_ID/)
 assert.match(router, /apple_speech::AppleSpeechTranscriptionEngine/);
 const apple = read('src-tauri/src/asr/apple_speech.rs');
 assert.doesNotMatch(apple, /ModelStore|ExperimentalNativeRuntime|download_model/);
-assert.match(read('src-tauri/Info.plist'), /NSSpeechRecognitionUsageDescription/);
+assert.match(read('../macos/Info.plist'), /NSSpeechRecognitionUsageDescription/);
 // The native Sherpa/Foundry engine compiles only where build.rs sets
 // `local_asr_sherpa` (Windows, arm64 Android) — never on macOS.
 assert.match(adapters, /cfg\(local_asr_sherpa\)\]\s+struct TauriNativeTranscriptionEngine/);

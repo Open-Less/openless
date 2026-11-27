@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 const source = readFileSync(
-  new URL('../harmony/entry/src/main/ets/HarmonyApi.ets', import.meta.url),
+  new URL('../../harmony/entry/src/main/ets/HarmonyApi.ets', import.meta.url),
   'utf8',
 )
   .replace(/\r\n/g, '\n')

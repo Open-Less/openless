@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_imports, unused_variables)]
-//! Wire format shared with `windows-ime/src/text_service.cpp`.
+//! Wire format shared with `openless-all/windows/ime/src/text_service.cpp`.
 //!
 //! OpenLess sends `WM_COPYDATA` to the message-only window the IME creates on
 //! the host's TSF thread. A submit carries a token plus the text and is only

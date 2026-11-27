@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@android/*": ["../android/frontend/*"],
+      "@/*": ["third_party/rare-ui/*"]
+    }
+  }
+}
