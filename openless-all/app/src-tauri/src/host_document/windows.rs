@@ -163,6 +163,16 @@ fn focused_uia_position() -> Option<(u64, u64)> {
 }
 
 pub(super) fn read_qa_selection() -> Option<String> {
+    read_selection_with_limit(16_000)
+}
+
+/// Explicit replacement owns the complete selection; QA's separate reference
+/// budget must not become a truncation boundary for editing or validation.
+pub(super) fn read_selection_full() -> Option<String> {
+    read_selection_with_limit(-1)
+}
+
+fn read_selection_with_limit(max_length: i32) -> Option<String> {
     with_voice_edit_uia(|uia| unsafe {
         let element = uia
             .GetFocusedElement()
@@ -202,13 +212,124 @@ pub(super) fn read_qa_selection() -> Option<String> {
             return Ok(None);
         }
         let text = range
-            .GetText(16_000)
+            .GetText(max_length)
             .map_err(|_| "selectionUnavailable".to_string())?
             .to_string();
+        if !uia.CompareElements(&element, &uia.GetFocusedElement()
+            .map_err(|_| "selectionUnavailable".to_string())?)
+            .map_err(|_| "selectionUnavailable".to_string())?.as_bool()
+        {
+            return Ok(None);
+        }
         Ok((!text.trim().is_empty()).then_some(text))
     })
     .ok()
     .flatten()
+}
+
+/// Win32 Edit/RichEdit supports a true selected-range replacement. Other UIA
+/// controls are writable only when ValuePattern proves the entire field is the
+/// original selection. We never synthesize paste into the current focus.
+pub(super) fn replace_selection_direct(
+    original: &str,
+    replacement: &str,
+    still_current: impl Fn() -> bool,
+) -> std::result::Result<(), String> {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, SendMessageTimeoutW, SMTO_ABORTIFHUNG, SMTO_BLOCK,
+    };
+    with_voice_edit_uia(|uia| unsafe {
+        let unavailable = |_| "selectionPolishTargetUnavailable".to_string();
+        if !still_current() || original.is_empty() || replacement.contains('\0') {
+            return Err("selectionPolishTargetUnavailable".into());
+        }
+        let element = uia.GetFocusedElement().map_err(unavailable)?;
+        if element.CurrentIsPassword().map_err(unavailable)?.as_bool()
+            || !allowed_process(&element).map_err(unavailable)?
+        {
+            return Err("selectionPolishTargetUnavailable".into());
+        }
+        let hwnd = element.CurrentNativeWindowHandle().map_err(unavailable)?;
+        let mut class = [0u16; 128];
+        let size = GetClassNameW(hwnd, &mut class);
+        let class = String::from_utf16_lossy(&class[..size.max(0) as usize]).to_ascii_lowercase();
+        if class == "edit" || class.starts_with("richedit") {
+            let send = |message, wparam, lparam| -> std::result::Result<usize, String> {
+                let mut result = 0usize;
+                if SendMessageTimeoutW(hwnd, message, wparam, lparam,
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, Some(&mut result)).0 == 0 {
+                    Err("selectionPolishWriteUnconfirmed".into())
+                } else {
+                    Ok(result)
+                }
+            };
+            let read = || -> std::result::Result<Vec<u16>, String> {
+                let length = send(0x000e, WPARAM(0), LPARAM(0))?; // WM_GETTEXTLENGTH
+                let capacity = length.checked_add(1).ok_or("selectionPolishTargetUnavailable")?;
+                let mut text = Vec::new();
+                text.try_reserve_exact(capacity).map_err(|_| "selectionPolishTargetUnavailable")?;
+                text.resize(capacity, 0u16);
+                let copied = send(0x000d, WPARAM(capacity), LPARAM(text.as_mut_ptr() as isize))?;
+                if copied != length {
+                    return Err("selectionPolishSelectionChanged".into());
+                }
+                text.truncate(length);
+                Ok(text)
+            };
+            let selection = || -> std::result::Result<(usize, usize), String> {
+                let (mut start, mut end) = (u32::MAX, u32::MAX);
+                send(0x00b0, WPARAM(&mut start as *mut u32 as usize),
+                    LPARAM(&mut end as *mut u32 as isize))?; // EM_GETSEL
+                if start == u32::MAX || end <= start {
+                    return Err("selectionPolishSelectionChanged".into());
+                }
+                Ok((start as usize, end as usize))
+            };
+            let baseline = read()?;
+            let (start, end) = selection()?;
+            let original_units: Vec<u16> = original.encode_utf16().collect();
+            if baseline.get(start..end) != Some(original_units.as_slice()) {
+                return Err("selectionPolishSelectionChanged".into());
+            }
+            let replacement_units: Vec<u16> = replacement.encode_utf16().collect();
+            let mut expected = baseline[..start].to_vec();
+            expected.extend_from_slice(&replacement_units);
+            expected.extend_from_slice(&baseline[end..]);
+            let mut value = replacement_units;
+            value.push(0);
+            if !still_current()
+                || !uia.CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
+                    .map_err(unavailable)?.as_bool()
+                || read()? != baseline || selection()? != (start, end) || !still_current()
+            {
+                return Err("selectionPolishTargetChanged".into());
+            }
+            send(0x00c2, WPARAM(1), LPARAM(value.as_ptr() as isize))?; // EM_REPLACESEL
+            if read()? != expected {
+                return Err("selectionPolishWriteUnconfirmed".into());
+            }
+            return Ok(());
+        }
+        let value = element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            .map_err(unavailable)?;
+        if value.CurrentIsReadOnly().map_err(unavailable)?.as_bool()
+            || value.CurrentValue().map_err(unavailable)?.to_string() != original
+            || read_selection_full().as_deref() != Some(original)
+            || !still_current()
+            || !uia.CompareElements(&element, &uia.GetFocusedElement().map_err(unavailable)?)
+                .map_err(unavailable)?.as_bool()
+            || value.CurrentValue().map_err(unavailable)?.to_string() != original
+            || !still_current()
+        {
+            return Err("selectionPolishTargetUnavailable".into());
+        }
+        value.SetValue(&windows::core::BSTR::from(replacement)).map_err(unavailable)?;
+        if value.CurrentValue().map_err(unavailable)?.to_string() != replacement {
+            return Err("selectionPolishWriteUnconfirmed".into());
+        }
+        Ok(())
+    })
 }
 
 pub(crate) unsafe fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>> {

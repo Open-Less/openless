@@ -110,6 +110,29 @@ pub(crate) fn capture_voice_edit_target() -> Result<
     }
 }
 
+/// Replace only the live explicit selection through a native control API.
+/// Called on the blocking insertion thread while holding the delivery gate.
+/// Unsupported editors fail closed; this function never sends keys or copies.
+pub(crate) fn replace_selection_direct(
+    original: &str,
+    replacement: &str,
+    still_current: impl Fn() -> bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::replace_selection_direct(original, replacement, still_current)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::replace_selection_direct(original, replacement, still_current)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (original, replacement, still_current);
+        Err("selectionPolishTargetUnavailable".into())
+    }
+}
+
 /// Restore the original app, compare the exact control, full text and selection, then write.
 /// The inserter must recheck the prepared target predicate after acquiring the delivery gate.
 /// Call only on the blocking native insertion thread.
@@ -816,4 +839,9 @@ pub(crate) use windows::{is_blocked_process_name, runtime_id as uia_runtime_id};
 #[cfg(target_os = "windows")]
 pub(crate) fn read_qa_selection() -> Option<String> {
     windows::read_qa_selection()
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn read_selection_full() -> Option<String> {
+    windows::read_selection_full()
 }

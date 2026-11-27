@@ -223,6 +223,7 @@ impl SelectionServiceInner {
         &self,
         session_id: SessionId,
         capture: &SelectionCapture,
+        mode: crate::types::PolishMode,
     ) -> Result<(), BackendError> {
         if capture.text.trim().is_empty() {
             return Err(BackendError::new(
@@ -232,6 +233,9 @@ impl SelectionServiceInner {
         }
         let mut state = self.state.write().expect("selection state lock poisoned");
         Self::ensure_active(&state, session_id)?;
+        // Cancellation must settle an existing original, rather than race a
+        // late insert that would leave a permanent selectionProcessing row.
+        self.persist_original(session_id, capture, mode)?;
         state.snapshot.source_text = Some(capture.text.clone());
         state.source_app = capture.source_app.clone();
         Ok(())
@@ -584,7 +588,7 @@ impl SelectionServiceInner {
         }
     }
 
-    fn fail_if_active(&self, session_id: SessionId) -> bool {
+    fn fail_if_active(&self, session_id: SessionId, cause: &BackendError) -> bool {
         let mut state = self.state.write().expect("selection state lock poisoned");
         // Settle only sessions still in progress: Cancelled means the user ended it;
         // Completed means paste succeeded (race: the narrow window between the
@@ -600,13 +604,18 @@ impl SelectionServiceInner {
                 &self.history,
                 session_id,
                 state.snapshot.preview_text.as_deref(),
-                "selectionFailed",
+                if cause.message == "selectionInputTooLarge" {
+                    "selectionInputTooLarge"
+                } else {
+                    "selectionFailed"
+                },
             ) {
                 log::warn!("failed to settle selection history: {error}");
             }
             state.snapshot.phase = SelectionPhase::Failed;
             let snapshot = state.snapshot.clone();
             drop(state);
+            self.publish_history_changed();
             self.events.publish(
                 Some(session_id),
                 BackendEventKind::SelectionStateChanged(snapshot),
@@ -745,8 +754,7 @@ impl SelectionApi for SelectionService {
                     .runtime
                     .capture(session_id, request.selected_text.clone())
                     .await?;
-                inner.set_capture(session_id, &capture)?;
-                inner.persist_original(session_id, &capture, request.mode)?;
+                inner.set_capture(session_id, &capture, request.mode)?;
                 inner
                     .runtime
                     .protect_original(session_id, capture.text.clone())
@@ -856,9 +864,11 @@ impl SelectionApi for SelectionService {
                 Ok(session_id)
             }
             .await;
-            if result.is_err() && inner.fail_if_active(session_id) {
-                inner.cancel_runtime_best_effort(session_id).await;
-                inner.hide_preview();
+            if let Err(error) = &result {
+                if inner.fail_if_active(session_id, error) {
+                    inner.cancel_runtime_best_effort(session_id).await;
+                    inner.hide_preview();
+                }
             }
             result
         })
@@ -920,6 +930,20 @@ impl SelectionApi for SelectionService {
                 if state.snapshot.phase == SelectionPhase::Cancelled {
                     return Ok(());
                 }
+                if matches!(
+                    state.snapshot.phase,
+                    SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
+                ) && state.snapshot.source_text.is_some()
+                {
+                    if let Err(error) = update_original_record(
+                        &inner.history,
+                        active_session,
+                        state.snapshot.preview_text.as_deref(),
+                        "selectionCancelled",
+                    ) {
+                        log::warn!("failed to settle cancelled selection history: {error}");
+                    }
+                }
                 state.snapshot.phase = SelectionPhase::Cancelled;
                 let snapshot = state.snapshot.clone();
                 (active_session, snapshot)
@@ -928,6 +952,7 @@ impl SelectionApi for SelectionService {
                 Some(active_session.0),
                 BackendEventKind::SelectionStateChanged(active_session.1),
             );
+            inner.publish_history_changed();
             inner.hide_preview();
             let active_session = active_session.0;
             let polish_result = inner.polisher.cancel(active_session).await;
