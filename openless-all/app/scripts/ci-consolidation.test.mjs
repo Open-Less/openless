@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
+import vm from 'node:vm';
 
 const path = (name) => new URL(`../../../.github/workflows/${name}`, import.meta.url);
 const workflow = (name) => load(readFileSync(path(name), 'utf8'));
@@ -8,7 +9,10 @@ const ci = workflow('ci.yml');
 const desktopOnly =
   "github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:desktop-only')";
 const detect = ci.jobs.changes.steps.find((s) => s.id === 'detect');
-assert.equal(ci.jobs.changes['runs-on'], `\${{ ${desktopOnly} && 'macos-latest' || 'ubuntu-latest' }}`);
+assert.equal(
+  ci.jobs.changes['runs-on'],
+  `\${{ ${desktopOnly} && 'macos-latest' || 'ubuntu-latest' }}`,
+);
 assert.equal(detect.env.DESKTOP_ONLY, `\${{ ${desktopOnly} }}`);
 assert.match(detect.run, /desktop-only=\$DESKTOP_ONLY.*\$GITHUB_OUTPUT/);
 assert.equal(ci.jobs.changes.outputs['desktop-only'], '${{ steps.detect.outputs.desktop-only }}');

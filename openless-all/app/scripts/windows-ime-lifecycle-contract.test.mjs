@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const imeRoot = join(appRoot, 'windows-ime', 'src');
+const imeRoot = join(appRoot, '../windows/ime', 'src');
 const textService = readFileSync(join(imeRoot, 'text_service.cpp'), 'utf8');
 const editSession = readFileSync(join(imeRoot, 'edit_session.cpp'), 'utf8');
 const displayAttribute = readFileSync(join(imeRoot, 'display_attribute.cpp'), 'utf8');

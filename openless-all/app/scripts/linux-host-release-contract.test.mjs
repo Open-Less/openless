@@ -19,13 +19,13 @@ const [ci, tauri, action, pack, verify, gate, manifest, revisionFile, buildScrip
     load('.github/workflows/ci.yml'),
     load('.github/workflows/release-tauri.yml'),
     load('.github/actions/build-linux-packages/action.yml'),
-    load('openless-all/app/scripts/package-linux-qt.sh'),
-    load('openless-all/app/scripts/verify-linux-host-packages.sh'),
+    load('openless-all/app/../linux/scripts/package-linux-qt.sh'),
+    load('openless-all/app/../linux/scripts/verify-linux-host-packages.sh'),
     load('openless-all/app/scripts/check-core-deps.ps1'),
-    load('openless-all/app/linux-host/Cargo.toml'),
-    load('openless-all/app/linux-host/package-revision'),
-    load('openless-all/app/linux-host/build.rs'),
-    load('openless-all/app/linux-host/src/update_check.rs'),
+    load('openless-all/linux/host/Cargo.toml'),
+    load('openless-all/linux/host/package-revision'),
+    load('openless-all/linux/host/build.rs'),
+    load('openless-all/linux/host/src/update_check.rs'),
   ]);
 
 // ── 1. 一个平台一个文件：Linux 不再有自己的工作流 ──────────────────────────
@@ -65,9 +65,9 @@ assert.match(ci, /ctest --test-dir build --output-on-failure/);
 assert.match(ci, /uses: \.\/\.github\/actions\/build-linux-packages/, 'CI must use the shared action');
 assert.match(tauri, /uses: \.\/\.github\/actions\/build-linux-packages/, 'release must use it too');
 assert.match(action, /cargo build --locked --release -p openless-linux-host/);
-assert.match(action, /bash scripts\/package-linux-qt\.sh/);
+assert.ok(action.includes('bash ../linux/scripts/package-linux-qt.sh'));
 assert.match(action, /sha256sum \.\/\*\.deb \.\/\*\.rpm > SHA256SUMS/);
-assert.match(action, /bash scripts\/verify-linux-host-packages\.sh/);
+assert.ok(action.includes('bash ../linux/scripts/verify-linux-host-packages.sh'));
 assert.match(action, /OpenLess_linux_x86_64\.deb/);
 assert.match(action, /OpenLess_linux_x86_64\.rpm/);
 assert.match(action, /openless-linux-host-direct-download/);
@@ -90,14 +90,14 @@ assert.doesNotMatch(manifest, /legacy-preferences-write/);
 const revision = revisionFile.trim();
 assert.match(revision, /^[1-9][0-9]*$/, 'Linux package revision must be a positive integer');
 assert.ok(Number(revision) > 79, 'new Linux packages must upgrade the last -79 candidate');
-assert.match(action, /linux-host\/package-revision/);
+assert.ok(action.includes('linux/host/package-revision'));
 assert.match(buildScript, /rerun-if-changed=package-revision/);
 assert.match(buildScript, /rerun-if-env-changed=OPENLESS_LINUX_VERSION/);
 assert.match(buildScript, /OPENLESS_APP_VERSION=\{expected\}/);
 assert.match(host, /env!\("OPENLESS_APP_VERSION"\)/);
 assert.match(verify, /DEB_VERSION=\$\(dpkg-deb --field/);
 assert.match(verify, /OpenLess \$DEB_VERSION/);
-assert.match(pack, /linux-host\/package-revision/);
+assert.ok(pack.includes('linux/host/package-revision'));
 assert.match(pack, /if \[ "\$VERSION" != "\$EXPECTED_VERSION" \]/);
 
 console.log('linux-host-release contract test passed');

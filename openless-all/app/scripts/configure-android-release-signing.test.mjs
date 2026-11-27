@@ -13,12 +13,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const root = mkdtempSync(join(tmpdir(), 'openless-signing-'));
+const sandbox = mkdtempSync(join(tmpdir(), 'openless-signing-'));
+const root = join(sandbox, 'app');
+mkdirSync(root, { recursive: true });
 try {
-  mkdirSync(join(root, 'scripts'));
+  mkdirSync(join(root, '../android/scripts'), { recursive: true });
   mkdirSync(join(root, 'src-tauri/gen/android/app'), { recursive: true });
-  const script = join(root, 'scripts/configure-android-release-signing.mjs');
-  copyFileSync(new URL('./configure-android-release-signing.mjs', import.meta.url), script);
+  const script = join(root, '../android/scripts/configure-android-release-signing.mjs');
+  copyFileSync(
+    new URL('../../android/scripts/configure-android-release-signing.mjs', import.meta.url),
+    script,
+  );
   const gradle = join(root, 'src-tauri/gen/android/app/build.gradle.kts');
   const env = {
     ...process.env,
@@ -66,6 +71,6 @@ try {
     );
   }
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  rmSync(sandbox, { recursive: true, force: true });
 }
 console.log('Android release signing keeps credentials out of Gradle source');

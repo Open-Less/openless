@@ -63,7 +63,7 @@ mod live_ab {
             assert!(unsafe { AXIsProcessTrusted() },
                 "The native test runner has no Accessibility permission; no fixture was started");
             let binary = PathBuf::from(std::env::var_os("OPENLESS_NATIVE_FIXTURE_BIN")
-                .expect("compile scripts/native-live-input-fixture.swift and set OPENLESS_NATIVE_FIXTURE_BIN"));
+                .expect("compile ../macos/scripts/native-live-input-fixture.swift and set OPENLESS_NATIVE_FIXTURE_BIN"));
             let directory = tempfile::Builder::new().prefix("ask-ab-")
                 .tempdir_in(binary.parent().expect("absolute fixture binary path")).unwrap();
             let child = Command::new(&binary).arg("--ask-ab").arg(directory.path())

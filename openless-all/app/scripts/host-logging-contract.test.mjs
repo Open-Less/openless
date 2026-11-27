@@ -20,9 +20,9 @@ import { fileURLToPath } from 'node:url';
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => readFileSync(join(appRoot, relative), 'utf8');
 
-const logging = read('linux-host/src/logging.rs');
-const main = read('linux-host/src/lib.rs');
-const window = read('linux-web/src/main.rs');
+const logging = read('../linux/host/src/logging.rs');
+const main = read('../linux/host/src/lib.rs');
+const window = read('../linux/web/src/main.rs');
 const adapter = read('crates/openless-core/src/cloud_sync_e2ee/adapter.rs');
 
 // 1. Level filter from the environment, not a constant baked in at build time.
@@ -90,7 +90,7 @@ for (const [, body] of logCalls) {
 // 7. The level chosen in the UI has to outlive the process, and the export has to
 //    carry the rotated history - otherwise the file the user sends us is exactly
 //    the one that no longer contains the incident.
-const settingsSave = read('linux-host/src/logging.rs');
+const settingsSave = read('../linux/host/src/logging.rs');
 assert.match(
   logging,
   /pub fn write_log_level/,
@@ -112,7 +112,7 @@ assert.match(logging, /pub fn export_error_logs/, 'logging.rs must provide the m
 // 8. The gaps that used to make a report unusable: no capture line on success, no
 //    dictation start, no single-instance outcome.
 assert.match(
-  read('linux-host/src/audio.rs'),
+  read('../linux/host/src/audio.rs'),
   /"\[audio\] capture started backend=/,
   'capture start must name the backend, device and format that actually won',
 );
@@ -122,7 +122,7 @@ assert.match(
   'the dictation start boundary must be logged (hotkey pressed but nothing happened)',
 );
 // 8. 单实例与启动顺序原先由旧宿主应用实现，随旧宿主删除。
-//    现在单实例在 `linux-web/src/host.rs::claim_single_instance`（socket 锁），
+//    现在单实例在 `../linux/web/src/host.rs::claim_single_instance`（socket 锁），
 //    启动由各宿主自己负责，这条契约不再适用。
 // 9. Per-event chatter must not sit at info.
 assert.ok(

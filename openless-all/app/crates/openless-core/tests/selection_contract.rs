@@ -1149,11 +1149,11 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
             assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.selection_prompt, &[])));
             assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
             assert!(pack.selection_prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
-            assert_eq!(pack.version, "1.3.0");
+            assert_eq!(pack.version, "1.4.0");
             assert_eq!(pack.prompt, pack.selection_prompt);
             let body = openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[]);
             assert_eq!(system.matches(body.as_str()).count(), 1);
-            assert!(system.contains("同一个整体问题中分别表达目标"));
+            assert!(system.contains("内部确认最终意思"));
             assert!(!system.contains("输出会原样替换该选区"));
             assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
         }

@@ -4,7 +4,7 @@ import { basename, extname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // The Tauri shell no longer ships a Linux desktop target: Linux runs the host
-// host in `openless-all/app/linux-host`. This contract keeps that split from
+// host in `openless-all/linux/host`. This contract keeps that split from
 // drifting back — a Linux-only cfg block, a Linux-only dependency, or a Linux
 // branch in the React frontend would silently re-grow an unsupported target.
 //

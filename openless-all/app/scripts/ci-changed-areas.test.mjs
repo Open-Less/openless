@@ -105,7 +105,7 @@ try {
   reset();
 
   // The Linux host is a separate crate in its own target graph.
-  commit({ 'openless-all/app/linux-host/src/i18n.rs': 'fn x() {}\n' }, 'linux host source');
+  commit({ 'openless-all/linux/host/src/i18n.rs': 'fn x() {}\n' }, 'linux host source');
   expect('linux host source', {
     tauri: 'false',
     msrv: 'true',
@@ -117,11 +117,16 @@ try {
   });
   reset();
 
+  commit({ 'openless-all/linux/host/package-revision': '81\n' }, 'shared package revision');
+  expect('shared package revision', {
+    ...every('false'),
+    linux: 'true',
+    harmony: 'true',
+  });
+  reset();
+
   // ArkTS lives only in the HarmonyOS host.
-  commit(
-    { 'openless-all/app/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' },
-    'arkts',
-  );
+  commit({ 'openless-all/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' }, 'arkts');
   expect('arkts source', {
     tauri: 'false',
     harmony: 'true',
@@ -132,7 +137,7 @@ try {
   reset();
 
   // The Linux workflow owns Harmony Rust unit tests as well as the Linux host.
-  commit({ 'openless-all/app/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
+  commit({ 'openless-all/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
   expect('harmony rust', {
     tauri: 'false',
     harmony: 'true',
@@ -158,7 +163,7 @@ try {
 
   // ...but its manifest moves the workspace dependency graph for everyone.
   commit(
-    { 'openless-all/app/linux-host/Cargo.toml': '[package]\nname = "x"\n' },
+    { 'openless-all/linux/host/Cargo.toml': '[package]\nname = "x"\n' },
     'linux host manifest',
   );
   expect('linux host manifest', { tauri: 'true', msrv: 'true', linux: 'true', harmony: 'true' });
@@ -227,7 +232,59 @@ try {
   });
   reset();
 
-  // iOS project work is the only thing that can break the Xcode build.
+  commit(
+    { 'openless-all/android/frontend/components/AndroidPermissionsPanel.tsx': 'export {};\n' },
+    'external Android frontend',
+  );
+  expect('external Android frontend', {
+    tauri: 'true',
+    msrv: 'false',
+    frontend: 'true',
+    harmony: 'true',
+    android: 'false',
+    linux: 'false',
+  });
+  reset();
+
+  for (const path of [
+    'openless-all/android/kotlin/OpenLessImeService.kt',
+    'openless-all/android/scripts/copy-android-scaffolding.mjs',
+  ]) {
+    commit({ [path]: '// platform input\n' }, 'Android host or tooling');
+    expect(path, { android: 'true', tauri: 'true', frontend: 'false', linux: 'false' });
+    reset();
+  }
+
+  commit({ 'openless-all/app/mobile-ime/openless_rime.cpp': '// shared IME\n' }, 'shared IME');
+  expect('shared IME', {
+    android: 'true',
+    harmony: 'true',
+    tauri: 'true',
+    linux: 'false',
+    frontend: 'false',
+  });
+  reset();
+
+  for (const path of [
+    'openless-all/windows/nsis/openless-ime-hooks.nsh',
+    'openless-all/windows/wix/openless-ime.wxs',
+    'openless-all/windows/scripts/windows-build-gnu.ps1',
+    'openless-all/macos/dmg/layout.json',
+    'openless-all/macos/Info.plist',
+    'openless-all/macos/scripts/build-mac.sh',
+  ]) {
+    commit({ [path]: '# packaging input\n' }, 'desktop packaging');
+    expect(path, every('true'));
+    reset();
+  }
+  commit(
+    { 'openless-all/linux/fcitx5-plugin/openless.cpp': '// plugin input\n' },
+    'external Linux plugin',
+  );
+  expect('external Linux plugin', { linux: 'true', android: 'false', harmony: 'false' });
+  reset();
+
+  // iOS project sources also reach the independent Xcode device build.
   commit({ 'openless-all/ios/Packages/OpenLessShared/Sources/X.swift': 'let x = 1\n' }, 'swift');
   expect('ios project source', {
     tauri: 'false',

@@ -29,7 +29,7 @@ class HarnessCacheTests(unittest.TestCase):
             else:
                 os.environ["CARGO_TARGET_DIR"] = str(target)
             with mock.patch("subprocess.run", side_effect=cargo):
-                namespace = runpy.run_path(str(SCRIPTS / script), run_name="__main__")
+                namespace = runpy.run_path(str((SCRIPTS.parent.parent / "windows/scripts" if script.startswith("test-windows-") else SCRIPTS) / script), run_name="__main__")
         return calls, namespace
 
     def test_owner_harness_honors_shared_target_for_tests_and_compile_fail_checks(self):

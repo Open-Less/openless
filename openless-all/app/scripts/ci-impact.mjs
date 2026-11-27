@@ -231,6 +231,8 @@ const androidTooling = (file) =>
 
 /** Browser-rendered surface: sources, styles, the bundle entry and its specs. */
 const motionSurface = (file) =>
+  file.startsWith('openless-all/android/frontend/') ||
+  file.startsWith('openless-all/app/ask-window/') ||
   /^openless-all\/app\/(src\/|public\/|e2e\/|assets\/)/.test(file) ||
   /^openless-all\/app\/(index\.html|package\.json|package-lock\.json|vite\.config\.[^/]+|tailwind\.[^/]+|postcss\.[^/]+|tsconfig[^/]*\.json)$/.test(
     file,
@@ -253,6 +255,17 @@ function classify(file, context) {
   if (workflowOrTooling(file)) return ALL;
   if (iosProject(file)) return new Set(['ios', 'ios-device']);
   if (nativeResource(file)) return ALL;
+  // Harmony packaging and verification read versionCode from this revision.
+  if (file === 'openless-all/linux/host/package-revision') return new Set(['linux', 'harmony']);
+  if (file.startsWith('openless-all/app/mobile-ime/')) return new Set(['android', 'harmony']);
+  if (file.startsWith('openless-all/windows/') || file.startsWith('openless-all/macos/'))
+    return ALL;
+  if (
+    file.startsWith('openless-all/linux/fcitx5-plugin/') ||
+    file.startsWith('openless-all/linux/scripts/')
+  )
+    return new Set(['linux']);
+  if (file.startsWith('openless-all/android/') && !motionSurface(file)) return new Set(['android']);
   if (androidTooling(file)) return new Set(['frontend', 'macos', 'windows', 'harmony', 'android']);
 
   const tags = new Set();
@@ -276,8 +289,8 @@ function classify(file, context) {
   // Files outside every package still have to be evaluated by the shells that
   // embed them (assets, fixtures, icons).
   if (tags.size === 0) {
-    if (file.startsWith('openless-all/app/harmony/')) return new Set(['harmony']);
-    if (file.startsWith('openless-all/app/linux-host/')) return new Set(['linux']);
+    if (file.startsWith('openless-all/harmony/')) return new Set(['harmony']);
+    if (file.startsWith('openless-all/linux/host/')) return new Set(['linux']);
     return ALL;
   }
   return tags;

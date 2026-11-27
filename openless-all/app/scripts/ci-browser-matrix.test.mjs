@@ -19,6 +19,12 @@ assert.equal(
 );
 assert.equal(run['timeout-minutes'], 30);
 const config = readFileSync(new URL('../playwright.config.ts', import.meta.url), 'utf8');
+const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
+assert.match(
+  viteConfig,
+  /optimizeDeps:\s*\{\s*entries:\s*\[\s*'index\.html',\s*'ask-window\/index\.html',\s*'e2e\/fixtures\/\*\.html'\s*\]/,
+  'prebundle dependencies from all browser fixture entries',
+);
 assert.match(config, /globalTimeout:\s*process\.env\.CI\s*\?\s*25\s*\*\s*60_000\s*:\s*undefined/);
 for (const setting of ['fullyParallel: false', 'retries: 0', 'workers: 1', 'timeout: 30_000']) {
   assert.ok(config.includes(setting), `preserve timing isolation: ${setting}`);

@@ -1520,11 +1520,11 @@ async fn routed_dictation_keeps_the_frozen_pack_and_restores_captured_app() {
                 assert!(pack
                     .prompt
                     .ends_with(openless_core::DICTATION_REVISION_RULES));
-                assert_eq!(pack.version, "1.3.0");
+                assert_eq!(pack.version, "1.4.0");
                 assert_eq!(pack.prompt, pack.selection_prompt);
                 let body = openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[]);
                 assert_eq!(system.matches(body.as_str()).count(), 1);
-                assert!(system.contains("同一个整体问题中分别表达目标"));
+                assert!(system.contains("内部确认最终意思"));
                 assert!(!system.contains("输出会原样替换该选区"));
                 assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
             }

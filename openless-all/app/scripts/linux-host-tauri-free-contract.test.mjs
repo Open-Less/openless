@@ -4,8 +4,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const appRoot = new URL('..', import.meta.url);
 const roots = [
-  new URL('../linux-host', import.meta.url),
-  new URL('../scripts/package-linux-qt.sh', import.meta.url),
+  new URL('../../linux/host', import.meta.url),
+  new URL('../../linux/scripts/package-linux-qt.sh', import.meta.url),
   // Linux 已并入公共工作流：检查它自己的打包 action 与 ci.yml 里的 Linux 作业片段。
   new URL('../../../.github/actions/build-linux-packages/action.yml', import.meta.url),
 ];

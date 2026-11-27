@@ -6,9 +6,9 @@ members = [
     "crates/micyou-infer",
     "crates/openless-capsule",
     "native-capsule",
-    "linux-host",
-    "harmony/rust",
-    "linux-web",
+    "../linux/host",
+    "../harmony/rust",
+    "../linux/web",
 ]
 exclude = [
     "src-tauri",

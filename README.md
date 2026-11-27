@@ -79,7 +79,7 @@ OpenLess is a cross-platform, open-source AI voice-input app covering **macOS, W
   <tr>
     <td align="center" width="170">
       <img src="assets/people/tripmc.png" width="80" height="80" alt="TRIP" /><br/>
-      <strong><a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
+      <strong><a href="https://tripcode.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
       <sub>Author</sub>
     </td>
     <td align="center" width="170">
@@ -239,7 +239,7 @@ Get running in three steps:
 
 ## Contributing
 
-Pull requests are welcome — please target the `beta` branch (`main` tracks stable releases). Before diving into the codebase, check [docs/architecture.md](docs/architecture.md) for the platform layout and module links, and [openless-all/README.md](openless-all/README.md) to build locally. Maintainer release steps live in [RELEASING.md](RELEASING.md).
+Pull requests are welcome — please target the `beta` branch (`main` tracks stable releases). Shared sources and build roots live in `openless-all/app`; platform sources and packaging live alongside it in `android`, `harmony`, `linux`, `windows`, `macos`, and `ios`. Before diving into the codebase, check [docs/architecture.md](docs/architecture.md) for the platform layout and module links, and [openless-all/README.md](openless-all/README.md) to build locally. Maintainer release steps live in [RELEASING.md](RELEASING.md).
 
 ## Acknowledgements & Credits
 

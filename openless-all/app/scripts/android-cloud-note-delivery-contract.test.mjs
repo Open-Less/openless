@@ -4,9 +4,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const servicePath = fileURLToPath(
-  new URL('../android/kotlin/OpenLessImeService.kt', import.meta.url),
+  new URL('../../android/kotlin/OpenLessImeService.kt', import.meta.url),
 );
-const copyScriptPath = fileURLToPath(new URL('./copy-android-scaffolding.mjs', import.meta.url));
+const copyScriptPath = fileURLToPath(
+  new URL('../../android/scripts/copy-android-scaffolding.mjs', import.meta.url),
+);
 const service = readFileSync(servicePath, 'utf8');
 const copyScript = readFileSync(copyScriptPath, 'utf8');
 

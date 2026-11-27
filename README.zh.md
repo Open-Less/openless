@@ -79,7 +79,7 @@ OpenLess 是一款覆盖 **macOS、Windows、Linux、Android、iOS 与 HarmonyOS
   <tr>
     <td align="center" width="170">
       <img src="assets/people/tripmc.png" width="80" height="80" alt="TRIP" /><br/>
-      <strong><a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
+      <strong><a href="https://tripcode.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
       <sub>作者</sub>
     </td>
     <td align="center" width="170">
@@ -239,7 +239,7 @@ OpenLess 是一款覆盖 **macOS、Windows、Linux、Android、iOS 与 HarmonyOS
 
 ## 参与贡献
 
-欢迎提 Issue 和 PR，所有 PR 请统一提向 `beta` 分支（`main` 为正式版分支）。想了解六端模块划分、客户端形态与架构细节，可以先看 [docs/architecture.md](docs/architecture.md)；本地编译与开发环境配置见 [openless-all/README.zh.md](openless-all/README.zh.md)；维护者发布流程见 [RELEASING.zh.md](RELEASING.zh.md)。
+欢迎提 Issue 和 PR，所有 PR 请统一提向 `beta` 分支（`main` 为正式版分支）。共享源码与构建根保留在 `openless-all/app`；各端源码与打包资产位于同级的 `android`、`harmony`、`linux`、`windows`、`macos` 和 `ios`。想了解六端模块划分、客户端形态与架构细节，可以先看 [docs/architecture.md](docs/architecture.md)；本地编译与开发环境配置见 [openless-all/README.zh.md](openless-all/README.zh.md)；维护者发布流程见 [RELEASING.zh.md](RELEASING.zh.md)。
 
 ## 致谢与第三方署名
 
