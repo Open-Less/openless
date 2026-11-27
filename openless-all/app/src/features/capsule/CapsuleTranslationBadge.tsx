@@ -9,18 +9,25 @@ import {
   createCapsuleSubscriptions,
   getDictationTranslationTarget,
   selectDictationTranslationTarget,
+  setCapsuleLanguageMenu,
   type DictationTranslationTarget,
 } from '../../api/dictation';
 import { localizedLanguages, nativeLanguageName } from '../../lib/languageCatalog';
 import { isTranslationTargetRedundant } from '../../lib/translationTarget';
-import { useCapsuleLanguageMenu } from './useCapsuleLanguageMenu';
+import type { CapsulePickerDeps, CapsulePickerMenu } from './capsulePickerMenu';
+import { useCapsulePickerMenu } from './useCapsulePickerMenu';
 import './CapsuleStyles.css';
+
+const setNativeMenu: CapsulePickerDeps['setNativeMenu'] = (open, { sessionId }) =>
+  setCapsuleLanguageMenu(open, sessionId);
 
 /** The same Base UI menu as settings, with temporary native headroom above the capsule. */
 export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
+  pickerController,
   visible = true,
   processing = false,
 }: {
+  pickerController: CapsulePickerMenu;
   visible?: boolean;
   processing?: boolean;
 }) {
@@ -112,7 +119,10 @@ export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
     setError(false);
   }, [snapshot?.sessionId]);
 
-  const menu = useCapsuleLanguageMenu({
+  const menu = useCapsulePickerMenu({
+    controller: pickerController,
+    kind: 'language',
+    setNativeMenu,
     anchor,
     target: snapshot,
     visible: visible && !processing,
