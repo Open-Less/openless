@@ -82,9 +82,17 @@ struct Focus {
     position: Option<(u64, u64)>,
 }
 
+#[derive(Default)]
+struct HostCaptureBarrier {
+    armed: AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+
 struct FocusContextAdapter {
     focus: Arc<Mutex<Focus>>,
     target: &'static str,
+    barrier: Arc<HostCaptureBarrier>,
 }
 
 impl HostContextAdapter for FocusContextAdapter {
@@ -117,7 +125,12 @@ impl HostContextAdapter for FocusContextAdapter {
             .context_captured
             .push(self.target);
         let front_app = self.target.to_string();
+        let barrier = self.barrier.clone();
         Box::pin(async move {
+            if barrier.armed.swap(false, Ordering::AcqRel) {
+                barrier.entered.notify_one();
+                barrier.release.notified().await;
+            }
             Ok(HostContextCapture {
                 front_app: Some(front_app),
                 cursor_context: None,
@@ -129,6 +142,7 @@ impl HostContextAdapter for FocusContextAdapter {
 struct FocusInserter {
     focus: Arc<Mutex<Focus>>,
     target: Option<&'static str>,
+    barrier: Arc<HostCaptureBarrier>,
 }
 impl TextInserter for FocusInserter {
     fn defer_preparation_until_stop(&self) -> bool {
@@ -142,10 +156,12 @@ impl TextInserter for FocusInserter {
             inserter: Arc::new(Self {
                 focus: self.focus.clone(),
                 target: Some(target),
+                barrier: self.barrier.clone(),
             }),
             host_context: Arc::new(FocusContextAdapter {
                 focus: self.focus.clone(),
                 target,
+                barrier: self.barrier.clone(),
             }),
         })
     }
@@ -196,6 +212,7 @@ struct Fixture {
     backend: Arc<OpenLessBackend>,
     credentials: Arc<DelayedCredentials>,
     focus: Arc<Mutex<Focus>>,
+    host_capture: Arc<HostCaptureBarrier>,
     directory: std::path::PathBuf,
 }
 
@@ -223,6 +240,7 @@ impl Fixture {
         )
         .unwrap();
         let credentials = Arc::new(DelayedCredentials::default());
+        let host_capture = Arc::new(HostCaptureBarrier::default());
         let focus = Arc::new(Mutex::new(Focus {
             current: "A",
             captured: Vec::new(),
@@ -239,6 +257,7 @@ impl Fixture {
         dependencies.text_inserter = Arc::new(FocusInserter {
             focus: focus.clone(),
             target: None,
+            barrier: host_capture.clone(),
         });
         let backend = Arc::new(
             OpenLessBackend::new(
@@ -255,6 +274,7 @@ impl Fixture {
             backend,
             credentials,
             focus,
+            host_capture,
             directory,
         }
     }
@@ -305,6 +325,142 @@ async fn skip_auto_style_capture_explicit_translation_and_history_use_actual_sty
         let history = backend.list_history().unwrap();
         assert_eq!(history[0].style_pack_id.as_deref(), Some(expected));
         assert!(history[0].translation_active);
+    }
+}
+
+#[tokio::test]
+async fn skip_auto_style_initial_choice_survives_host_and_credential_awaits() {
+    use openless_core::{BackendEventKind, DictationPhase, DictationStyleSelection as Selection};
+    use std::time::Duration;
+
+    for initial_skip in [true, false] {
+        for explicit in [false, true] {
+            for hotkey in [false, true] {
+                let engine = FixtureDictationEngine::successful("spoken", "polished");
+                let fixture = Fixture::with_engine(|_| Arc::new(engine.clone())).await;
+                fixture.focus.lock().unwrap().current = "VS Code";
+                fixture.host_capture.armed.store(true, Ordering::Release);
+                fixture.credentials.write(
+                    CredentialKey::new(CredentialNamespace::Llm, Some("ark".into()), "ark.api_key").unwrap(),
+                    SecretValue::new("fixture-key"),
+                ).await.unwrap();
+                let backend = &fixture.backend;
+                let polish = backend.create_style_pack(StylePack {
+                    name: "polish".into(), prompt: "frozen polish".into(), ..Default::default()
+                }).unwrap();
+                let automatic = backend.create_style_pack(StylePack {
+                    name: "automatic".into(), prompt: "frozen automatic".into(), ..Default::default()
+                }).unwrap();
+                backend.activate_style_pack(&polish.id).unwrap();
+                backend.set_app_style_assignment(AppStyleAssignment::Category {
+                    category: "coding".into(), style_pack_id: Some(automatic.id.clone()),
+                }).unwrap();
+                let mut prefs = backend.get_preferences();
+                prefs.translation_target_language = "English".into();
+                prefs.working_languages = vec!["简体中文".into()];
+                backend.update_settings(prefs, openless_core::SettingsUpdateOptions::STRICT,
+                    &openless_core::NoopSettingsRuntime).unwrap();
+                let mut events = backend.subscribe();
+                let starting = tokio::spawn({
+                    let backend = backend.clone();
+                    async move {
+                        let options = DictationStartOptions {
+                            skip_auto_style: initial_skip,
+                            style_pack_id: explicit.then(|| "builtin.formal".into()),
+                            ..Default::default()
+                        };
+                        if hotkey {
+                            match backend.dispatch_dictation_hotkey_edge_with_options(
+                                DictationHotkeyEdge::Pressed {
+                                    press_id: 1, at: std::time::Instant::now(),
+                                },
+                                options,
+                            ).await? {
+                                CliDispatchOutcome::DictationStarted(id) => Ok(id),
+                                other => panic!("expected started session, got {other:?}"),
+                            }
+                        } else {
+                            backend.start_dictation_with_options(options).await
+                        }
+                    }
+                });
+                // These signals originate inside the real capture/provider futures.
+                // No state is fabricated, and the engine cannot start past either gate.
+                tokio::time::timeout(Duration::from_secs(2), fixture.host_capture.entered.notified())
+                    .await.unwrap();
+                let snapshot = backend.snapshot().dictation;
+                let id = snapshot.session_id.unwrap();
+                assert_eq!(snapshot.phase, DictationPhase::Starting);
+                assert_eq!(snapshot.skip_auto_style, initial_skip);
+                let initial = if initial_skip { Selection::SkipAuto } else { Selection::Automatic };
+                let target = backend.dictation_style_target().unwrap();
+                assert_eq!(target.selection, initial);
+                assert_eq!(target.skip_auto_style, initial_skip);
+                assert!(target.style_pack_id.is_none());
+                assert!(!starting.is_finished());
+                assert!(engine.contexts().is_empty());
+                let mut published_starting = false;
+                while let Ok(event) = events.try_recv() {
+                    match event.kind {
+                        BackendEventKind::DictationStateChanged(state)
+                            if state.phase == DictationPhase::Starting => {
+                            assert_eq!(state.session_id, Some(id));
+                            assert_eq!(state.skip_auto_style, initial_skip);
+                            published_starting = true;
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(published_starting, "first Starting feedback must show the initial choice");
+
+                let expected = if initial_skip { Selection::Automatic } else { Selection::SkipAuto };
+                assert_eq!(backend.toggle_dictation_style_for_session(id).unwrap().selection, expected);
+                assert_eq!(backend.snapshot().dictation.skip_auto_style, !initial_skip);
+                backend.toggle_dictation_translation_for_session(id).unwrap();
+                fixture.host_capture.release.notify_one();
+                tokio::time::timeout(Duration::from_secs(2), fixture.credentials.entered.notified())
+                    .await.unwrap();
+                assert_eq!(backend.dictation_style_target().unwrap().selection, expected);
+                assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Starting);
+                assert!(engine.contexts().is_empty());
+                // Absolute requests and toggles must apply in call order, including
+                // across separate startup awaits. A stale session must not change it.
+                assert!(backend.update_dictation_style(SessionId::new(), initial.clone()).is_err());
+                assert_eq!(backend.update_dictation_style(id, initial.clone()).unwrap().selection, initial);
+                assert_eq!(backend.toggle_dictation_style_for_session(id).unwrap().selection, expected);
+                fixture.credentials.release.notify_one();
+                assert_eq!(tokio::time::timeout(Duration::from_secs(2), starting)
+                    .await.unwrap().unwrap().unwrap(), id);
+                let expected_id = if expected == Selection::SkipAuto {
+                    polish.id.as_str()
+                } else if explicit {
+                    "builtin.formal"
+                } else {
+                    automatic.id.as_str()
+                };
+                let target = backend.dictation_style_target().unwrap();
+                assert_eq!(target.selection, expected);
+                assert_eq!(target.style_pack_id.as_deref(), Some(expected_id));
+                assert!(backend.snapshot().dictation.translation_active);
+                backend.stop_dictation_session(id).await.unwrap();
+                let contexts = engine.contexts();
+                assert!(!contexts.is_empty());
+                assert!(contexts.iter().all(|context| {
+                    context.polish.style_pack_id == expected_id
+                        && context.polish.translation_active
+                }));
+                let history = backend.list_history().unwrap();
+                assert_eq!(history[0].style_pack_id.as_deref(), Some(expected_id));
+                assert!(history[0].translation_active);
+                // The next ordinary session starts from its own default intent.
+                let next = backend.start_dictation().await.unwrap();
+                assert_eq!(backend.dictation_style_target().unwrap().selection, Selection::Automatic);
+                assert!(!backend.snapshot().dictation.translation_active);
+                assert!(backend.toggle_dictation_style_for_session(id).is_err());
+                backend.cancel_dictation(Some(next)).await.unwrap();
+                backend.shutdown().await.unwrap();
+            }
+        }
     }
 }
 
@@ -545,7 +701,12 @@ async fn skip_auto_style_parallel_segments_keep_live_caret_and_independent_style
         fixture.focus.lock().unwrap().position = moved;
         let second = if next_capture {
             fixture.focus.lock().unwrap().current = "B";
-            let second = fixture.backend.start_dictation().await.unwrap();
+            let second = fixture.backend.start_dictation_with_options(DictationStartOptions {
+                skip_auto_style: true,
+                ..Default::default()
+            }).await.unwrap();
+            assert_eq!(fixture.backend.dictation_style_target().unwrap().selection,
+                openless_core::DictationStyleSelection::SkipAuto);
             fixture.backend.update_dictation_style(second, openless_core::DictationStyleSelection::StylePack {
                 style_pack_id: "builtin.light".into(),
             }).unwrap();
