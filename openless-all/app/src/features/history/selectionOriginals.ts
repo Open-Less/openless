@@ -4,7 +4,7 @@ type SelectionHistoryEntry = Pick<DictationSession, 'id' | 'source' | 'rawTransc
 
 export function hasSelectionOriginal(entry: Omit<SelectionHistoryEntry, 'id'>): boolean {
   return (
-    entry.source === 'selection_polish' &&
+    (entry.source === 'selection_polish' || entry.source === 'selection_voice_edit') &&
     typeof entry.rawTranscript === 'string' &&
     entry.rawTranscript.length > 0
   );
