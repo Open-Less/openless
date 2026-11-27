@@ -9,6 +9,7 @@ const [commands, lib, hotkeys, loops, bridge, host, menu, selection] = await Pro
 const core = await readFile(new URL('../crates/openless-core/src/api.rs', import.meta.url), 'utf8');
 const appEvents = await read('tauri_events.rs');
 const pickerCommand = await read('commands/capsule_picker.rs');
+const windowsFocus = await read('coordinator/style_menu/windows_focus.rs');
 assert.match(lib, /commands::get_capsule_style_menu_request/);
 assert.match(commands, /pub fn get_capsule_style_menu_request[^]*?capsule_label\(window.label\(\)\)/);
 assert.match(commands, /pub async fn set_capsule_style_menu[^]*?request_id: Option<String>,[^]*?menu_id: Option<String>/);
@@ -32,6 +33,34 @@ assert.match(bridge, /mutable: target.mutable && surface_available/);
 assert.match(host, /payload.state == CapsuleState::Recording && !payload.qa && !payload.selection_polish/);
 assert.match(bridge, /capsule_menu_input_target_is_current\(target\)/);
 assert.match(bridge, /capture_capsule_menu_input_target\(\)/);
+assert.match(bridge, /#\[cfg\(not\(target_os = "windows"\)\)\]\s*impl FocusState/,
+  'Windows must never run the caller-apartment selection/UIA helper');
+assert.match(bridge, /windows_focus::Owner::start\(\)/);
+assert.match(bridge, /owner.submit\(windows_focus::Scope/);
+assert.match(windowsFocus, /name\("capsule-focus-mta".into\(\)\)/);
+assert.match(windowsFocus, /CoInitializeEx\(None, COINIT_MULTITHREADED\)/);
+const focusRead = windowsFocus.slice(windowsFocus.indexOf('pub(crate) fn current('),
+  windowsFocus.indexOf('pub(crate) fn submit('));
+assert.doesNotMatch(focusRead, /CoInitialize|GetFocusedElement|CompareElements|recv|sleep|join/,
+  'STA getters, reservations, main delivery and hooks read proofs without waiting for UIA');
+assert.match(focusRead, /proof.scope != scope/);
+assert.match(focusRead, /proof.event != event/);
+assert.match(focusRead, /proof.queried.elapsed\(\) > PROOF_LIFETIME/);
+assert.match(focusRead, /Native::current\(\) != Some\(proof.native\)/);
+assert.match(windowsFocus, /EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_FOCUS/);
+assert.match(windowsFocus, /AddFocusChangedEventHandler/);
+assert.match(windowsFocus, /CompareElements\(old, new\)/);
+assert.match(windowsFocus, /Native::current\(\) == Some\(request.origin\)/);
+assert.match(windowsFocus, /request.queued.elapsed\(\) <= PROOF_LIFETIME/);
+assert.match(windowsFocus, /shared\s*\.demand\s*\.lock\(\)\s*\.as_ref\(\)\s*\.is_some_and/);
+assert.match(bridge, /configure_focus_fenced/);
+assert.match(menu, /focus_before != focus_after/);
+assert.match(windowsFocus, /old.queried.elapsed\(\) <= PROOF_LIFETIME/);
+assert.match(windowsFocus, /if !identity_same \|\| !continuous/);
+assert.match(windowsFocus, /shared.notify\(\)/);
+assert.match(windowsFocus, /wanted.epoch > request.scope.epoch/);
+assert.doesNotMatch(windowsFocus, /SetFocus\(|SetForegroundWindow\(|SendInput|GetText|CurrentValue/,
+  'the observer neither activates a window nor reads or synthesizes text/input');
 assert.match(selection, /pub\(crate\) fn capture_capsule_menu_input_target[^]*?target.strict_input_target = true/);
 assert.match(menu, /keyboard_available: c.keyboard_available && c.focus.is_some\(\)/);
 assert.match(menu, /target.selection != DictationStyleSelection::SkipAuto/);
