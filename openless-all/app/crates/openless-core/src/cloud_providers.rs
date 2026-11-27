@@ -1422,6 +1422,7 @@ async fn run_cloud_polish(
         context.polish.style_system_prompt.clone()
     };
     let style_system_prompt = context.with_input_scene_prefix(style_system_prompt);
+    let cursor_context = context.request_cursor_context();
     let stream = PolishStreamPublisher::new(
         Arc::clone(&partials),
         Arc::clone(&cancellation),
@@ -1461,7 +1462,7 @@ async fn run_cloud_polish(
                         context.polish.chinese_script_preference,
                         context.polish.output_language_preference,
                         context.polish.front_app.as_deref(),
-                        context.polish.cursor_context.as_deref(),
+                        cursor_context.as_deref(),
                         &prior_turns,
                         context.polish.edit_plan_input,
                     )
@@ -1478,7 +1479,7 @@ async fn run_cloud_polish(
                         context.polish.chinese_script_preference,
                         context.polish.output_language_preference,
                         context.polish.front_app.as_deref(),
-                        context.polish.cursor_context.as_deref(),
+                        cursor_context.as_deref(),
                         &prior_turns,
                         context.polish.edit_plan_input,
                         on_delta,
@@ -1497,7 +1498,7 @@ async fn run_cloud_polish(
                         context.polish.chinese_script_preference,
                         context.polish.output_language_preference,
                         context.polish.front_app.as_deref(),
-                        context.polish.cursor_context.as_deref(),
+                        cursor_context.as_deref(),
                         &prior_turns,
                         context.polish.edit_plan_input,
                     )
@@ -1514,7 +1515,7 @@ async fn run_cloud_polish(
                         context.polish.chinese_script_preference,
                         context.polish.output_language_preference,
                         context.polish.front_app.as_deref(),
-                        context.polish.cursor_context.as_deref(),
+                        cursor_context.as_deref(),
                         &prior_turns,
                         context.polish.edit_plan_input,
                         on_delta,

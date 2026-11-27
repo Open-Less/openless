@@ -428,7 +428,13 @@ fn normalized(text: &str) -> String {
 
 pub(crate) fn contains_sensitive_text(text: &str) -> bool {
     text.chars().take(MAX_CHARS + 1).count() > MAX_CHARS
-        || sensitive_patterns().is_match(&normalized(text))
+        || contains_sensitive_content(text)
+}
+
+/// Shared privacy gate for authorized document data. This does not impose an
+/// application-level limit on explicit selection text (#8).
+pub fn contains_sensitive_content(text: &str) -> bool {
+    sensitive_patterns().is_match(&normalized(text))
 }
 
 fn skeleton(text: &str) -> String {

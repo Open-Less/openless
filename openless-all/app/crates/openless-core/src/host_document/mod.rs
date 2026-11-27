@@ -4,7 +4,9 @@
 //! pure functions.
 
 mod diff;
+mod context;
 mod observation;
+mod range_observation;
 pub mod target;
 mod window;
 
@@ -13,6 +15,8 @@ pub use diff::{
     learned_rules_with_max_chars, minimal_edit, EditPair, LearnedRule,
 };
 pub use observation::ObservedInsertion;
+pub use range_observation::RangeObservation;
+pub use context::CursorContext;
 pub use window::{
     plan_window, utf16_offset_to_char_offset, window_around_cursor, window_from_split, WindowSpan,
 };

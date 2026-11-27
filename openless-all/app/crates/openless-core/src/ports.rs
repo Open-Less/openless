@@ -46,6 +46,14 @@ pub struct CapturedTextTarget {
 }
 
 pub trait HostContextAdapter: Send + Sync {
+    /// Optional structured text from this session's frozen original control.
+    /// Called only with cursor-context consent. No native identity or scene
+    /// metadata belongs in this value. Legacy hosts keep the existing capture.
+    fn capture_document_context(
+        &self,
+    ) -> BoxFuture<'static, Option<crate::host_document::CursorContext>> {
+        Box::pin(async { None })
+    }
     /// Local destination evidence from capture time. This is deliberately kept
     /// separate from HostContextCapture, whose text may be sent to a model.
     fn target_identity(&self) -> Option<crate::host_document::target::HostTargetIdentity> {

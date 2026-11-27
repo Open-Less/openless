@@ -4224,6 +4224,10 @@ pub(crate) struct TauriTextInserter {
 
 #[derive(Default)]
 pub(crate) struct VocabPlacementState {
+    #[cfg(target_os = "macos")]
+    deliveries: Mutex<crate::vocab_card_placement::TargetHandoff<
+        SessionId, crate::host_document::DeliveredInsertion,
+    >>,
     targets: Mutex<
         crate::vocab_card_placement::TargetHandoff<
             SessionId,
@@ -4232,6 +4236,15 @@ pub(crate) struct VocabPlacementState {
     >,
     anchors: Mutex<crate::vocab_card_placement::AnchorRegistry>,
     observed_targets: Mutex<Vec<(u64, crate::selection::SelectionInsertionTarget)>>,
+}
+
+#[cfg(target_os = "macos")]
+fn learning_is_enabled(backend: &BackendSlot) -> bool {
+    let backend = backend.lock().as_ref().and_then(std::sync::Weak::upgrade);
+    backend.is_some_and(|backend| {
+        let preferences = backend.get_preferences();
+        preferences.vocabulary_learning_enabled || preferences.expression_learning_enabled
+    })
 }
 
 impl VocabPlacementState {
@@ -4293,6 +4306,34 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
         typed_text: String,
         sink: Arc<dyn EditObservationSink>,
     ) -> Result<(), BackendError> {
+        #[cfg(target_os = "macos")]
+        {
+            let app = self.app.lock().clone();
+            let state = app.as_ref().and_then(|app| app.try_state::<VocabPlacementState>());
+            let delivery = sink.session_id().and_then(|session| {
+                state.as_ref()?.deliveries.lock().take(session)
+            }).filter(|delivery| delivery.matches(&typed_text));
+            let id = sink.observation_id();
+            if let (Some(state), Some(id), Some(delivery)) = (state.as_ref(), id, delivery.as_ref()) {
+                state.begin(id, Some(&delivery.target));
+            }
+            drop(state);
+            *self.watcher.lock() = delivery.and_then(|delivery| {
+                crate::host_document::watch_delivered_edits(
+                    delivery, sink.observation_duration(), move |edit| sink.publish(edit),
+                    move || {
+                        if let (Some(app), Some(id)) = (app.as_ref(), id) {
+                            if let Some(state) = app.try_state::<VocabPlacementState>() {
+                                state.anchors.lock().invalidate(id);
+                            }
+                        }
+                    },
+                )
+            });
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
         let app = self.app.lock().clone();
         let state = app
             .as_ref()
@@ -4333,6 +4374,7 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
             },
         );
         Ok(())
+        }
     }
 
     fn disarm(&self) {
@@ -4530,7 +4572,7 @@ impl CoreTextInserter for TauriTextInserter {
                 ime_target,
                 ..self.clone()
             }),
-            host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target)),
+            host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target, self.backend.clone())),
         })
     }
 
@@ -4557,6 +4599,18 @@ impl CoreTextInserter for TauriTextInserter {
             // only when this session owns Core's ordered finalization.
             let insertion_target = insertion_target
                 .unwrap_or_else(crate::selection::capture_selection_insertion_target);
+            #[cfg(target_os = "macos")]
+            let learning_start = if context.insertion.enabled && context.insertion.observe_edits {
+                let target = insertion_target.clone();
+                let backend = backend.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if !learning_is_enabled(&backend) { return None; }
+                    let start = crate::host_document::macos::prepare_edit_delivery(&target);
+                    if learning_is_enabled(&backend) { start } else { None }
+                }).await.ok().flatten()
+            } else { None };
+            #[cfg(target_os = "macos")]
+            let learning_posted = learning_start.as_ref().map(|_| String::new());
             #[cfg(target_os = "windows")]
             if let Some(handle) = app.lock().as_ref() {
                 if let Some(state) = handle.try_state::<VocabPlacementState>() {
@@ -4639,6 +4693,10 @@ impl CoreTextInserter for TauriTextInserter {
                 context,
                 insertion_target,
                 finished: Arc::new(AtomicBool::new(false)),
+                #[cfg(target_os = "macos")]
+                learning_start: Arc::new(Mutex::new(learning_start)),
+                #[cfg(target_os = "macos")]
+                learning_posted: Arc::new(Mutex::new(learning_posted)),
                 #[cfg(target_os = "windows")]
                 windows_ime,
                 #[cfg(target_os = "windows")]
@@ -4697,6 +4755,10 @@ struct TauriTextInsertionSession {
     context: Arc<DictationContext>,
     insertion_target: crate::selection::SelectionInsertionTarget,
     finished: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    learning_start: Arc<Mutex<Option<crate::host_document::LearningStart>>>,
+    #[cfg(target_os = "macos")]
+    learning_posted: Arc<Mutex<Option<String>>>,
     #[cfg(target_os = "windows")]
     windows_ime: Arc<crate::windows_ime_session::WindowsImeSessionController>,
     #[cfg(target_os = "windows")]
@@ -5091,7 +5153,19 @@ impl TauriTextInsertionSession {
                     "macOS streaming insertion is unavailable",
                 )
             })?;
-            worker.write(text).await
+            let result = worker.write(text.clone()).await;
+            if let Ok(result) = &result {
+                let mut posted = self.learning_posted.lock();
+                if let Some(body) = posted.as_mut() {
+                    body.extend(text.chars().take(result.written_chars));
+                    if body.encode_utf16().count() > openless_core::host_document::RangeObservation::MAX_INSERTION_UTF16 {
+                        *posted = None;
+                    }
+                }
+            } else {
+                *self.learning_posted.lock() = None;
+            }
+            result
         }
         #[cfg(not(target_os = "macos"))]
         self.restore_insertion_target()?;
@@ -5390,6 +5464,30 @@ impl TauriTextInsertionSession {
     }
 
     #[cfg(target_os = "macos")]
+    async fn publish_learning_delivery(&self, suffix: &str) {
+        let start = self.learning_start.lock().take();
+        let posted = self.learning_posted.lock().take();
+        let (Some(start), Some(mut posted)) = (start, posted) else { return; };
+        if self.cancel_requested.load(Ordering::Acquire) || !learning_is_enabled(&self.backend) {
+            return;
+        }
+        posted.push_str(suffix);
+        let target = self.insertion_target.clone();
+        let backend = self.backend.clone();
+        let cancelled = self.cancel_requested.clone();
+        let delivered = tauri::async_runtime::spawn_blocking(move || {
+            if cancelled.load(Ordering::Acquire) || !learning_is_enabled(&backend) { return None; }
+            let delivery = crate::host_document::macos::complete_edit_delivery(target, start, posted);
+            if cancelled.load(Ordering::Acquire) || !learning_is_enabled(&backend) { None } else { delivery }
+        }).await.ok().flatten();
+        if let Some(delivery) = delivered {
+            if let Some(state) = self.app.try_state::<VocabPlacementState>() {
+                state.deliveries.lock().remember(self.session_id, delivery);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     async fn finalize_mac(
         self,
         final_text: Option<String>,
@@ -5406,7 +5504,8 @@ impl TauriTextInsertionSession {
                 move || async move {
                     let worker = self.streaming_worker.clone();
                     let session = &self;
-                    finish_mac_insertion_after_barrier(
+                    let learning_suffix = final_text.clone();
+                    let result = finish_mac_insertion_after_barrier(
                         async move {
                             match worker {
                                 Some(worker) => worker.finish().await,
@@ -5422,7 +5521,13 @@ impl TauriTextInsertionSession {
                         },
                         || session.restore_platform_state(),
                     )
-                    .await
+                    .await;
+                    if matches!(&result, Ok(MacInsertionCompletion::Finished(InsertOutcome::Inserted))) {
+                        if let Some(suffix) = learning_suffix {
+                            session.publish_learning_delivery(&suffix).await;
+                        }
+                    }
+                    result
                 },
                 |task| {
                     tauri::async_runtime::spawn(task);
@@ -5637,6 +5742,34 @@ impl TextInsertionSession for TauriTextInsertionSession {
 #[cfg(all(test, target_os = "macos"))]
 mod mac_insertion_lifecycle_tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires the consented P6 original-editor fixture and Accessibility; no model"]
+    async fn real_host_document_capture_uses_the_frozen_original_range_and_live_opt_in() {
+        use openless_core::HostContextAdapter;
+        assert!(std::env::var("OPENLESS_P6_CONTROLLED_EDITOR").as_deref() == Ok("1"),
+            "open the dedicated editor fixture described in p6-context-acceptance.md");
+        let data = tempfile::tempdir().unwrap();
+        let backend = Arc::new(openless_core::OpenLessBackend::new(
+            openless_core::BackendConfig { data_dir: data.path().into(), ..Default::default() },
+            openless_core::BackendDependencies::unsupported(),
+        ).unwrap());
+        let mut prefs = backend.get_preferences();
+        prefs.cursor_context_enabled = true;
+        backend.set_preferences(prefs.clone()).unwrap();
+        let slot = backend_slot();
+        *slot.lock() = Some(Arc::downgrade(&backend));
+        let target = crate::selection::capture_selection_insertion_target();
+        let host = TauriHostContextAdapter::for_target(target, slot);
+        let document = host.capture_document_context().await.expect("controlled AX context unavailable");
+        // Boolean assertions never print a real editor's text on failure.
+        assert!(document.before.ends_with("P6_BEFORE "));
+        assert!(document.selection == "P6_SELECTED");
+        assert!(document.after.starts_with(" P6_AFTER"));
+        prefs.cursor_context_enabled = false;
+        backend.set_preferences(prefs).unwrap();
+        assert!(host.capture_document_context().await.is_none());
+    }
 
     fn spawn(task: BoxFuture<'static, ()>) {
         tokio::spawn(task);
@@ -5900,17 +6033,55 @@ fn map_insert_status(status: crate::types::InsertStatus) -> Result<InsertOutcome
 #[derive(Default)]
 struct TauriHostContextAdapter {
     target: Option<crate::selection::SelectionInsertionTarget>,
+    #[cfg(target_os = "macos")]
+    document_range: Option<(u64, u64)>,
+    #[cfg(target_os = "macos")]
+    backend: BackendSlot,
 }
 
 impl TauriHostContextAdapter {
-    fn for_target(target: crate::selection::SelectionInsertionTarget) -> Self {
+    fn for_target(target: crate::selection::SelectionInsertionTarget, backend: BackendSlot) -> Self {
+        #[cfg(not(target_os = "macos"))]
+        let _ = backend;
+        #[cfg(target_os = "macos")]
+        let document_range = crate::selection::target_identity(&target)
+            .and_then(|identity| identity.selection)
+            .filter(|range| range.unit == openless_core::host_document::target::HostTextUnit::Utf16)
+            .map(|range| (range.start, range.length));
         Self {
             target: Some(target),
+            #[cfg(target_os = "macos")]
+            document_range,
+            #[cfg(target_os = "macos")]
+            backend,
         }
     }
 }
 
 impl openless_core::HostContextAdapter for TauriHostContextAdapter {
+    #[cfg(target_os = "macos")]
+    fn capture_document_context(
+        &self,
+    ) -> BoxFuture<'static, Option<openless_core::host_document::CursorContext>> {
+        let target = self.target.clone();
+        let range = self.document_range;
+        let backend = self.backend.clone();
+        Box::pin(async move {
+            let (target, range) = (target?, range?);
+            tokio::time::timeout(std::time::Duration::from_millis(900),
+                tauri::async_runtime::spawn_blocking(move || {
+                    let allowed = || {
+                        let backend = backend.lock().as_ref().and_then(std::sync::Weak::upgrade);
+                        backend.is_some_and(|backend| backend.get_preferences().cursor_context_enabled)
+                    };
+                    if !allowed() { return None; }
+                    let context = crate::host_document::macos::capture_document_context(
+                        &target, range, crate::host_document::DEFAULT_BUDGET_CHARS,
+                    );
+                    if allowed() { context } else { None }
+                })).await.ok()?.ok().flatten()
+        })
+    }
     #[cfg(target_os = "macos")]
     fn capture_input_location(&self) -> BoxFuture<'static, Option<String>> {
         let target = self.target.clone();
@@ -5960,6 +6131,11 @@ impl openless_core::HostContextAdapter for TauriHostContextAdapter {
                 None => crate::coordinator::capture_frontmost_app(),
             };
 
+            // macOS text is read only through the structured frozen-owner
+            // method. Failure must not retry via a freshly focused element.
+            #[cfg(target_os = "macos")]
+            let cursor_context = { let _ = include_cursor; None };
+            #[cfg(not(target_os = "macos"))]
             let cursor_context = if include_cursor {
                 let started = std::time::Instant::now();
                 let window = match target {

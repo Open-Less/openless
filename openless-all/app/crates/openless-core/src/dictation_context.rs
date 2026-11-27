@@ -153,6 +153,8 @@ pub struct DictationPolishContext {
     pub cursor_context: Option<String>,
     /// Newest-first turns captured when the session starts.
     pub prior_turns: Vec<PolishHistoryTurn>,
+    /// Structured request-only text; never persisted or used as the transcript.
+    pub document_context: Option<crate::host_document::CursorContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -437,6 +439,7 @@ impl DictationContext {
             expression_instructions: None,
             omni,
             polish: DictationPolishContext {
+                document_context: None,
                 input_scene_prefix: None,
                 mode: style_pack.base_mode,
                 style_pack_id: style_pack.id.clone(),
@@ -652,6 +655,7 @@ impl DictationContext {
     }
 
     pub fn effective_polish_prompts(&self, raw_text: &str) -> (String, String) {
+        let cursor_context = self.request_cursor_context();
         let style_system_prompt = if self.polish.translation_active {
             crate::prompt_compose::build_polish_translate_system_prompt(
                 &self.polish.style_system_prompt,
@@ -669,7 +673,7 @@ impl DictationContext {
             self.polish.chinese_script_preference,
             self.polish.output_language_preference,
             self.polish.front_app.as_deref(),
-            self.polish.cursor_context.as_deref(),
+            cursor_context.as_deref(),
             !self.polish.prior_turns.is_empty(),
             self.polish.edit_plan_input,
         );
@@ -679,6 +683,13 @@ impl DictationContext {
             user
         };
         (self.with_input_scene_prefix(system), user)
+    }
+
+    pub(crate) fn request_cursor_context(&self) -> Option<String> {
+        self.polish.document_context.as_ref()
+            .filter(|context| !context.is_empty())
+            .map(crate::host_document::CursorContext::request_input)
+            .or_else(|| self.polish.cursor_context.clone())
     }
 
     /// Prepend metadata only for actual foreground-app dictation output.

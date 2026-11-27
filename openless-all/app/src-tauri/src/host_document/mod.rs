@@ -48,6 +48,8 @@ pub(crate) use macos::focused_input_position;
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{KeyboardDelivery, KeyboardDeliveryOutcome, LiveComposition};
+#[cfg(target_os = "macos")]
+pub(crate) use macos::{DeliveredInsertion, LearningStart};
 
 // `minimal_edit` is currently used only by the macOS observation callback; no consumer on non-macOS builds.
 #[allow(unused_imports)]
@@ -592,20 +594,20 @@ where
         if typed_text.trim().is_empty() {
             return None;
         }
-        let callback = move |edit| on_edit(edit, None);
-        let stop = macos::spawn_edit_watcher(typed_text, lifetime, Box::new(callback))?;
-        Some(EditWatcher { stop })
+        // No receipt was supplied through this legacy path. A successful
+        // dispatch/contains match cannot authorize observing an arbitrary field.
+        let _ = (typed_text, lifetime, on_edit);
+        None
     }
     #[cfg(target_os = "windows")]
     {
-        windows::spawn_edit_watcher(
-            typed_text,
-            lifetime,
-            target?,
-            Box::new(on_edit),
-            Box::new(on_end),
-        )
-        .map(|stop| EditWatcher { stop })
+        // UIA's Native units are not UTF-16. The legacy unique-string/full-
+        // field diff is not a delivery receipt for a frozen inserted range.
+        // Preserve ordinary insertion/manual confirmation until that host can
+        // hand off an owned native range; never guess a range from text.
+        let _ = (typed_text, lifetime, target, on_edit);
+        on_end();
+        None
     }
     #[cfg(target_os = "android")]
     {
@@ -618,6 +620,21 @@ where
         let _ = (typed_text, lifetime, on_edit);
         None
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn watch_delivered_edits<F, E>(
+    delivery: DeliveredInsertion,
+    lifetime: std::time::Duration,
+    on_edit: F,
+    on_end: E,
+) -> Option<EditWatcher>
+where
+    F: Fn(EditPair) -> bool + Send + Sync + 'static,
+    E: Fn() + Send + Sync + 'static,
+{
+    let stop = macos::spawn_edit_watcher(delivery, lifetime, Box::new(on_edit), Box::new(on_end))?;
+    Some(EditWatcher { stop })
 }
 
 #[cfg(test)]

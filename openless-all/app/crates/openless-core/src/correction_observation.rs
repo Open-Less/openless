@@ -294,4 +294,36 @@ mod tests {
             assert!(vocabulary_candidates(inserted, &pair, 32).is_empty());
         }
     }
+
+    #[test]
+    fn an_explicit_delivered_span_still_refuses_a_paragraph_rewrite() {
+        let original = "今天先讨论接口参数，然后安排明天的项目验收";
+        let edited = "改成下周讨论文档就好了";
+        let mut range = crate::host_document::RangeObservation::delivered(
+            10,
+            original.into(),
+            10 + original.encode_utf16().count() + 4,
+            "原前文".into(),
+            "原后文".into(),
+        )
+        .unwrap();
+        let mut seen = false;
+        assert!(range.observe(
+            10 + edited.encode_utf16().count() + 4,
+            edited,
+            "原前文",
+            "原后文",
+            (10 + edited.encode_utf16().count(), 0),
+            |edit| {
+                seen = true;
+                assert!(vocabulary_candidates(original, &edit, 32).is_empty());
+                assert!(
+                    crate::expression_observation::signal_from_observed_edit(original, &edit)
+                        .is_err()
+                );
+                false
+            },
+        ));
+        assert!(seen);
+    }
 }
