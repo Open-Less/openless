@@ -6,6 +6,9 @@
 //! parent `coordinator` module can call them through `use hotkey_loops::*;`.
 
 use super::*;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[path = "skip_auto_style_monitor.rs"]
+mod skip_auto_style_monitor;
 use crate::issue1266_debug::{
     Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation,
     Outcome as DebugOutcome, Probe as DebugProbe,
@@ -39,39 +42,41 @@ pub(super) fn try_update_skip_auto_style_hotkey_binding(inner: &Arc<Inner>) -> R
     let (send, receive) = mpsc::sync_channel(1);
     let main = Arc::clone(inner);
     inner.host.run_on_main_thread(move || {
-        let update = || -> Result<(), String> {
-            if binding.is_unassigned()
-                || crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
-                main.skip_auto_style_hotkey.lock().take();
-                return Ok(());
-            }
-            {
-                let slot = main.skip_auto_style_hotkey.lock();
-                if let Some(monitor) = slot.as_ref() {
-                    return monitor.update_binding(binding).map_err(|error| error.to_string());
-                }
-            }
-            let (tx, rx) = mpsc::channel();
-            let monitor = ComboHotkeyMonitor::start(binding, tx).map_err(|error| error.to_string())?;
-            let bridge = Arc::clone(&main);
-            std::thread::Builder::new().name("openless-style-hotkey-bridge".into())
-                .spawn(move || skip_auto_style_hotkey_bridge_loop(bridge, rx))
-                .map_err(|error| error.to_string())?;
-            *main.skip_auto_style_hotkey.lock() = Some(monitor);
-            Ok(())
-        };
-        let _ = send.send(update());
+        let _ = send.send(update_skip_auto_style_hotkey_on_main(&main, binding));
     })?;
     receive.recv_timeout(std::time::Duration::from_secs(5))
         .map_err(|_| "style hotkey registration timed out".to_string())?
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn skip_auto_style_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+pub(super) fn update_skip_auto_style_hotkey_on_main(
+    inner: &Arc<Inner>,
+    binding: crate::types::ShortcutBinding,
+) -> Result<(), String> {
+    skip_auto_style_monitor::replace(&inner.skip_auto_style_hotkey, binding, |binding| {
+        let (tx, rx) = mpsc::channel();
+        let monitor = ComboHotkeyMonitor::start(binding.clone(), tx)
+            .map_err(|error| error.to_string())?;
+        let bridge = Arc::clone(inner);
+        std::thread::Builder::new().name("openless-style-hotkey-bridge".into())
+            .spawn(move || skip_auto_style_hotkey_bridge_loop(bridge, rx, binding))
+            .map_err(|error| error.to_string())?;
+        Ok(monitor)
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn skip_auto_style_hotkey_bridge_loop(
+    inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>,
+    binding: crate::types::ShortcutBinding,
+) {
     // The press records ownership; a release after a new capture cannot toggle it.
     let mut owner = None;
     while let Ok(event) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) { owner = None; continue; }
+        if inner.shortcut_recording_active.load(Ordering::SeqCst)
+            || hotkey_runtime_target(&inner).skip_auto_style != binding {
+            owner = None; continue;
+        }
         match event {
             ComboHotkeyEvent::Pressed { .. } => {
                 let snapshot = inner.backend.snapshot();

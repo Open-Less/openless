@@ -16,12 +16,22 @@ fn skip_auto_style_preferences_upgrade_clear_patch_and_roundtrip() {
         defaults.skip_auto_style_hotkey
     );
     assert!(!upgraded.skip_auto_style_picker_enabled);
-    old["dictationHotkey"] = serde_json::to_value(&defaults.skip_auto_style_hotkey).unwrap();
+    // Exercise collision migration even where the new default is unassigned.
+    let proposed = if cfg!(target_os = "windows") {
+        ShortcutBinding { primary: "LeftAlt".into(), modifiers: vec![] }
+    } else {
+        defaults.skip_auto_style_hotkey.clone()
+    };
+    old["dictationHotkey"] = serde_json::to_value(&proposed).unwrap();
     let occupied: UserPreferences = serde_json::from_value(old).unwrap();
     assert!(
         occupied.skip_auto_style_hotkey.is_unassigned(),
         "upgrade must not steal a custom recording key"
     );
+    let mut configured = defaults.clone();
+    configured.skip_auto_style_hotkey = ShortcutBinding {
+        primary: "K".into(), modifiers: vec!["ctrl".into(), "shift".into()],
+    };
     let edits = std::collections::BTreeMap::from([
         (
             "/skipAutoStyleHotkey".into(),
@@ -32,21 +42,21 @@ fn skip_auto_style_preferences_upgrade_clear_patch_and_roundtrip() {
             serde_json::json!(true),
         ),
     ]);
-    let patched = openless_core::preference_patch::patch_preferences(&defaults, &edits).unwrap();
+    let patched = openless_core::preference_patch::patch_preferences(&configured, &edits).unwrap();
     let restored: UserPreferences =
         serde_json::from_value(serde_json::to_value(&patched).unwrap()).unwrap();
     assert!(restored.skip_auto_style_hotkey.is_unassigned());
     assert!(restored.skip_auto_style_picker_enabled);
     assert_ne!(
         HotkeyRuntimeTarget::from(&restored),
-        HotkeyRuntimeTarget::from(&defaults)
+        HotkeyRuntimeTarget::from(&configured)
     );
-    let change = openless_core::SettingsEffectPlan::between(&defaults, &restored)
+    let change = openless_core::SettingsEffectPlan::between(&configured, &restored)
         .hotkeys
         .unwrap();
     assert_eq!(
         change.previous.skip_auto_style,
-        defaults.skip_auto_style_hotkey
+        configured.skip_auto_style_hotkey
     );
     assert!(change.next.skip_auto_style.is_unassigned());
 }
@@ -58,6 +68,8 @@ fn skip_auto_style_defaults_and_conflicts_cover_every_owner() {
         defaults.skip_auto_style_hotkey.primary,
         if cfg!(target_os = "macos") {
             "LeftCommand"
+        } else if cfg!(target_os = "windows") {
+            ""
         } else {
             "LeftAlt"
         }
@@ -65,6 +77,10 @@ fn skip_auto_style_defaults_and_conflicts_cover_every_owner() {
     reject_hotkey_collisions(&defaults).unwrap();
     for owner in 0..10 {
         let mut prefs = defaults.clone();
+        // Use a supported, assigned combination on every platform.
+        prefs.skip_auto_style_hotkey = ShortcutBinding {
+            primary: "K".into(), modifiers: vec!["ctrl".into(), "shift".into()],
+        };
         let key = prefs.skip_auto_style_hotkey.clone();
         match owner {
             0 => prefs.dictation_hotkey = key,
@@ -120,4 +136,26 @@ fn skip_auto_style_defaults_and_conflicts_cover_every_owner() {
             binding: style_conflict.skip_auto_style_hotkey.clone(),
         });
     assert!(reject_hotkey_collisions(&style_conflict).is_err());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn skip_auto_style_windows_migrates_and_rejects_unverified_modifier_taps() {
+    for primary in ["LeftAlt", "RightAlt", "LeftOption", "LeftCommand", "LeftControl"] {
+        let binding = ShortcutBinding { primary: primary.into(), modifiers: vec![] };
+        let mut prefs = UserPreferences::default();
+        prefs.skip_auto_style_hotkey = binding.clone();
+        assert!(reject_hotkey_collisions(&prefs).is_err(), "{primary}");
+        let migrated: UserPreferences =
+            serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
+        assert!(migrated.skip_auto_style_hotkey.is_unassigned(), "{primary}");
+    }
+    let mut prefs = UserPreferences::default();
+    prefs.skip_auto_style_hotkey = ShortcutBinding {
+        primary: "K".into(), modifiers: vec!["ctrl".into(), "shift".into()],
+    };
+    reject_hotkey_collisions(&prefs).unwrap();
+    let roundtrip: UserPreferences =
+        serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
+    assert_eq!(roundtrip.skip_auto_style_hotkey, prefs.skip_auto_style_hotkey);
 }

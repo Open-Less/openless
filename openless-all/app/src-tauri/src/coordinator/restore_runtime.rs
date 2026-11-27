@@ -208,6 +208,7 @@ fn reconcile_hotkeys_on_main(
     // this also permits swapping two bindings during a restore.
     inner.combo_hotkey.lock().take();
     inner.translation_hotkey.lock().take();
+    inner.skip_auto_style_hotkey.lock().take();
     inner.switch_style_hotkey.lock().take();
     inner.open_app_hotkey.lock().take();
     inner.quick_note_hotkey.lock().take();
@@ -290,9 +291,11 @@ fn reconcile_hotkeys_on_main(
     }
     sync_style_pack_hotkeys(inner)?;
     if let Some(monitor) = inner.hotkey.lock().as_ref() {
+        configure_shift_translation(inner, monitor);
         let (qa, selection, translation) = modifier_shortcut_triggers(inner);
         monitor.update_modifier_shortcuts(qa, selection, translation);
     }
+    update_skip_auto_style_hotkey_on_main(inner, target.skip_auto_style.clone())?;
     Ok(())
 }
 

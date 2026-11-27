@@ -516,19 +516,22 @@ fn observe_shift(
 }
 
 fn skip_style_context(shared: &Shared) -> Option<(ShiftTranslationContext, HotkeyTrigger)> {
+    // Windows modifier interception is disabled pending real hook-chain and
+    // menu validation. Custom combinations use the existing global registrar.
+    if cfg!(target_os = "windows") { return None; }
     if shared.recording_active.load(std::sync::atomic::Ordering::SeqCst) { return None; }
     shared.skip_style_source.read().as_ref().and_then(|source| source())
 }
 
-/// A standalone modifier is recognized on release. Consuming that release
-/// prevents Windows Alt from activating a menu; a chord never gets consumed.
+/// Observe only. Every real modifier edge must continue downstream, including
+/// releases after cancellation, a binding change, or a successor session.
 fn observe_skip_style(
     shared: &Shared,
     tx: &Sender<HotkeyEvent>,
     key: u16,
     down: bool,
     other: bool,
-) -> bool {
+) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let (context, target) = match skip_style_context(shared) {
         Some((mut context, trigger)) => {
@@ -542,12 +545,9 @@ fn observe_skip_style(
     let (context, target): (Option<ShiftTranslationContext>, Option<u16>) = (None, None);
     let now = Instant::now();
     let mut gesture = shared.skip_style_gesture.lock();
-    let ended_tap = !down && !other && context.is_none() && gesture.pending_tap(key, now);
     if let Some(context) = gesture.observe(context, key, target == Some(key), down, other, now) {
         send_or_log(tx, HotkeyEvent::SkipAutoStyleTapped(context));
-        return true;
     }
-    ended_tap
 }
 
 // ─────────────────────────── macOS implementation ───────────────────────────
@@ -576,7 +576,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-mod platform {
+pub(crate) mod platform {
     use std::ffi::c_void;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc::Sender;
@@ -793,6 +793,10 @@ mod platform {
         fn CGEventSetIntegerValueField(event: CgEventRef, field: CgEventField, value: i64);
         fn CGEventTapPostEvent(proxy: *mut c_void, event: CgEventRef);
         fn CGEventPost(tap: CgEventTapLocation, event: CgEventRef);
+        #[cfg(test)]
+        fn CGEventCreateKeyboardEvent(source: *mut c_void, key: u16, down: bool) -> CgEventRef;
+        #[cfg(test)]
+        fn CGEventSetFlags(event: CgEventRef, flags: CgEventFlags);
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -993,7 +997,7 @@ mod platform {
         }
         let ctx = unsafe { &*(user_info as *const CallbackContext) };
 
-        let style_tapped = observe_shift_event(ctx, event_type, event);
+        observe_shift_event(ctx, event_type, event);
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
                 reset_shared_held_state(&ctx.shared);
@@ -1066,7 +1070,8 @@ mod platform {
                     let down = if keycode == 63 {
                         flags & FLAG_MASK_SECONDARY_FN != 0
                     } else {
-                        crate::side_aware_combo::platform::resolve_side_pressed_from_flags(keycode, flags)
+                        device_modifier_pressed(keycode, flags)
+                            .or_else(|| crate::side_aware_combo::platform::resolve_side_pressed_from_flags(keycode, flags))
                             .unwrap_or_else(|| crate::side_aware_combo::platform::keycode_is_down(keycode))
                     };
                     let handled = ask_key_edge(ctx, event, keycode, down).is_some();
@@ -1145,19 +1150,35 @@ mod platform {
             }
             _ => {}
         }
-        if style_tapped { std::ptr::null_mut() } else { event }
+        event
     }
 
     pub(super) fn held_recording_key(shared: &Shared) -> Option<u16> {
-        super::held_recording_trigger(shared).map(|trigger| trigger_to_keycode(trigger) as u16)
+        crate::ask_window::hotkey::held_recording_key().or_else(|| {
+            super::held_recording_trigger(shared).map(|trigger| trigger_to_keycode(trigger) as u16)
+        })
     }
 
     pub(super) fn skip_style_key(trigger: HotkeyTrigger) -> u16 {
         trigger_to_keycode(trigger) as u16
     }
 
-    fn observe_shift_event(ctx: &CallbackContext, kind: CgEventType, event: CgEventRef) -> bool {
-        if event.is_null() { return false; }
+    // Use the physical side bits on the very event being dispatched, as the
+    // gesture observer does. Sparse/synthetic flags retain the system query
+    // fallback. This also distinguishes release while the opposite side is held.
+    fn device_modifier_pressed(key: i64, flags: CgEventFlags) -> Option<bool> {
+        let (own, opposite) = match key {
+            56 => (0x2, 0x4), 60 => (0x4, 0x2),
+            59 => (0x1, 0x2000), 62 => (0x2000, 0x1),
+            58 => (0x20, 0x40), 61 => (0x40, 0x20),
+            55 => (0x8, 0x10), 54 => (0x10, 0x8),
+            _ => return None,
+        };
+        (flags & (own | opposite) != 0).then_some(flags & own != 0)
+    }
+
+    fn observe_shift_event(ctx: &CallbackContext, kind: CgEventType, event: CgEventRef) {
+        if event.is_null() { return; }
         let flags = unsafe { CGEventGetFlags(event) };
         let field = if matches!(kind, 25 | 26) {
             3
@@ -1173,7 +1194,7 @@ mod platform {
         kind: CgEventType,
         key: i64,
         flags: CgEventFlags,
-    ) -> bool {
+    ) {
         let mut other_flags = flags
             & (FLAG_MASK_CONTROL
                 | FLAG_MASK_ALTERNATE
@@ -1202,7 +1223,7 @@ mod platform {
                 if key == 57 {
                     ctx.shared.shift_gesture.lock().invalidate();
                     ctx.shared.skip_style_gesture.lock().invalidate();
-                    return false;
+                    return;
                 }
                 let shift = matches!(key, 56 | 60);
                 // IOLLEvent.h device bits distinguish both sides even when the class bit stays set.
@@ -1216,7 +1237,7 @@ mod platform {
                     55 => 0x8,
                     54 => 0x10,
                     63 => FLAG_MASK_SECONDARY_FN,
-                    _ => return false,
+                    _ => return,
                 };
                 let down = flags & mask != 0;
                 (key as u16, shift, down)
@@ -1233,13 +1254,12 @@ mod platform {
             22 | 27 | SYSTEM_DEFINED => {
                 ctx.shared.shift_gesture.lock().invalidate();
                 ctx.shared.skip_style_gesture.lock().invalidate();
-                return false;
+                return;
             }
-            _ => return false,
+            _ => return,
         };
         super::observe_shift(&ctx.shared, &ctx.tx, key, shift, down, other);
-        let target = super::skip_style_context(&ctx.shared).map(|(_, trigger)| skip_style_key(trigger))
-            .or_else(|| (!down && ctx.shared.skip_style_gesture.lock().pending_tap(key, std::time::Instant::now())).then_some(key));
+        let target = super::skip_style_context(&ctx.shared).map(|(_, trigger)| skip_style_key(trigger));
         let mut style_other = flags & (FLAG_MASK_SHIFT | FLAG_MASK_CONTROL
             | FLAG_MASK_ALTERNATE | FLAG_MASK_COMMAND | FLAG_MASK_SECONDARY_FN);
         for allowed in [target, held_recording_key(&ctx.shared)].into_iter().flatten() {
@@ -1257,7 +1277,7 @@ mod platform {
             };
             if flags & opposite == 0 && (flags & own != 0 || !down) { style_other &= !class; }
         }
-        super::observe_skip_style(&ctx.shared, &ctx.tx, key, down, style_other != 0)
+        super::observe_skip_style(&ctx.shared, &ctx.tx, key, down, style_other != 0);
     }
 
     fn ask_key_edge(ctx: &CallbackContext, event: CgEventRef, keycode: i64, down: bool) -> Option<CgEventRef> {
@@ -1619,7 +1639,7 @@ mod platform {
     }
 
     #[cfg(test)]
-    mod tests {
+    pub(crate) mod tests {
         use super::*;
         use parking_lot::RwLock;
         use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -1653,7 +1673,7 @@ mod platform {
         }
 
         #[test]
-        fn skip_auto_style_mac_consumes_only_completed_command_taps() {
+        fn skip_auto_style_mac_passes_both_edges_and_late_releases() {
             let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightOption);
             let context = super::super::ShiftTranslationContext {
@@ -1662,35 +1682,91 @@ mod platform {
             };
             *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftCommand))));
             let (ctx, rx, _) = callback_context_with_combo(shared.clone());
-            assert!(!observe_shift_fields(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8));
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
             assert!(rx.try_recv().is_err());
-            assert!(observe_shift_fields(&ctx, FLAGS_CHANGED, 55, 0));
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
             assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(c) if c.session_id == context.session_id));
             // Cmd+C and the opposite Command remain the foreground app's input.
             for companion in [8, 54, 500] {
-                assert!(!observe_shift_fields(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8));
+                pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
                 let kind = if companion == 54 { FLAGS_CHANGED } else if companion == 500 { 1 } else { KEY_DOWN };
-                assert!(!observe_shift_fields(&ctx, kind, companion, FLAG_MASK_COMMAND | 0x18));
-                assert!(!observe_shift_fields(&ctx, if kind == KEY_DOWN { KEY_UP } else if kind == 1 { 2 } else { FLAGS_CHANGED }, companion, FLAG_MASK_COMMAND | 0x8));
-                assert!(!observe_shift_fields(&ctx, FLAGS_CHANGED, 55, 0));
+                pass_event(&ctx, kind, companion, FLAG_MASK_COMMAND | 0x18);
+                pass_event(&ctx, if kind == KEY_DOWN { KEY_UP } else if kind == 1 { 2 } else { FLAGS_CHANGED }, companion, FLAG_MASK_COMMAND | 0x8);
+                pass_event(&ctx, FLAGS_CHANGED, 55, 0);
                 assert!(rx.try_recv().is_err());
             }
-            shared.skip_style_gesture.lock().reset();
-            // The recording controller may stay held.
-            shared.trigger_held.store(true, std::sync::atomic::Ordering::SeqCst);
-            assert!(!observe_shift_fields(&ctx, FLAGS_CHANGED, 61, FLAG_MASK_ALTERNATE | 0x40));
-            assert!(!observe_shift_fields(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8 | FLAG_MASK_ALTERNATE | 0x40));
-            assert!(observe_shift_fields(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_ALTERNATE | 0x40));
-            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(_)));
-            // A release after recording ends is swallowed without toggling a successor.
-            shared.trigger_held.store(false, std::sync::atomic::Ordering::SeqCst);
-            shared.skip_style_gesture.lock().reset();
-            observe_shift_fields(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            // Cancelled session: the exposed down still receives its real up.
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
             *shared.skip_style_source.write() = None;
-            assert!(observe_shift_fields(&ctx, FLAGS_CHANGED, 55, 0));
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
             assert!(rx.try_recv().is_err());
-            assert!(!observe_shift_fields(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8));
-            assert!(!observe_shift_fields(&ctx, FLAGS_CHANGED, 55, 0));
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(rx.try_recv().is_err());
+            // A successor cannot inherit a partial gesture.
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftCommand))));
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            let next = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(), ..context
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((next, HotkeyTrigger::LeftCommand))));
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(rx.try_recv().is_err());
+            // Entering shortcut recording between edges preserves pairing.
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            shared.recording_active.store(true, Ordering::SeqCst);
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            shared.recording_active.store(false, Ordering::SeqCst);
+            assert!(rx.try_recv().is_err());
+        }
+
+        // Calls the real callback with native CGEvent objects. This proves the
+        // callback returns each original event, not OS delivery or system UI.
+        fn pass_event(ctx: &CallbackContext, kind: CgEventType, key: u16, flags: CgEventFlags) {
+            unsafe {
+                let event = CGEventCreateKeyboardEvent(std::ptr::null_mut(), key, kind != KEY_UP);
+                assert!(!event.is_null());
+                CGEventSetFlags(event, flags);
+                CGEventSetIntegerValueField(event, SOURCE_PID_FIELD, 0);
+                let returned = tap_callback(
+                    std::ptr::null_mut(), kind, event, ctx as *const _ as *mut c_void,
+                );
+                assert_eq!(returned, event, "event kind={kind}, key={key} must pass");
+                CFRelease(event as *const c_void);
+            }
+        }
+
+        // The backend harness installs the production Ask runtime around this
+        // case, substituting only desktop/device effects. No Shared latch setup.
+        pub(crate) fn skip_auto_style_mac_held_ask_controller() {
+            let shared = shared(HotkeyTrigger::RightOption);
+            let context = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(),
+                preferences_revision: 4, tap_count: 1, held_recording_key: None,
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftCommand))));
+            let (ctx, rx, _) = callback_context_with_combo(shared.clone());
+            pass_event(&ctx, FLAGS_CHANGED, 61, FLAG_MASK_ALTERNATE | 0x40);
+            assert!(!shared.trigger_held.load(Ordering::SeqCst), "Ask bypasses the legacy latch");
+            assert_eq!(crate::ask_window::hotkey::held_recording_key(), Some(61));
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8 | FLAG_MASK_ALTERNATE | 0x40);
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_ALTERNATE | 0x40);
+            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(_)));
+            // A real Cmd+C path while the recording controller is held passes
+            // intact and does not become a standalone style tap.
+            let both = FLAG_MASK_COMMAND | 0x8 | FLAG_MASK_ALTERNATE | 0x40;
+            pass_event(&ctx, FLAGS_CHANGED, 55, both);
+            pass_event(&ctx, KEY_DOWN, 8, both);
+            pass_event(&ctx, KEY_UP, 8, both);
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_ALTERNATE | 0x40);
+            assert!(rx.try_recv().is_err());
+            // Releasing the controller in the middle of a tap invalidates it.
+            pass_event(&ctx, FLAGS_CHANGED, 55, both);
+            pass_event(&ctx, FLAGS_CHANGED, 61, FLAG_MASK_COMMAND | 0x8);
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(rx.try_recv().is_err());
+            assert_eq!(crate::ask_window::hotkey::held_recording_key(), None);
+            assert!(rx.try_recv().is_err());
         }
 
         #[test]
@@ -2564,8 +2640,7 @@ mod platform {
             pressed,
             other,
         );
-        let target = super::skip_style_context(&ctx.shared).map(|(_, trigger)| skip_style_key(trigger))
-            .or_else(|| (!pressed && ctx.shared.skip_style_gesture.lock().pending_tap(vk_code as u16, std::time::Instant::now())).then_some(vk_code as u16));
+        let target = super::skip_style_context(&ctx.shared).map(|(_, trigger)| skip_style_key(trigger));
         let controller = held_recording_key(&ctx.shared);
         let style_other = unsafe {
             use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -2573,7 +2648,7 @@ mod platform {
                 .into_iter().any(|key| Some(key as u16) != target && Some(key as u16) != controller
                     && GetAsyncKeyState(key as i32) < 0)
         };
-        let style_tapped = super::observe_skip_style(&ctx.shared, &ctx.tx, vk_code as u16, pressed, style_other);
+        super::observe_skip_style(&ctx.shared, &ctx.tx, vk_code as u16, pressed, style_other);
 
         if vk_code == VK_ESCAPE && super::capsule_menu_open() {
             return false;
@@ -2629,8 +2704,6 @@ mod platform {
             None,
         );
 
-        // Update every physical modifier latch before consuming the release.
-        if style_tapped { return true; }
         let trigger = ctx.shared.binding.read().trigger;
         if trigger == HotkeyTrigger::Custom {
             return false;
@@ -2996,7 +3069,7 @@ mod platform {
         }
 
         #[test]
-        fn skip_auto_style_windows_alt_release_is_consumed_and_chords_pass() {
+        fn skip_auto_style_windows_modifier_fallback_never_consumes_or_toggles() {
             let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let context = super::super::ShiftTranslationContext {
@@ -3006,20 +3079,24 @@ mod platform {
             *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftOption))));
             let (ctx, rx, _) = callback_context_with_combo(shared.clone());
             assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYDOWN));
-            assert!(dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYUP));
-            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(c) if c.session_id == context.session_id));
-            assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYDOWN));
-            assert!(!dispatch_keyboard_event(&ctx, 0x43, WM_SYSKEYDOWN));
-            assert!(!dispatch_keyboard_event(&ctx, 0x43, WM_SYSKEYUP));
             assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYUP));
             assert!(rx.try_recv().is_err());
+            // Alt+letter, Alt+Tab, AltGr, and late releases all use stock input.
+            for companion in [0x43, 0x09, VK_RMENU] {
+                for (key, message) in [(VK_LMENU, WM_SYSKEYDOWN),
+                    (companion, WM_SYSKEYDOWN), (companion, WM_SYSKEYUP),
+                    (VK_LMENU, WM_SYSKEYUP)] {
+                    assert!(!dispatch_keyboard_event(&ctx, key, message));
+                }
+                assert!(rx.try_recv().is_err());
+            }
             assert!(!dispatch_keyboard_event(&ctx, VK_RMENU, WM_SYSKEYDOWN));
             assert!(!dispatch_keyboard_event(&ctx, VK_RMENU, WM_SYSKEYUP));
             assert!(rx.try_recv().is_err());
             shared.skip_style_gesture.lock().reset();
             assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYDOWN));
             *shared.skip_style_source.write() = None;
-            assert!(dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYUP));
+            assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYUP));
             assert!(rx.try_recv().is_err());
         }
 

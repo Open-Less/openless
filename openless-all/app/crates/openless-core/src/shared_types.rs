@@ -1615,6 +1615,16 @@ impl<'de> Deserialize<'de> for UserPreferences {
             ].into_iter().flatten().any(|other| crate::shortcut_types::bindings_overlap(&proposed, other));
             if occupied { ShortcutBinding::unassigned() } else { proposed }
         });
+        // Older previews assigned bare Alt on Windows. Until a paired,
+        // menu-safe native implementation is verified, migrate modifier taps
+        // to unassigned; custom global combinations remain available.
+        #[cfg(target_os = "windows")]
+        let skip_auto_style_hotkey =
+            if crate::shortcut_types::legacy_modifier_trigger(&skip_auto_style_hotkey).is_some() {
+                ShortcutBinding::unassigned()
+            } else {
+                skip_auto_style_hotkey
+            };
         Ok(Self {
             hotkey: wire.hotkey,
             dictation_hotkey,
@@ -1996,6 +2006,9 @@ fn default_translation_hotkey() -> ShortcutBinding {
 }
 
 pub(crate) fn default_skip_auto_style_hotkey() -> ShortcutBinding {
+    if cfg!(target_os = "windows") {
+        return ShortcutBinding::unassigned();
+    }
     ShortcutBinding {
         primary: if cfg!(target_os = "macos") { "LeftCommand" } else { "LeftAlt" }.into(),
         modifiers: Vec::new(),
