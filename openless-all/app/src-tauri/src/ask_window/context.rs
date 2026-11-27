@@ -92,6 +92,14 @@ impl DesktopContext {
         std::sync::Arc::new(move || browser_grant(&state.lock()) == grant && grant.app_metadata && grant.browser_metadata)
     }
 
+    /// Take once before submitting the external invocation's first Capture.
+    /// The guard always compares against this exact epoch, including regrants.
+    pub(crate) fn capture_browser_authorization(&self) -> Option<super::browser_capture::CaptureAuthorization> {
+        let grant = self.browser_authorization();
+        let authorization = super::browser_capture::CaptureAuthorization::new(grant, self.browser_guard(grant));
+        authorization.is_current().then_some(authorization)
+    }
+
     pub(crate) fn bind_browser_reference(
         &self, conversation_id: Uuid, grant: SceneAuthorization,
         reader: std::sync::Arc<dyn BrowserReader>,

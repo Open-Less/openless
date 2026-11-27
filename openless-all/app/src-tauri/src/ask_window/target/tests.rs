@@ -11,9 +11,10 @@ async fn real_browser_scene_uses_the_frozen_input_and_rejects_sensitive_or_nativ
     assert_eq!(crate::selection::current_front_app_pid(), Some(pid as i32));
     let tracker = Arc::new(TargetTracker::new());
     tracker.start().unwrap();
-    let _captured = tracker.capture_before_focus(Some(pid), 71, ContextAccess { browser_metadata: true, ..Default::default() }).await;
     let grant = SceneAuthorization { app_metadata: true, browser_metadata: true, selected_text: false, epoch: 1 };
-    let source = tracker.browser_source(71, grant, Arc::new(|| true)).await;
+    let authorization = CaptureAuthorization::new(grant, Arc::new(|| true));
+    let _captured = tracker.capture_before_focus(Some(pid), 71, ContextAccess::default(), Some(authorization.clone())).await;
+    let source = tracker.browser_source(71, authorization).await;
     if matches!(case.as_str(), "protected" | "address-bar") {
         assert!(source.is_none(), "sensitive/native chrome controls cannot provide page data");
     } else {
@@ -152,7 +153,7 @@ mod live_ab {
     async fn original(tracker: &TargetTracker, fixture: &Fixture, scope: u64) -> CapturedTarget {
         for _ in 0..20 {
             let captured = tracker.capture_before_focus(
-                Some(fixture.child.id()), scope, ContextAccess { app_metadata: true, surrounding_text: true, ..Default::default() },
+                Some(fixture.child.id()), scope, ContextAccess { app_metadata: true, surrounding_text: true }, None,
             ).await;
             if captured.selection == ExternalSelection::None && captured.write_target.is_some() {
                 return captured;
@@ -168,7 +169,7 @@ mod live_ab {
             // to our child process so even a foreground race cannot bind user text.
             let captured = tracker.capture_for(
                 Some(fixture.child.id()), Some(scope),
-                ContextAccess { app_metadata: true, surrounding_text: true, ..Default::default() }, CAPTURE_TIMEOUT,
+                ContextAccess { app_metadata: true, surrounding_text: true }, None, CAPTURE_TIMEOUT,
             ).await;
             if captured.selection == ExternalSelection::Selected("red".into())
                 && captured.write_target.is_some()

@@ -375,23 +375,30 @@ impl Platform {
     /// Called only for an explicitly authorized external invocation, never by
     /// passive focus polling or by later browser reads. The existing Ask
     /// identity must match the P4 original before any page enrichment occurs.
-    pub(super) fn freeze_original(&self, identity: &mut Identity) {
+    pub(super) fn freeze_original(&self, identity: &mut Identity, current: &dyn Fn() -> bool) -> bool {
+        identity.discard_browser();
+        if !current() { return false; }
         let eligible_browser = crate::selection::bundle_id_for_pid(identity.pid)
             .and_then(|bundle| openless_core::app_style_routing::InputApp::macos(&bundle, None))
             .as_ref().and_then(openless_core::input_scene::recognize)
             .and_then(|rule| rule.browser)
             .is_some_and(|browser| browser != openless_core::input_scene::BrowserFamily::ChatGptEmbedded);
-        if !eligible_browser { return; }
+        if !eligible_browser || !current() { return false; }
         let frozen = crate::selection::capture_selection_insertion_target();
-        identity.frozen = crate::host_document::macos::with_frozen_target_read(&frozen, |lease| {
+        if !current() { return false; }
+        let accepted = crate::host_document::macos::with_frozen_target_read(&frozen, |lease| {
+            if !current() { return Err("browserAuthorizationExpired".to_string()); }
             let (control, window) = unsafe { lease.ax_objects() };
             if unsafe { CFEqual(control.cast(), identity.element.as_CFTypeRef()) } == 0
                 || unsafe { CFEqual(window.cast(), identity.window.as_CFTypeRef()) } == 0
                 || lease.process_id() != identity.pid
-                || self.read_revision() != identity.read_revision
+                || self.read_revision() != identity.read_revision || !current()
             { return Err("browserOriginalTargetChanged".to_string()); }
             Ok(())
-        }).ok().map(|_| frozen);
+        }).is_ok();
+        if !accepted || !current() { return false; }
+        identity.frozen = Some(frozen);
+        true
     }
 
     pub(super) fn browser_capture(
@@ -444,6 +451,7 @@ impl Drop for Platform {
 }
 
 impl Identity {
+    pub(super) fn discard_browser(&mut self) { self.frozen = None; }
     pub(super) fn read_revision(&self) -> u64 { self.read_revision }
     pub(super) fn input_app(&self) -> Option<openless_core::app_style_routing::InputApp> {
         crate::selection::input_app_for_target(self.frozen.as_ref()?)

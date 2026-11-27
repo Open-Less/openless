@@ -5,6 +5,8 @@
 mod context;
 #[path = "../../src/ask_window/browser_context.rs"]
 mod browser_context;
+#[path = "../../src/ask_window/browser_capture.rs"]
+mod browser_capture;
 #[path = "../../src/browser_scene/observation.rs"]
 mod observation;
 #[path = "../../src/ask_window/voice_types.rs"]

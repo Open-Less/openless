@@ -5,6 +5,9 @@ use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use openless_core::ask::AskCompositionContext;
+use super::browser_capture::CaptureAuthorization;
+#[cfg(target_os = "macos")]
+use super::browser_capture::CapturedAuthorization;
 
 #[cfg(target_os = "macos")]
 #[path = "target/macos.rs"]
@@ -55,7 +58,6 @@ impl CapturedTarget {
 pub(crate) struct ContextAccess {
     pub(crate) app_metadata: bool,
     pub(crate) surrounding_text: bool,
-    pub(crate) browser_metadata: bool,
 }
 
 #[derive(Clone)]
@@ -99,8 +101,7 @@ enum Request {
     #[cfg(target_os = "macos")]
     BrowserBind {
         scope: u64,
-        grant: openless_core::browser_scene::SceneAuthorization,
-        eligible: Eligible,
+        authorization: CaptureAuthorization,
         reply: oneshot::Sender<Arc<()>>,
     },
     #[cfg(target_os = "macos")]
@@ -115,6 +116,7 @@ enum Request {
         expected_pid: Option<u32>,
         scope: Option<u64>,
         context: ContextAccess,
+        browser: Option<CaptureAuthorization>,
         reply: oneshot::Sender<CapturedTarget>,
     },
     Deliver {
@@ -133,12 +135,11 @@ enum Request {
 impl TargetTracker {
     #[cfg(target_os = "macos")]
     pub(crate) async fn browser_source(
-        self: &Arc<Self>, scope: u64, grant: openless_core::browser_scene::SceneAuthorization,
-        eligible: Eligible,
+        self: &Arc<Self>, scope: u64, authorization: CaptureAuthorization,
     ) -> Option<Arc<dyn super::browser_context::BrowserReader>> {
-        if !grant.app_metadata || !grant.browser_metadata { return None; }
+        if !authorization.is_current() { return None; }
         let (reply, result) = oneshot::channel();
-        if !self.send(Request::BrowserBind { scope, grant, eligible, reply }) { return None; }
+        if !self.send(Request::BrowserBind { scope, authorization, reply }) { return None; }
         let ticket = tokio::time::timeout(CAPTURE_TIMEOUT, result).await.ok()?.ok()?;
         Some(Arc::new(BrowserReader { tracker: self.clone(), ticket }))
     }
@@ -182,30 +183,34 @@ impl TargetTracker {
     }
 
     pub(crate) async fn capture(&self) -> CapturedTarget {
-        self.capture_for(None, None, ContextAccess::default(), CAPTURE_TIMEOUT).await
+        self.capture_for(None, None, ContextAccess::default(), None, CAPTURE_TIMEOUT).await
     }
 
     pub(crate) fn clear_capture(&self) {
         self.scope.store(0, Ordering::Release);
     }
 
-    pub(crate) async fn capture_before_focus(&self, pid: Option<u32>, scope: u64, context: ContextAccess) -> CapturedTarget {
+    pub(crate) async fn capture_before_focus(
+        &self, pid: Option<u32>, scope: u64, context: ContextAccess,
+        browser: Option<CaptureAuthorization>,
+    ) -> CapturedTarget {
         self.scope.store(scope, Ordering::Release);
         let Some(pid) = pid else {
             return CapturedTarget::unavailable();
         };
-        self.capture_for(Some(pid), Some(scope), context, Duration::from_millis(400)).await
+        self.capture_for(Some(pid), Some(scope), context, browser, Duration::from_millis(400)).await
     }
 
     pub(crate) async fn capture_at_send(&self, scope: u64, context: ContextAccess) -> CapturedTarget {
-        self.capture_for(None, Some(scope), context, CAPTURE_TIMEOUT).await
+        self.capture_for(None, Some(scope), context, None, CAPTURE_TIMEOUT).await
     }
 
     async fn capture_for(
-        &self, expected_pid: Option<u32>, scope: Option<u64>, context: ContextAccess, timeout: Duration,
+        &self, expected_pid: Option<u32>, scope: Option<u64>, context: ContextAccess,
+        browser: Option<CaptureAuthorization>, timeout: Duration,
     ) -> CapturedTarget {
         let (reply, result) = oneshot::channel();
-        if self.send(Request::Capture { expected_pid, scope, context, reply }) {
+        if self.send(Request::Capture { expected_pid, scope, context, browser, reply }) {
             if let Ok(Ok(captured)) = tokio::time::timeout(timeout, result).await {
                 return captured;
             }
@@ -315,6 +320,8 @@ struct CapturedScope {
     revision: u64,
     at: Instant,
     identity: native::Identity,
+    #[cfg(target_os = "macos")]
+    browser: Option<CapturedAuthorization<()>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -355,7 +362,7 @@ struct BrowserLease {
     snapshot: crate::browser_scene::macos::Enrichment,
     _watch: crate::browser_scene::macos::PageWatch,
     scope: u64,
-    grant: openless_core::browser_scene::SceneAuthorization,
+    authorization: CaptureAuthorization,
     at: Instant,
 }
 
@@ -388,23 +395,28 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                 lease.ticket.strong_count() == 0 || lease.scope != scope.load(Ordering::Acquire)
                     || lease.identity.read_revision() != platform.read_revision()
                     || lease.at.elapsed() > TARGET_FRESHNESS
+                    || !lease.authorization.is_current()
             }) { browser = None; }
-            if let Some(Request::BrowserBind { scope: requested, grant, eligible, reply }) = request {
-                browser = None;
-                if grant.app_metadata && grant.browser_metadata && !reply.is_closed() && eligible()
+            if let Some(Request::BrowserBind { scope: requested, authorization, reply }) = request {
+                let grant = authorization.grant();
+                if !reply.is_closed() && authorization.is_current()
                     && requested == scope.load(Ordering::Acquire)
                 {
                     if let Some(original) = captured_scope.as_ref().filter(|original| {
                         original.id == requested && original.at.elapsed() <= TARGET_FRESHNESS
                     }) {
-                        if let Some((snapshot, watch)) = platform.browser_capture(&original.identity, grant, &|| {
-                            active.load(Ordering::Acquire) && eligible() && !reply.is_closed()
-                                && requested == scope.load(Ordering::Acquire)
+                        if let Some((snapshot, watch)) = original.browser.as_ref().and_then(|captured| {
+                            captured.bind(&authorization, |_, authorized| {
+                                platform.browser_capture(&original.identity, grant, &|| {
+                                    active.load(Ordering::Acquire) && authorized() && !reply.is_closed()
+                                        && requested == scope.load(Ordering::Acquire)
+                                })
+                            })
                         }) {
                             let ticket = Arc::new(());
                             browser = Some(BrowserLease {
                                 ticket: Arc::downgrade(&ticket), identity: original.identity.clone(),
-                                snapshot, _watch: watch, scope: requested, grant, at: original.at,
+                                snapshot, _watch: watch, scope: requested, authorization, at: original.at,
                             });
                             let _ = reply.send(ticket);
                         }
@@ -419,8 +431,8 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                 if let Some(lease) = if matches { browser.take() } else { None } {
                     let current = || active.load(Ordering::Acquire) && !reply.is_closed()
                         && !cancellation.is_cancelled() && lease.scope == scope.load(Ordering::Acquire)
-                        && lease.at.elapsed() <= TARGET_FRESHNESS;
-                    if grant == lease.grant && current()
+                        && lease.at.elapsed() <= TARGET_FRESHNESS && lease.authorization.is_current();
+                    if grant == lease.authorization.grant() && current()
                         && platform.browser_is_current(&lease.identity, &lease.snapshot, grant, &current)
                     {
                         let app = lease.identity.input_app();
@@ -504,7 +516,7 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
         let front = platform.foreground();
         let revision = epoch.load(Ordering::Acquire);
         let capture = match request {
-            Some(Request::Capture { expected_pid, scope: requested, context, reply }) if !reply.is_closed() => {
+            Some(Request::Capture { expected_pid, scope: requested, context, browser, reply }) if !reply.is_closed() => {
                 #[cfg(target_os = "macos")]
                 let mismatched = expected_pid
                     .is_some_and(|pid| front != Foreground::External(pid as i32));
@@ -517,7 +529,8 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                     let _ = reply.send(CapturedTarget::unavailable());
                     continue;
                 }
-                Some((expected_pid, requested, context, reply))
+                let browser = browser.filter(CaptureAuthorization::is_current);
+                Some((expected_pid, requested, context, browser, reply))
             }
             _ => None,
         };
@@ -531,7 +544,7 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
         if !stable(&platform) {
             latest.bound = None;
         }
-        if let Some((expected_pid, requested, context, reply)) = capture {
+        if let Some((expected_pid, requested, context, browser, reply)) = capture {
             let mut captured = CapturedTarget::unavailable();
             let retained = captured_scope.as_ref().filter(|item| {
                 expected_pid.is_none() && requested == Some(item.id)
@@ -545,9 +558,14 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                 #[cfg(target_os = "macos")]
                 let mut identity = identity;
                 #[cfg(target_os = "macos")]
-                if expected_pid.is_some() && context.browser_metadata {
-                    platform.freeze_original(&mut identity);
-                }
+                let browser = browser.as_ref().filter(|_| expected_pid.is_some()).and_then(|authorization| {
+                    authorization.freeze(|authorized| platform.freeze_original(&mut identity, &|| {
+                        authorized() && active.load(Ordering::Acquire) && !reply.is_closed()
+                            && requested.is_some_and(|id| id == scope.load(Ordering::Acquire))
+                    }).then_some(()))
+                });
+                #[cfg(not(target_os = "macos"))]
+                let _ = browser;
                 #[cfg(target_os = "macos")]
                 let read = if front == Foreground::Own && requested.is_some() {
                     platform.capture_retained(&identity)
@@ -560,6 +578,10 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                 if active.load(Ordering::Acquire) && !reply.is_closed() && stable(&platform)
                     && requested.is_none_or(|id| id == scope.load(Ordering::Acquire))
                 {
+                    #[cfg(target_os = "macos")]
+                    let browser = browser.and_then(CapturedAuthorization::finish);
+                    #[cfg(target_os = "macos")]
+                    if browser.is_none() { identity.discard_browser(); }
                     if let Some((selection, baseline)) = read {
                         let mut writing_context = if context.surrounding_text {
                             baseline.as_ref().map(Baseline::context).unwrap_or_default()
@@ -577,8 +599,14 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                         captured.context = writing_context;
                     }
                     if let (Some(_), Some(id)) = (expected_pid, requested) {
+                        #[cfg(target_os = "macos")]
+                        let browser = browser.and_then(CapturedAuthorization::finish);
+                        #[cfg(target_os = "macos")]
+                        if browser.is_none() { identity.discard_browser(); }
                         captured_scope = Some(CapturedScope {
                             id, revision, at: Instant::now(), identity: identity.clone(),
+                            #[cfg(target_os = "macos")]
+                            browser,
                         });
                     }
                 }
