@@ -299,12 +299,14 @@ pub(crate) fn project_current_style(frame: &mut DictationStateSnapshot, current:
 type Source = Arc<dyn Fn() -> Option<Context> + Send + Sync>;
 type Sink = Arc<dyn Fn(Event) -> bool + Send + Sync>;
 type EpochSource = Arc<dyn Fn() -> u64 + Send + Sync>;
+type FocusRevision = Arc<dyn Fn() -> (u64, u64) + Send + Sync>;
 #[derive(Default)]
 struct Runtime {
     state: Mutex<State>,
     source: RwLock<Option<Source>>,
     sink: RwLock<Option<Sink>>,
     epoch: RwLock<Option<EpochSource>>,
+    focus_revision: RwLock<Option<FocusRevision>>,
 }
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 fn runtime() -> &'static Runtime { RUNTIME.get_or_init(Runtime::default) }
@@ -317,11 +319,18 @@ pub(crate) fn configure(source: Source, sink: Sink) {
     *runtime().source.write() = Some(source);
     *runtime().sink.write() = Some(sink);
     *runtime().epoch.write() = None;
+    *runtime().focus_revision.write() = None;
 }
 pub(crate) fn configure_fenced(source: Source, sink: Sink, epoch: EpochSource) {
     *runtime().source.write() = Some(source);
     *runtime().sink.write() = Some(sink);
     *runtime().epoch.write() = Some(epoch);
+    *runtime().focus_revision.write() = None;
+}
+#[cfg(target_os = "windows")]
+pub(crate) fn configure_focus_fenced(source: Source, sink: Sink, epoch: EpochSource, focus: FocusRevision) {
+    configure_fenced(source, sink, epoch);
+    *runtime().focus_revision.write() = Some(focus);
 }
 fn flush_closed(closed: Vec<ClosedEvent>) {
     let sink = runtime().sink.read().clone();
@@ -341,14 +350,17 @@ fn with_state_unchecked<T>(operation: impl FnOnce(&mut State) -> T) -> T {
 fn with_state<T>(operation: impl FnOnce(&mut State, Option<&Context>) -> T,
     stale: impl FnOnce() -> T) -> T {
     let epoch = runtime().epoch.read().clone();
+    let focus_revision = runtime().focus_revision.read().clone();
     // Native focus checks stay outside the menu lock. Before applying their
-    // result, recheck the cheap Core-only fence *under* that lock. This also
+    // result, recheck cheap Core/focus revision fences *under* that lock. This also
     // prevents an older absent view from revoking a newer session/menu.
     let before = epoch.as_ref().map(|source| source());
+    let focus_before = focus_revision.as_ref().map(|source| source());
     let context = context();
     let mut state = runtime().state.lock();
     let after = epoch.as_ref().map(|source| source());
-    if before != after || context.as_ref().is_some_and(|c|
+    let focus_after = focus_revision.as_ref().map(|source| source());
+    if before != after || focus_before != focus_after || context.as_ref().is_some_and(|c|
         after.is_some_and(|current| c.style_epoch != current)) {
         if let Some(current) = after { state.invalidate_before(current); }
         let closed = std::mem::take(&mut state.closed);
