@@ -2068,6 +2068,7 @@ export const de: typeof zhCN = {
       switchStyle: 'Zum vorherigen Stil wechseln',
       skipAutoStyle: 'Automatischen Stil überspringen',
       skipAutoStylePicker: 'Stil nach Tastendruck wählen',
+      skipAutoStyleComboRequired: 'Verwende eine Tastenkombination.',
       openApp: 'OpenLess öffnen',
       stylePackTitle: 'Stilkurzbefehle',
       stylePackDesc:

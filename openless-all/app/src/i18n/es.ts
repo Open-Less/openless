@@ -2054,6 +2054,7 @@ export const es: typeof zhCN = {
       switchStyle: 'Cambiar al estilo anterior',
       skipAutoStyle: 'Omitir estilo automático',
       skipAutoStylePicker: 'Elegir estilo al pulsar',
+      skipAutoStyleComboRequired: 'Usa una combinación de teclas.',
       openApp: 'Abrir OpenLess',
       stylePackTitle: 'Atajos de estilos',
       stylePackDesc:

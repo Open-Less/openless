@@ -2022,6 +2022,7 @@ export const en: typeof zhCN = {
       switchStyle: 'Switch to previous style',
       skipAutoStyle: 'Skip auto style',
       skipAutoStylePicker: 'Choose output style on press',
+      skipAutoStyleComboRequired: 'Use a key combination.',
       openApp: 'Open OpenLess',
       stylePackTitle: 'Style shortcuts',
       stylePackDesc:

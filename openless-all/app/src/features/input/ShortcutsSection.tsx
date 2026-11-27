@@ -120,6 +120,9 @@ export function ShortcutsSection({ platform }: { platform: PlatformCapabilities 
             group: 'recording',
             binding: prefs.skipAutoStyleHotkey ?? null,
             save: async (binding: ShortcutBinding) => {
+              if (capability?.adapter === 'windowsLowLevel' && binding.modifiers.length === 0) {
+                throw new Error(t('settings.shortcuts.skipAutoStyleComboRequired'));
+              }
               await setSkipAutoStyleHotkey(binding);
               await refresh();
             },
@@ -314,6 +317,9 @@ export function ShortcutsSection({ platform }: { platform: PlatformCapabilities 
                   onSave={command.save}
                   onDisable={command.disable}
                   onReset={command.reset}
+                  comboOnly={
+                    command.id === 'skipAutoStyle' && capability?.adapter === 'windowsLowLevel'
+                  }
                   sideSpecificModifiers={command.id === 'dictation'}
                 />
               </div>
@@ -325,9 +331,10 @@ export function ShortcutsSection({ platform }: { platform: PlatformCapabilities 
                     on={prefs.skipAutoStylePickerEnabled ?? false}
                     onToggle={(skipAutoStylePickerEnabled) => {
                       // The shared preference store handles rollback and error feedback.
-                      void updatePrefs((current) => ({ ...current, skipAutoStylePickerEnabled })).catch(
-                        () => {},
-                      );
+                      void updatePrefs((current) => ({
+                        ...current,
+                        skipAutoStylePickerEnabled,
+                      })).catch(() => {});
                     }}
                   />
                 </div>

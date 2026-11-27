@@ -1916,6 +1916,7 @@ export const zhTW: typeof zhCN = {
       switchStyle: '切換到上一個風格',
       skipAutoStyle: '跳過自動風格',
       skipAutoStylePicker: '按下時選擇輸出風格',
+      skipAutoStyleComboRequired: '請使用組合鍵。',
       openApp: '開啟 OpenLess',
       stylePackTitle: '風格直達快捷鍵',
       stylePackDesc: '為常用風格包各配一個快捷鍵，按下直接切換；停用中的包會自動啟用。',
