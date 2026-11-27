@@ -10,6 +10,8 @@ use openless_core::assistant_api::{
     AssistantContextProvider, AssistantContextQuery, AssistantContextResult,
 };
 use openless_core::{BackendError, BackendErrorCode};
+use openless_core::browser_scene::SceneAuthorization;
+use super::browser_context::BrowserReader;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -25,15 +27,15 @@ pub(crate) struct ReadPermissions {
     pub voice_history: bool,
 }
 
-#[derive(Clone)]
 struct BrowserSource {
-    pid: u32,
-    bundle_id: String,
+    reader: std::sync::Arc<dyn BrowserReader>,
+    grant: SceneAuthorization,
+    turn: Option<AskTurnKey>,
 }
 
 #[derive(Default)]
 pub(crate) struct DesktopContext {
-    state: Mutex<ContextState>,
+    state: std::sync::Arc<Mutex<ContextState>>,
     backend: Option<std::sync::Arc<openless_core::OpenLessBackend>>,
 }
 
@@ -46,6 +48,8 @@ struct ContextState {
     read_permissions: ReadPermissions,
     read_grant_epoch: u64,
     browser_sources: HashMap<Uuid, BrowserSource>,
+    browser_grant_epoch: u64,
+    browser_turns: HashMap<Uuid, AskTurnKey>,
 }
 
 pub(crate) struct CapturedInvocation {
@@ -70,6 +74,8 @@ impl DesktopContext {
         let mut state = self.state.lock();
         if state.read_permissions != permissions {
             state.read_grant_epoch += 1;
+            state.browser_grant_epoch += 1;
+            state.browser_sources.clear();
         }
         state.read_permissions = permissions;
         if !permissions.browser_tab {
@@ -77,15 +83,35 @@ impl DesktopContext {
         }
     }
 
-    pub(crate) fn bind_browser_source(&self, conversation_id: Uuid, pid: u32, bundle_id: &str) {
+    pub(crate) fn browser_authorization(&self) -> SceneAuthorization {
+        browser_grant(&self.state.lock())
+    }
+
+    pub(crate) fn browser_guard(&self, grant: SceneAuthorization) -> std::sync::Arc<dyn Fn() -> bool + Send + Sync> {
+        let state = self.state.clone();
+        std::sync::Arc::new(move || browser_grant(&state.lock()) == grant && grant.app_metadata && grant.browser_metadata)
+    }
+
+    /// Take once before submitting the external invocation's first Capture.
+    /// The guard always compares against this exact epoch, including regrants.
+    pub(crate) fn capture_browser_authorization(&self) -> Option<super::browser_capture::CaptureAuthorization> {
+        let grant = self.browser_authorization();
+        let authorization = super::browser_capture::CaptureAuthorization::new(grant, self.browser_guard(grant));
+        authorization.is_current().then_some(authorization)
+    }
+
+    pub(crate) fn bind_browser_reference(
+        &self, conversation_id: Uuid, grant: SceneAuthorization,
+        reader: std::sync::Arc<dyn BrowserReader>,
+    ) {
         let mut state = self.state.lock();
-        if state.read_permissions.browser_tab && state.conversations.contains_key(&conversation_id)
+        if grant.app_metadata && grant.browser_metadata && browser_grant(&state) == grant
+            && state.conversations.contains_key(&conversation_id)
         {
             state.browser_sources.insert(
                 conversation_id,
                 BrowserSource {
-                    pid,
-                    bundle_id: bundle_id.into(),
+                    reader, grant, turn: None,
                 },
             );
         }
@@ -139,6 +165,8 @@ impl DesktopContext {
         let mut state = self.state.lock();
         if state.authorization.app_metadata != authorization.app_metadata {
             state.app_grant_epoch += 1;
+            state.browser_grant_epoch += 1;
+            state.browser_sources.clear();
             for invocation in state.conversations.values_mut() {
                 *invocation = None;
             }
@@ -196,6 +224,7 @@ impl DesktopContext {
         let mut state = self.state.lock();
         state.conversations.remove(&conversation_id);
         state.browser_sources.remove(&conversation_id);
+        state.browser_turns.remove(&conversation_id);
     }
 
     /// Call only from the external native invocation path, synchronously
@@ -260,7 +289,32 @@ impl DesktopContext {
     }
 }
 
+fn browser_grant(state: &ContextState) -> SceneAuthorization {
+    SceneAuthorization {
+        app_metadata: state.authorization.app_metadata,
+        browser_metadata: state.read_permissions.browser_tab,
+        selected_text: false,
+        epoch: state.browser_grant_epoch,
+    }
+}
+
 impl ContextProvider for DesktopContext {
+    fn begin_turn(&self, key: AskTurnKey) {
+        let mut state = self.state.lock();
+        // A late admitted-turn callback cannot recreate context after close.
+        if !state.conversations.contains_key(&key.conversation_id) {
+            return;
+        }
+        state.browser_turns.insert(key.conversation_id, key);
+        if let Some(source) = state.browser_sources.get_mut(&key.conversation_id) {
+            if source.turn.is_none() {
+                source.turn = Some(key);
+            } else if source.turn != Some(key) {
+                state.browser_sources.remove(&key.conversation_id);
+            }
+        }
+    }
+
     fn context_for_turn(&self, conversation_id: Uuid) -> TurnContext {
         let state = self.state.lock();
         let invocation = state
@@ -287,30 +341,39 @@ impl AssistantContextProvider for DesktopContext {
                 ));
             }
             if let AssistantContextQuery::BrowserTab = query {
-                let (source, epoch) = {
-                    let state = self.state.lock();
+                let (source, grant) = {
+                    let mut state = self.state.lock();
                     if !state.conversations.contains_key(&key.conversation_id) {
                         return Ok(unavailable("askConversationUnavailable"));
                     }
-                    if !state.read_permissions.browser_tab {
+                    let grant = browser_grant(&state);
+                    if !grant.app_metadata || !grant.browser_metadata {
                         return Ok(AssistantContextResult::Denied);
                     }
-                    if !cfg!(target_os = "macos") {
-                        return Ok(unavailable("browserTabUnsupported"));
+                    if state.browser_turns.get(&key.conversation_id) != Some(&key) {
+                        return Ok(unavailable("browserReferenceExpired"));
                     }
                     (
-                        state.browser_sources.get(&key.conversation_id).cloned(),
-                        state.read_grant_epoch,
+                        state.browser_sources.remove(&key.conversation_id)
+                            .filter(|source| source.turn == Some(key) && source.grant == grant),
+                        grant,
                     )
                 };
                 let Some(source) = source else {
                     return Ok(unavailable("noExternalBrowser"));
                 };
-                let reading = cancellation.clone();
+                let state = self.state.clone();
+                let upstream = cancellation.clone();
+                let reading = cancellation.clone().requiring(move || {
+                    let state = state.lock();
+                    !upstream.is_cancelled() && browser_grant(&state) == grant
+                        && state.browser_turns.get(&key.conversation_id) == Some(&key)
+                        && state.conversations.contains_key(&key.conversation_id)
+                });
                 let result = tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => return Err(BackendError::new(BackendErrorCode::Cancelled, "askCancelled")),
-                    result = tokio::task::spawn_blocking(move || device::browser_tab(source.pid, &source.bundle_id, &reading)) => result.unwrap_or(Err("browserReadFailed")),
+                    result = source.reader.read(key, grant, reading) => result,
                 };
                 let state = self.state.lock();
                 if cancellation.is_cancelled() {
@@ -322,17 +385,13 @@ impl AssistantContextProvider for DesktopContext {
                 if !state.conversations.contains_key(&key.conversation_id) {
                     return Ok(unavailable("askConversationUnavailable"));
                 }
-                if state.read_grant_epoch != epoch || !state.read_permissions.browser_tab {
+                if browser_grant(&state) != grant {
                     return Ok(AssistantContextResult::Denied);
                 }
-                return Ok(match result {
-                    Ok(data) => AssistantContextResult::Available {
-                        data,
-                        source: "browserAccessibility".into(),
-                        as_of: Local::now().to_rfc3339(),
-                    },
-                    Err(reason) => unavailable(reason),
-                });
+                if state.browser_turns.get(&key.conversation_id) != Some(&key) {
+                    return Ok(unavailable("browserReferenceExpired"));
+                }
+                return Ok(result);
             }
             if let AssistantContextQuery::VoiceHistory { ref query, limit } = query {
                 let epoch = {
@@ -630,6 +689,12 @@ mod native {
 }
 
 impl openless_core::ask::ContextProvider for DesktopContext {
+    fn begin_turn(&self, turn: AskTurnKey) {
+        // StandaloneQaService owns admission and the real key. Both provider
+        // contracts must reach the same grant/turn state, never a no-op shim.
+        <Self as openless_core::ask_context::ContextProvider>::begin_turn(self, turn);
+    }
+
     fn recent_voice(
         &self,
         turn: AskTurnKey,
@@ -746,6 +811,34 @@ mod tests {
 
     fn model_data(provider: &DesktopContext, conversation: Uuid) -> String {
         serde_json::to_string(&provider.context_for_turn(conversation).dynamic).unwrap()
+    }
+
+    #[test]
+    fn standalone_turn_hook_registers_active_and_leaves_no_marker_after_close() {
+        let provider = DesktopContext::default();
+        let key = AskTurnKey { conversation_id: Uuid::new_v4(), turn_id: Uuid::new_v4() };
+        provider.open_conversation(key.conversation_id);
+        let standalone: &dyn openless_core::ask::ContextProvider = &provider;
+
+        standalone.begin_turn(key);
+        {
+            let state = provider.state.lock();
+            assert!(state.conversations.contains_key(&key.conversation_id));
+            assert_eq!(state.browser_turns.get(&key.conversation_id), Some(&key));
+        }
+        provider.close_conversation(key.conversation_id);
+        {
+            let state = provider.state.lock();
+            assert!(!state.conversations.contains_key(&key.conversation_id));
+            assert!(!state.browser_turns.contains_key(&key.conversation_id));
+        }
+        // Inspect immediately after the late real trait-object callback.
+        // Deleting the production close guard would reinsert this marker.
+        standalone.begin_turn(key);
+        let state = provider.state.lock();
+        assert!(!state.browser_turns.contains_key(&key.conversation_id));
+        assert!(!state.conversations.contains_key(&key.conversation_id));
+        assert!(!state.browser_sources.contains_key(&key.conversation_id));
     }
 
     #[test]

@@ -887,22 +887,25 @@ impl super::Integration for DesktopPorts {
         let ask = self.ask.clone();
         Box::pin(async move {
             let conversation = ask.open().map_err(|error| error.message)?;
-            if let (Some(pid), Some(bundle)) = (
-                invocation.foreground_pid,
-                invocation
-                    .foreground_app
-                    .as_ref()
-                    .and_then(|app| app.bundle_id.as_deref()),
-            ) {
-                ask.context.bind_browser_source(conversation, pid, bundle);
-            }
             if let Some(desktop) = app.try_state::<Arc<super::Desktop>>() {
                 desktop.set_conversation(Some(conversation.to_string()));
             }
+            // Freeze the real webpage grant before the first Capture enters
+            // the queue. Never replace it with a later regrant after await.
+            let browser = ask.context.capture_browser_authorization();
             let captured = ask
                 .targets
-                .capture_before_focus(invocation.foreground_pid, generation, ask.context_access())
+                .capture_before_focus(invocation.foreground_pid, generation, ask.context_access(), browser.clone())
                 .await;
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(authorization) = browser {
+                    let grant = authorization.grant();
+                    if let Some(reader) = ask.targets.browser_source(generation, authorization).await {
+                        ask.context.bind_browser_reference(conversation, grant, reader);
+                    }
+                }
+            }
             if app
                 .try_state::<Arc<super::Desktop>>()
                 .is_some_and(|desktop| desktop.external_target_generation() == Some(generation))

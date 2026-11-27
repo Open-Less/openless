@@ -1192,6 +1192,162 @@ async fn idempotency_preserves_request_turn_event_ownership_and_one_preparation(
     f.no_more_calls();
 }
 
+type AdmittedTurnHook = Arc<dyn Fn(AskTurnKey) + Send + Sync>;
+
+#[derive(Default)]
+struct AdmittedContext {
+    legacy: Context,
+    turns: Mutex<Vec<AskTurnKey>>,
+    hook: Mutex<Option<AdmittedTurnHook>>,
+}
+
+impl ContextProvider for AdmittedContext {
+    fn begin_turn(&self, key: AskTurnKey) {
+        self.turns.lock().push(key);
+        let hook = self.hook.lock().clone();
+        if let Some(hook) = hook { hook(key); }
+    }
+
+    fn context(
+        &self, key: AskTurnKey, cancellation: AskCancellation,
+    ) -> BoxFuture<'_, Result<AskContext, BackendError>> {
+        self.legacy.context(key, cancellation)
+    }
+}
+
+struct FailFirstModel {
+    inner: Arc<dyn AskModelFactory>,
+    fail: std::sync::atomic::AtomicBool,
+}
+
+impl AskModelFactory for FailFirstModel {
+    fn prepare(&self, thinking: bool) -> BoxFuture<'_, Result<Arc<dyn AskModel>, BackendError>> {
+        if self.fail.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            Box::pin(async { Err(ask_error(BackendErrorCode::Provider, "fixtureModelPreparation")) })
+        } else {
+            self.inner.prepare(thinking)
+        }
+    }
+}
+
+#[tokio::test]
+async fn standalone_binds_only_the_admitted_retry_before_model_work_and_never_on_replay() {
+    let mut f = Fixture::new(32_000);
+    let context = Arc::new(AdmittedContext::default());
+    let inner = Arc::get_mut(&mut f.service.0).expect("unshared fixture service");
+    inner.deps.context = context.clone();
+    inner.deps.models = Arc::new(FailFirstModel {
+        inner: inner.deps.models.clone(),
+        fail: std::sync::atomic::AtomicBool::new(true),
+    });
+    let id = f.service.open();
+    let input = request(id, "retry-original-invocation", "question");
+    let mut events = f.service.subscribe();
+
+    let error = f.service.submit_prepared(input.clone(), || async {
+        Err(ask_error(BackendErrorCode::Platform, "fixturePreparation"))
+    }).await.unwrap_err();
+    assert_eq!(error.message, "fixturePreparation");
+    assert!(context.turns.lock().is_empty());
+    let error = f.service.submit_prepared(input.clone(), || async {
+        Ok(AskPreparation::default())
+    }).await.unwrap_err();
+    assert_eq!(error.message, "fixtureModelPreparation");
+    assert!(context.turns.lock().is_empty());
+    assert_eq!(f.service.submit_prepared_guarded(
+        input.clone(), || async { Ok(AskPreparation::default()) },
+        || false, AskCancellation::default(),
+    ).await.unwrap_err().code, BackendErrorCode::Cancelled);
+    assert!(context.turns.lock().is_empty());
+    assert!(f.service.snapshot(id).unwrap().turns.is_empty());
+
+    let owner = Arc::downgrade(&f.service.0);
+    *context.hook.lock() = Some(Arc::new(move |key| {
+        // Reentry would deadlock if begin_turn were inside the Core state lock.
+        let service = StandaloneQaService(owner.upgrade().unwrap());
+        assert!(service.0.state.try_lock().is_some(), "host hook must be outside Core state lock");
+        assert_eq!(service.turn(key).unwrap().turn_id, key.turn_id);
+        assert!(service.events(id, 0).unwrap().events.iter()
+            .any(|event| event.turn_id == Some(key.turn_id)
+                && matches!(&event.kind, AskEventKind::Submitted { .. })));
+    }));
+    let turn_id = f.service.submit_prepared(input.clone(), || async {
+        assert!(context.turns.lock().is_empty());
+        Ok(AskPreparation::default())
+    }).await.unwrap();
+    let key = AskTurnKey { conversation_id: id, turn_id };
+    assert_eq!(&*context.turns.lock(), &[key]);
+    assert_eq!(f.service.submit_prepared(input.clone(), || async {
+        panic!("idempotent request must not prepare or bind again")
+    }).await.unwrap(), turn_id);
+    assert_eq!(&*context.turns.lock(), &[key]);
+    f.route(AskRoute::Answer).await;
+    f.assistant().await.complete("answer");
+    assert_eq!(terminal(&mut events, key).await, AskTurnStatus::Completed);
+    assert_eq!(f.service.submit(input).await.unwrap(), turn_id);
+    assert_eq!(&*context.turns.lock(), &[key]);
+    f.no_more_calls();
+}
+
+#[tokio::test]
+async fn cancelled_or_closed_preparation_does_not_bind_a_standalone_turn() {
+    for close in [false, true] {
+        let mut f = Fixture::new(32_000);
+        let context = Arc::new(AdmittedContext::default());
+        Arc::get_mut(&mut f.service.0).unwrap().deps.context = context.clone();
+        let id = f.service.open();
+        let fence = AskSessionFence::default();
+        let permit = fence.issue();
+        let service = f.service.clone();
+        let error = service.submit_prepared_guarded(
+            request(id, "cancelled-preparation", "question"),
+            || async {
+                if close { service.end_conversation(id).unwrap(); }
+                else { fence.revoke(); }
+                Ok(AskPreparation::default())
+            },
+            || true, permit,
+        ).await.unwrap_err();
+        assert!(matches!(error.code, BackendErrorCode::Cancelled | BackendErrorCode::InvalidState));
+        assert!(context.turns.lock().is_empty());
+        f.no_more_calls();
+    }
+}
+
+#[tokio::test]
+async fn admitted_hook_can_cancel_or_close_without_a_core_lock_or_starting_model_work() {
+    for close in [false, true] {
+        let mut f = Fixture::new(32_000);
+        let context = Arc::new(AdmittedContext::default());
+        Arc::get_mut(&mut f.service.0).unwrap().deps.context = context.clone();
+        let id = f.service.open();
+        let owner = Arc::downgrade(&f.service.0);
+        *context.hook.lock() = Some(Arc::new(move |key| {
+            let service = StandaloneQaService(owner.upgrade().unwrap());
+            assert!(service.0.state.try_lock().is_some());
+            if close { service.end_conversation(id).unwrap(); }
+            else { service.cancel(key).unwrap(); }
+        }));
+        let turn_id = f.service.submit(request(id, "cancel-at-admitted-hook", "question")).await.unwrap();
+        assert_eq!(&*context.turns.lock(), &[AskTurnKey { conversation_id: id, turn_id }]);
+        if close { assert!(f.service.snapshot(id).is_err()); }
+        else { assert_eq!(f.service.turn(AskTurnKey { conversation_id: id, turn_id }).unwrap().status, AskTurnStatus::Cancelled); }
+        tokio::task::yield_now().await;
+        f.no_more_calls();
+    }
+}
+
+#[tokio::test]
+async fn legacy_standalone_context_keeps_ordinary_facts_with_the_default_turn_hook() {
+    // Context implements only the old context() contract, with no begin_turn.
+    let provider: Arc<dyn ContextProvider> = Arc::new(Context::default());
+    let key = AskTurnKey { conversation_id: Uuid::new_v4(), turn_id: Uuid::new_v4() };
+    provider.begin_turn(key);
+    let context = provider.context(key, AskCancellation::default()).await.unwrap();
+    assert_eq!(context.static_version, "ask-test-v1");
+    assert!(context.facts.is_empty());
+}
+
 #[tokio::test]
 async fn tools_usage_and_authoritative_response_survive_truncated_replay() {
     let mut f = Fixture::new(32_000);
