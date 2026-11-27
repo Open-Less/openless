@@ -1,0 +1,341 @@
+name: Xfyun test evidence once
+
+# Temporary diagnostic branch only. Never merge this entry into beta/main or a PR.
+# The workflow commit is a carrier; the only compiled source is the reviewed SHA.
+'on':
+  push:
+    branches: [appergb/p5-xfyun-test-evidence]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xfyun-test-evidence-once
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    if: >-
+      github.repository == 'Open-Less/openless' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/appergb/p5-xfyun-test-evidence' &&
+      github.actor == 'appergb' &&
+      github.triggering_actor == 'appergb' &&
+      github.run_attempt == 1 &&
+      github.event.created == true &&
+      github.event.deleted == false &&
+      github.event.forced == false
+    runs-on: xcode-27
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: never
+      RUSTC_WRAPPER: ''
+      RUSTC_WORKSPACE_WRAPPER: ''
+      RUSTUP_TOOLCHAIN: 1.99.0
+      ENTRY_SHA: ${{ github.sha }}
+      ENTRY_WORKFLOW_SHA: ${{ github.workflow_sha }}
+
+    steps:
+      - name: Allocate owned scratch and record carrier
+        run: |
+          set -euo pipefail
+          [[ "$ENTRY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ENTRY_WORKFLOW_SHA" == "$ENTRY_SHA" ]]
+          [[ "$ENTRY_SHA" != 8cca91b2aa637ead8bb04d053eba7ad53b5219cf ]]
+          [[ ! -e xfyun-evidence-target && ! -L xfyun-evidence-target ]]
+          command -v rustup >/dev/null
+          scratch="$(mktemp -d "$RUNNER_TEMP/xfyun-evidence.XXXXXXXX")"
+          mkdir "$scratch/tmp" "$scratch/cargo" "$scratch/rustup" "$scratch/target" "$scratch/logs"
+          printf '%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$scratch/owner"
+          printf 'checkout-in-flight\n' > "$scratch/process-state"
+          {
+            printf 'XF_EVIDENCE_SCRATCH=%s\n' "$scratch"
+            printf 'TMPDIR=%s/tmp\n' "$scratch"
+            printf 'CARGO_HOME=%s/cargo\n' "$scratch"
+            printf 'RUSTUP_HOME=%s/rustup\n' "$scratch"
+            printf 'CARGO_TARGET_DIR=%s/target\n' "$scratch"
+          } >> "$GITHUB_ENV"
+          printf 'RECEIPT carrier=%s workflow=%s run=%s attempt=%s target=8cca91b2aa637ead8bb04d053eba7ad53b5219cf\n' \
+            "$ENTRY_SHA" "$ENTRY_WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          printf 'Actions setup-job logs retain the actual runner version and resolved action SHAs.\n'
+          printf 'Cancellation or uncertain foreground completion retains owned paths for hosted-runner teardown; no PID signalling.\n'
+
+      # Same action commits resolved in failed iOS job 140756824107.
+      - name: Checkout the immutable reviewed target
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: Open-Less/openless
+          ref: 8cca91b2aa637ead8bb04d053eba7ad53b5219cf
+          path: xfyun-evidence-target
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          clean: false
+          show-progress: false
+          submodules: false
+          lfs: false
+
+      - name: Verify source lineage and immutable inputs
+        working-directory: xfyun-evidence-target
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == 8cca91b2aa637ead8bb04d053eba7ad53b5219cf ]]
+          [[ "$(git rev-parse 'HEAD^{tree}')" == 5020b56060da53acee873b288c05e5e8669e2ffe ]]
+          [[ "$(git show -s --format=%P HEAD)" == 901383dbb61d416baad318d81fbe2c46ce2b9b9a ]]
+          [[ "$(git rev-parse 'HEAD^^{tree}')" == c6797b9dc77bddf36253e50ffdcd0ff7fa0c408e ]]
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+          if git config --local --get-regexp 'extraheader|^credential\.' >/dev/null; then
+            echo "::error::Unexpected persisted checkout credential configuration"
+            exit 1
+          fi
+          git show -s --format='RECEIPT target=%H tree=%T parents=%P'
+          printf '%s\n' \
+            '0892e033679139d1a2a4ba4b57038ee42edb7135 docs/xfyun-test-evidence.md' \
+            'ce6781daf3f0cec1709a83d770edf7303b0d4148 openless-all/app/crates/openless-core/Cargo.toml' \
+            'd6d10354648bd2591021c9111dfd677c29bfb830 openless-all/app/crates/openless-core/src/asr/mod.rs' \
+            '3324e353b021737db5f205a415c9d44b7c5e8cac openless-all/app/crates/openless-core/src/asr/xfyun.rs' \
+            '1dfdded7df60ddca97dc1de443b18a485c4a8827 openless-all/app/crates/openless-core/src/asr/xfyun/evidence.rs' |
+          while read -r expected path; do
+            actual="$(git hash-object "$path")"
+            printf 'RECEIPT blob=%s path=%s\n' "$actual" "$path"
+            [[ "$actual" == "$expected" ]]
+          done
+          printf '%s\n' \
+            '21bcd11acd2860e26705e07ff4a2903d29681915981e1f81c5a9264d7b99b54a  openless-all/app/Cargo.lock' \
+            '701af134e29f1c664d4ea2819936652f04a9555a9774afd56f1bd8d64996338c  openless-all/ios/CoreHost/Cargo.lock' \
+            '09009f903b10492f105fe67638532c8f4b46c2927866f6b80055a751d0db4e79  openless-all/ios/CoreHost/Cargo.toml' \
+            '0dd8304dcf991438c684dc3ea899526219de449080595c954bb255427339296f  openless-all/ios/CoreHost/Patches/ios-input-contracts.patch' \
+            '1eaea9155d516872fa0102f34dcf208fadf0620c02911827d375bdb1b3ad6e33  openless-all/ios/scripts/prepare-core.py' |
+          shasum -a 256 -c -
+          shasum -a 256 openless-all/app/crates/openless-core/Cargo.toml
+          [[ ! -e openless-all/ios/CoreHost/.build && ! -L openless-all/ios/CoreHost/.build ]]
+          printf 'toolchain-in-flight\n' > "$XF_EVIDENCE_SCRATCH/process-state"
+
+      - name: Install the same explicit Rust toolchain
+        uses: dtolnay/rust-toolchain@92e73e19cbfb3981e63ef478a16f95f415e634d3 # 1.99.0
+        with:
+          components: clippy
+
+      - name: Record and compare actual environment
+        run: |
+          set -euo pipefail
+          [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]]
+          printf 'RECEIPT runner_os=%s runner_arch=%s label=xcode-27 expected_agent=2.338.2 actual_agent=setup-job-log\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH"
+          printf 'RECEIPT image_os_env=%s image_version_env=%s expected_image=xcode-27-arm64 expected_version=20261123.0387.2 actual_image_identity=setup-job-log\n' \
+            "${ImageOS:-unreported}" "${ImageVersion:-unreported}"
+          if [[ "${ImageOS:-}" != xcode-27-arm64 || "${ImageVersion:-}" != 20261123.0387.2 ]]; then
+            echo "::warning::Image identity is changed or unreported; this is not a reproduction of the historical runner image"
+          fi
+          sw_vers
+          xcodebuild -version
+          rustup run 1.99.0 rustc --version --verbose
+          rustup run 1.99.0 cargo --version
+          rustup run 1.99.0 cargo clippy --version
+          rust_info="$(rustup run 1.99.0 rustc --version --verbose)"
+          [[ "$rust_info" == *'release: 1.99.0'* ]]
+          [[ "$rust_info" == *'commit-hash: b940084d7'* ]]
+          [[ "$rust_info" == *'host: aarch64-apple-darwin'* ]]
+          {
+            printf 'RUSTC=%s\n' "$(rustup which --toolchain 1.99.0 rustc)"
+            printf 'RUSTDOC=%s\n' "$(rustup which --toolchain 1.99.0 rustdoc)"
+          } >> "$GITHUB_ENV"
+          printf 'RECEIPT checkout_action=d23441a48e516b6c34aea4fa41551a30e30af803 toolchain_action=92e73e19cbfb3981e63ef478a16f95f415e634d3\n'
+          printf 'not-started\n' > "$XF_EVIDENCE_SCRATCH/process-state"
+
+      - name: Compile, lint and collect eleven independent exact cases once
+        working-directory: xfyun-evidence-target
+        timeout-minutes: 25
+        run: |
+          set -uo pipefail
+          scratch="$XF_EVIDENCE_SCRATCH"
+          if ! printf 'in-flight\n' > "$scratch/process-state"; then
+            echo "::error::Cannot establish the foreground ownership marker"
+            exit 1
+          fi
+          trap 'printf "uncertain\n" > "$XF_EVIDENCE_SCRATCH/process-state"; exit 130' INT
+          trap 'printf "uncertain\n" > "$XF_EVIDENCE_SCRATCH/process-state"; exit 143' TERM
+          failed=0
+          last_rc=0
+          last_log_rc=0
+          capture() {
+            local label="$1"
+            shift
+            printf '::group::%s\n' "$label"
+            "$@" 2>&1 | tee "$scratch/logs/$label.log"
+            local statuses=("${PIPESTATUS[@]}")
+            last_rc="${statuses[0]}"
+            last_log_rc="${statuses[1]}"
+            printf 'RECEIPT stage=%s command_exit=%s log_exit=%s\n' "$label" "$last_rc" "$last_log_rc"
+            printf '::endgroup::\n'
+            if [[ "$last_rc" -ne 0 || "$last_log_rc" -ne 0 ]]; then failed=1; fi
+          }
+          capture prepare python3 -B openless-all/ios/scripts/prepare-core.py
+          prepared=0
+          if [[ "$last_rc" -eq 0 && "$last_log_rc" -eq 0 ]]; then
+            capture derived-hashes bash -euo pipefail -c '
+              cd openless-all/ios/CoreHost/.build/core-source/crates/openless-core
+              printf "%s\n" \
+                "8ae231977b8a9f3eb945f9b263eba51f7f8b1f111412c40fd11be671fa05bd93  Cargo.toml" \
+                "b5592f3d09bfbfe35e7bccc8bcb6178ba8de870a4fd35a260fffe5880a09739e  src/asr/mod.rs" \
+                "3116e325a3d0210322082f2f0af8ebe7d4d12527e17ab51afba0362e3ebbe5ad  src/asr/xfyun.rs" \
+                "1946111afe4e1cbd4add8ec3327a58a817c5e4356a3b3b4e562f2bf9d33d022e  src/asr/xfyun/evidence.rs" |
+              shasum -a 256 -c -
+              shasum -a 256 Cargo.toml src/asr/mod.rs src/asr/xfyun.rs src/asr/xfyun/evidence.rs
+            '
+            if [[ "$last_rc" -eq 0 && "$last_log_rc" -eq 0 ]]; then prepared=1; fi
+          fi
+          binary_ready=0
+          if [[ "$prepared" -eq 1 ]]; then
+            capture compile rustup run 1.99.0 cargo test \
+              --manifest-path openless-all/ios/CoreHost/Cargo.toml \
+              --workspace --lib --no-run --locked --message-format=json-render-diagnostics
+            if [[ "$last_rc" -eq 0 && "$last_log_rc" -eq 0 ]]; then
+              capture binaries python3 -B -c '
+          import hashlib, json, os
+          from pathlib import Path
+          scratch = Path(os.environ["XF_EVIDENCE_SCRATCH"])
+          target = Path(os.environ["CARGO_TARGET_DIR"]).resolve()
+          found = {"openless_core": [], "openless_ios_host": []}
+          for line in (scratch / "logs/compile.log").read_text().splitlines():
+              try:
+                  record = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if not isinstance(record, dict):
+                  continue
+              name = record.get("target", {}).get("name")
+              if record.get("reason") != "compiler-artifact" or name not in found:
+                  continue
+              if not record.get("profile", {}).get("test") or not record.get("executable"):
+                  continue
+              kinds = set(record["target"]["kind"])
+              assert kinds and kinds <= {"lib", "rlib", "staticlib"}, record["target"]
+              path = Path(record["executable"]).resolve()
+              assert path.is_relative_to(target) and path.is_file() and os.access(path, os.X_OK)
+              assert path.name.startswith(name + "-")
+              found[name].append(path)
+          for name, paths in found.items():
+              assert len(paths) == 1, (name, paths)
+              print("RECEIPT compiled_lib=" + name + " executable=" + str(paths[0]))
+          binary = found["openless_core"][0]
+          (scratch / "core-binary").write_text(str(binary) + "\n")
+          (scratch / "core-binary.sha256").write_text(hashlib.sha256(binary.read_bytes()).hexdigest())
+          print("RECEIPT core_binary_sha256=" + (scratch / "core-binary.sha256").read_text())
+          '
+              if [[ "$last_rc" -eq 0 && "$last_log_rc" -eq 0 ]]; then binary_ready=1; fi
+            fi
+            # Independent lint result is collected even when compile failed.
+            capture clippy rustup run 1.99.0 cargo clippy \
+              --manifest-path openless-all/ios/CoreHost/Cargo.toml \
+              -p openless-core --all-targets --locked -- -D warnings
+          else
+            echo 'RECEIPT compile=not-run clippy=not-run reason=prepare-or-derived-verification-failed'
+            failed=1
+          fi
+          names=(
+            asr::xfyun::evidence::tests::normal_full_frames_and_short_tail_characterization
+            asr::xfyun::evidence::tests::late_wake_characterizes_current_sender_catch_up
+            asr::xfyun::evidence::tests::slow_write_characterizes_current_sender_catch_up
+            asr::xfyun::evidence::tests::cancel_during_slot_does_not_continue_or_send_end
+            asr::xfyun::evidence::tests::cancel_during_write_does_not_continue_or_send_end
+            asr::xfyun::evidence::tests::failed_write_does_not_continue_or_send_end
+            asr::xfyun::evidence::tests::receiver_barrier_distinguishes_reads_from_sends
+            asr::xfyun::tests::buffered_audio_is_paced_and_precedes_end_frame
+            asr::xfyun::tests::end_frame_waits_for_delayed_send_worker_instead_of_overtaking_audio
+            asr::xfyun::tests::audio_frame_send_failure_stops_worker_and_fails_send_last_frame_without_end
+            asr::xfyun::tests::cancel_wakes_paced_send_worker_promptly
+          )
+          if [[ "$binary_ready" -eq 1 ]]; then
+            capture unchanged-binary python3 -B -c '
+          import hashlib, os
+          from pathlib import Path
+          scratch = Path(os.environ["XF_EVIDENCE_SCRATCH"])
+          binary = Path((scratch / "core-binary").read_text().strip())
+          assert hashlib.sha256(binary.read_bytes()).hexdigest() == (scratch / "core-binary.sha256").read_text()
+          '
+            if [[ "$last_rc" -ne 0 || "$last_log_rc" -ne 0 ]]; then binary_ready=0; fi
+          fi
+          if [[ "$binary_ready" -eq 1 ]]; then
+            # Execute the actual Cargo-emitted, validated binary; never recompile
+            # per case, and never interpret an event/input string as a command.
+            IFS= read -r binary < "$scratch/core-binary"
+            index=0
+            for name in "${names[@]}"; do
+              index=$((index + 1))
+              printf 'RECEIPT case=%s name=%s\n' "$index" "$name"
+              capture "list-$index" "$binary" "$name" --exact --list
+              list_rc="$last_rc"
+              list_log_rc="$last_log_rc"
+              if [[ "$list_rc" -eq 0 && "$list_log_rc" -eq 0 ]]; then
+                capture "count-$index" python3 -B -c '
+          from pathlib import Path
+          import sys
+          lines = Path(sys.argv[1]).read_text().splitlines()
+          exact = sum(line == sys.argv[2] + ": test" for line in lines)
+          total = sum(line.endswith(": test") or line.endswith(": benchmark") for line in lines)
+          print("RECEIPT exact_matches=" + str(exact) + " total_listed=" + str(total) + " name=" + sys.argv[2])
+          assert exact == 1 and total == 1, "exact listing must select exactly one real test"
+          ' "$scratch/logs/list-$index.log" "$name"
+                if [[ "$last_rc" -eq 0 && "$last_log_rc" -eq 0 ]]; then
+                  capture "test-$index" "$binary" "$name" --exact --nocapture --test-threads=1
+                  continue
+                fi
+              fi
+              printf 'RECEIPT test=%s not-run reason=invalid-exact-listing\n' "$name"
+              failed=1
+            done
+          else
+            printf 'RECEIPT exact_cases=not-run requested=%s reason=no-verified-workspace-test-binary\n' "${#names[@]}"
+            failed=1
+          fi
+          capture unchanged-source git diff --exit-code HEAD --
+          capture unchanged-locks bash -euo pipefail -c '
+            printf "%s\n" \
+              "21bcd11acd2860e26705e07ff4a2903d29681915981e1f81c5a9264d7b99b54a  openless-all/app/Cargo.lock" \
+              "701af134e29f1c664d4ea2819936652f04a9555a9774afd56f1bd8d64996338c  openless-all/ios/CoreHost/Cargo.lock" |
+            shasum -a 256 -c -
+          '
+          printf 'RECEIPT final_failure=%s target=8cca91b2aa637ead8bb04d053eba7ad53b5219cf\n' "$failed"
+          if ! printf 'returned\n' > "$scratch/process-state"; then
+            echo "::error::Cannot confirm foreground return; leave owned paths for hosted-runner teardown"
+            exit 1
+          fi
+          exit "$failed"
+
+      - name: Clean only owned paths after confirmed foreground return
+        if: ${{ always() && !cancelled() }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${XF_EVIDENCE_SCRATCH:-}" ]]; then
+            echo 'RECEIPT cleanup=no-exported-scratch; incomplete allocation, if any, is left for hosted-runner teardown'
+            exit 0
+          fi
+          python3 -B -c '
+          import os, shutil
+          from pathlib import Path
+          scratch = Path(os.environ["XF_EVIDENCE_SCRATCH"])
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve()
+          assert not scratch.is_symlink() and scratch.resolve().parent == runner_temp
+          assert scratch.name.startswith("xfyun-evidence.")
+          assert (scratch / "owner").read_text() == os.environ["GITHUB_RUN_ID"] + ":" + os.environ["GITHUB_RUN_ATTEMPT"] + "\n"
+          state = (scratch / "process-state").read_text().strip()
+          if state not in ("returned", "not-started"):
+              print("::warning::Foreground completion is uncertain; retain owned paths for hosted-runner teardown, without signalling PIDs")
+              raise SystemExit(1)
+          checkout = Path(os.environ["GITHUB_WORKSPACE"]) / "xfyun-evidence-target"
+          assert not checkout.is_symlink()
+          build = checkout / "openless-all/ios/CoreHost/.build"
+          if build.exists():
+              assert not build.is_symlink() and build.resolve().is_relative_to(checkout.resolve())
+              shutil.rmtree(build)
+          shutil.rmtree(scratch)
+          print("RECEIPT cleanup=owned-derived-and-scratch-removed shared_caches=untouched")
+          '
+          printf 'TMPDIR=%s\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
