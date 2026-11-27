@@ -16,7 +16,7 @@ rules = re.search(
 path = Path.home() / "Library/Application Support/OpenLess/style-packs.json"
 packs = json.loads(path.read_text())
 pack = next(row for row in packs if row["id"] == "openless.intent-reconstruction")
-assert pack["version"] == "1.3.0", pack["version"]
+assert pack["version"] == "1.4.0", pack["version"]
 body = (source / "builtin_styles/intent-reconstruction-shared-v1.md").read_text().rstrip()
 assert pack["prompt"] == pack["selectionPrompt"] == body + "\n\n" + rules
 for key in ("prompt", "selectionPrompt"):
@@ -25,7 +25,7 @@ for key in ("prompt", "selectionPrompt"):
     json.dumps(pack, ensure_ascii=False, indent=2) + "\n"
 )
 (evidence / "initialized-style-result.txt").write_text(
-    "PASS: same packaged app initialized intent 1.3.0; shared canonical "
+    "PASS: same packaged app initialized intent 1.4.0; shared canonical "
     "identical speech/selection bodies and exactly one requested correction tail per prompt\n"
 )
-print("PASS initialized intent 1.3.0: shared canonical prefixes plus correction tails")
+print("PASS initialized intent 1.4.0: shared canonical prefixes plus correction tails")
