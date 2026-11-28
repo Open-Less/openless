@@ -28,27 +28,44 @@ for (const [event, dev, expected] of [
 const configure = job.indexOf('- name: Configure Dev build environment');
 const cache = job.indexOf('- name: Cache Dev Rust dependencies');
 const compile = job.indexOf('- name: Compile and package Dev');
-assert.ok(configure >= 0 && configure < cache && cache < compile,
-  'the cache must fingerprint the same profile and compiler wrapper used by the build');
+assert.ok(
+  configure >= 0 && configure < cache && cache < compile,
+  'the cache must fingerprint the same profile and compiler wrapper used by the build',
+);
 assert.match(job, /shared-key: tauri-macos-dev/);
-assert.doesNotMatch(job, /^\s+(?:cache-all-crates|cache-workspace-crates): true/m,
-  'source changes must rebuild workspace crates, without caching trial binaries');
-const build = job.slice(compile).match(/        run: \|\n([\s\S]*?)(?=      - name:)/)[1]
-  .split('\n').map((line) => line.slice(10)).join('\n');
+assert.doesNotMatch(
+  job,
+  /^\s+(?:cache-all-crates|cache-workspace-crates): true/m,
+  'source changes must rebuild workspace crates, without caching trial binaries',
+);
+const build = job
+  .slice(compile)
+  .match(/        run: \|\n([\s\S]*?)(?=      - name:)/)[1]
+  .split('\n')
+  .map((line) => line.slice(10))
+  .join('\n');
 const envBlock = job.split('    env:\n')[1].split('    steps:\n')[0];
-const buildEnv = Object.fromEntries([...envBlock.matchAll(/^      ([A-Z_]+): '([^']*)'$/gm)]
-  .map((match) => [match[1], match[2]]));
+const buildEnv = Object.fromEntries(
+  [...envBlock.matchAll(/^      ([A-Z_]+): '([^']*)'$/gm)].map((match) => [match[1], match[2]]),
+);
 assert.equal(buildEnv.CARGO_BUILD_JOBS, '2');
 assert.equal(buildEnv.CMAKE_BUILD_PARALLEL_LEVEL, '2');
 assert.equal(buildEnv.CARGO_PROFILE_RELEASE_LTO, 'false');
-assert.doesNotMatch(workflow.split('\n  prepare-release:\n')[1], /CARGO_PROFILE_RELEASE_LTO/,
-  'normal publishing must retain its existing optimization profile');
+assert.doesNotMatch(
+  workflow.split('\n  prepare-release:\n')[1],
+  /CARGO_PROFILE_RELEASE_LTO/,
+  'normal publishing must retain its existing optimization profile',
+);
 
 const sandbox = mkdtempSync(join(process.env.TMPDIR || tmpdir(), 'openless-dev-cache-'));
 try {
   const bin = join(sandbox, 'bin');
   mkdirSync(bin);
-  writeFileSync(join(bin, 'npm'), '#!/bin/bash\nprintf "%s\\n" "$*" "$CARGO_BUILD_JOBS:$CARGO_PROFILE_RELEASE_LTO:$CARGO_PROFILE_RELEASE_CODEGEN_UNITS:$CARGO_PROFILE_RELEASE_STRIP" "$RUSTC_WRAPPER" >> "$CAPTURE"\n', { mode: 0o755 });
+  writeFileSync(
+    join(bin, 'npm'),
+    '#!/bin/bash\nprintf "%s\\n" "$*" "$CARGO_BUILD_JOBS:$CARGO_PROFILE_RELEASE_LTO:$CARGO_PROFILE_RELEASE_CODEGEN_UNITS:$CARGO_PROFILE_RELEASE_STRIP" "$RUSTC_WRAPPER" >> "$CAPTURE"\n',
+    { mode: 0o755 },
+  );
   const githubEnv = join(sandbox, 'github-env');
   const configured = spawnSync('bash', ['../macos/scripts/macos-build-env.sh'], {
     cwd: join(root, 'openless-all/app'),
@@ -56,14 +73,27 @@ try {
     encoding: 'utf8',
   });
   assert.equal(configured.status, 0, configured.stderr);
-  const persisted = Object.fromEntries(readFileSync(githubEnv, 'utf8').trim().split('\n')
-    .map((line) => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
+  const persisted = Object.fromEntries(
+    readFileSync(githubEnv, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const i = line.indexOf('=');
+        return [line.slice(0, i), line.slice(i + 1)];
+      }),
+  );
   for (const official of ['true', 'false']) {
     const capture = join(sandbox, `npm-${official}`);
     const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', build], {
       cwd: join(root, 'openless-all/app'),
-      env: { ...process.env, ...buildEnv, ...persisted, PATH: `${bin}:${process.env.PATH}`,
-        OFFICIAL_IDENTITY: official, CAPTURE: capture },
+      env: {
+        ...process.env,
+        ...buildEnv,
+        ...persisted,
+        PATH: `${bin}:${process.env.PATH}`,
+        OFFICIAL_IDENTITY: official,
+        CAPTURE: capture,
+      },
       encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
