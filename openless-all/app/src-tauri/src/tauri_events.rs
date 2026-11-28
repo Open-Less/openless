@@ -199,6 +199,9 @@ async fn forward_legacy_event(
             let _ = app.emit("vocab:updated", ());
         }
         BackendEventKind::DictationStateChanged(snapshot) => {
+            if matches!(snapshot.phase, DictationPhase::Failed | DictationPhase::Cancelled | DictationPhase::Completed) {
+                if let Some(id) = snapshot.session_id { crate::dictation_references::retire(id); }
+            }
             let current = backend.snapshot();
             if current.dictation.session_id.is_some_and(|id| Some(id) != snapshot.session_id) {
                 return;
@@ -325,6 +328,8 @@ async fn forward_legacy_event(
                             LessComputerVoicePhase::Idle => CapsuleState::Idle,
                         };
                         coordinator.present_core_capsule(CapsulePayload {
+                            reference_count: 0,
+                            reference_notice: None,
                             session_id: Some(session_id.to_string()),
                             state,
                             level: *level,
@@ -398,6 +403,8 @@ async fn forward_legacy_event(
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                 if coordinator.selection_voice_accepts_level(&level.session_id) {
                     coordinator.present_core_capsule(CapsulePayload {
+                        reference_count: 0,
+                        reference_notice: None,
                         session_id: Some(level.session_id.clone()),
                         state: CapsuleState::Recording,
                         level: level.level,
@@ -582,6 +589,8 @@ fn map_dictation_state(
         _ => snapshot.message,
     };
     CapsulePayload {
+        reference_count: 0,
+        reference_notice: None,
         session_id: snapshot.session_id.map(|session| session.to_string()),
         state,
         level: snapshot.level,
@@ -675,6 +684,8 @@ fn transcription_notice_payload(
         (0, false)
     };
     Some(CapsulePayload {
+        reference_count: 0,
+        reference_notice: None,
         session_id: Some(session_id.to_string()),
         state: CapsuleState::Transcribing,
         level: 0.0,
@@ -785,6 +796,8 @@ fn mobile_qa_capsule_payload(
         finish_qa_transcription_notice(&mut owners.transcription_notice, session_id, kind);
     }
     Some(CapsulePayload {
+        reference_count: 0,
+        reference_notice: None,
         session_id: session_id.map(|session| session.to_string()),
         state,
         level: if level.is_finite() {

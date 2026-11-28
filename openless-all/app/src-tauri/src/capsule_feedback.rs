@@ -34,6 +34,8 @@ pub(crate) fn dictation_completion_payload(
         DictationInsertStatus::NotRequested => "处理完成",
     };
     Some(CapsulePayload {
+        reference_count: 0,
+        reference_notice: None,
         session_id: Some(result.session_id.to_string()),
         state: CapsuleState::Done,
         level: 0.0,
@@ -121,6 +123,8 @@ pub(crate) fn can_present_feedback(
 
 pub(crate) fn voice_activation_payload(enabled: bool, style: CapsuleStyle) -> CapsulePayload {
     CapsulePayload {
+        reference_count: 0,
+        reference_notice: None,
         session_id: None,
         state: CapsuleState::Done,
         level: 0.0,

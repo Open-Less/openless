@@ -195,6 +195,8 @@ fn emit_capsule_with_context_locked(
 ) -> Option<u64> {
     let dictation = inner.backend.snapshot().dictation;
     let payload = CapsulePayload {
+        reference_count: 0,
+        reference_notice: None,
         session_id: dictation.session_id.map(|session| session.to_string()),
         state,
         level,
@@ -501,6 +503,8 @@ mod epoch_tests {
                 inner.host.record_backend_event(&event);
             }
             let recording = CapsulePayload {
+                reference_count: 0,
+                reference_notice: None,
                 session_id: Some(next.to_string()),
                 state: CapsuleState::Recording,
                 level: dictation.level,
@@ -602,6 +606,8 @@ mod tests {
 
     fn payload(state: CapsuleState) -> CapsulePayload {
         CapsulePayload {
+            reference_count: 0,
+            reference_notice: None,
             session_id: None,
             state,
             level: 0.0,

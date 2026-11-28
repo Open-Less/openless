@@ -73,6 +73,8 @@ mod hotkey;
 #[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
+mod dictation_references;
+mod recording_companion;
 mod issue1266_debug;
 mod llm_gemini;
 #[cfg(target_os = "macos")]
@@ -281,6 +283,10 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_shortcut_recording_active,
             commands::get_windows_ime_status,
             commands::get_platform_capabilities,
+            #[cfg(not(mobile))]
+            commands::get_dictation_references_status,
+            #[cfg(not(mobile))]
+            commands::open_dictation_references_permission_settings,
             commands::get_android_overlay_status,
             commands::request_android_overlay_permission,
             commands::show_android_overlay,
@@ -927,6 +933,8 @@ fn run_desktop() {
         .manage(commands::TrayMicrophoneMenuState::new(Vec::new()))
         .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            dictation_references::cleanup();
             log::info!("=== OpenLess 启动 ===");
             let ask = Arc::new(ask_window::chat::AskHost::new(app.handle(), core_backend.clone()));
             let desktop = ask_window::Desktop::install(

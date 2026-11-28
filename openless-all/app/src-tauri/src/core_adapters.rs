@@ -3243,6 +3243,7 @@ struct TauriPendingAudioCapture {
 }
 
 struct TauriActiveRecording {
+    reference_lease: Option<crate::dictation_references::RecordingLease>,
     recorder: Option<Recorder>,
     warm_capture: Option<WarmActiveCapture>,
     cold_capture_hub: Option<Arc<WarmCaptureHub>>,
@@ -3487,6 +3488,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     }
                 }
                 let recording = Box::new(TauriActiveRecording {
+                    reference_lease: None,
                     recorder,
                     warm_capture,
                     cold_capture_hub,
@@ -3810,6 +3812,7 @@ impl ActiveRecording for TauriActiveRecording {
 
     fn stop(mut self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
         Box::pin(async move {
+            drop(self.reference_lease.take());
             use crate::issue1266_debug::{Event, Facts, Kind, Operation, Outcome, Probe};
             let operation = Operation::new(Probe::P5);
             let _scope = operation.scope();
@@ -4100,6 +4103,9 @@ impl AudioRecorder for TauriAudioRecorder {
                 let consumer: Arc<dyn LegacyAudioConsumer> =
                     Arc::new(AudioConsumerBridge { inner: consumer });
                 let recorder_archive_path = archive_path.clone();
+                let reference_lease = backend_for_recording.lock().as_ref().and_then(std::sync::Weak::upgrade)
+                    .filter(|_| context.output_target == openless_core::DictationOutputTarget::ForegroundApp)
+                    .and_then(|backend| crate::dictation_references::start(session_id, &backend));
                 let start_result = Recorder::start_with_processing(
                     microphone,
                     consumer,
@@ -4136,6 +4142,7 @@ impl AudioRecorder for TauriAudioRecorder {
                 let archive_status = recorder.archive_status();
                 *archive_status_slot.lock() = archive_status.clone();
                 let recording = Box::new(TauriActiveRecording {
+                    reference_lease,
                     recorder: Some(recorder),
                     warm_capture: None,
                     cold_capture_hub: Some(Arc::clone(&warm_hub)),
@@ -4557,6 +4564,9 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
+    fn enrich_dictation_text(&self, session_id: SessionId, text: String, duration_ms: u64) -> String {
+        crate::dictation_references::enrich(session_id, text, duration_ms)
+    }
     fn defer_preparation_until_stop(&self) -> bool {
         true
     }
@@ -4631,6 +4641,7 @@ impl CoreTextInserter for TauriTextInserter {
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
                     context.insertion.streaming
+                        && !crate::dictation_references::active(session_id)
                         && context.uses_llm_polisher()
                         && !context.insertion.composition_input
                         && openless_core::streaming_insert::streaming_insert_eligible(

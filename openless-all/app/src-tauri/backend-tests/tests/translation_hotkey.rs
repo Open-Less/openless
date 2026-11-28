@@ -49,6 +49,11 @@ mod ask_window {
 mod unicode_keystroke {
     pub fn is_secure_input_enabled() -> bool { false }
 }
+mod dictation_references {
+    pub fn key_event(_: i64, _: u64, _: bool, _: bool) -> bool { false }
+    pub fn capture_in_progress() -> bool { false }
+    pub fn collecting() -> bool { false }
+}
 #[path = "../../src/mobile_stubs/combo_hotkey.rs"]
 mod combo_hotkey;
 #[path = "../../src/hotkey.rs"]

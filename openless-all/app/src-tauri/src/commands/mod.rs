@@ -52,6 +52,8 @@ mod cloud_sync;
 mod cloud_sync_e2ee;
 mod credentials;
 mod dictation;
+#[cfg(not(mobile))]
+mod dictation_references;
 mod dictionary;
 #[cfg(not(mobile))]
 mod experimental_asr;
@@ -87,6 +89,8 @@ pub use cloud_sync::*;
 pub use cloud_sync_e2ee::*;
 pub use credentials::*;
 pub use dictation::*;
+#[cfg(not(mobile))]
+pub use dictation_references::*;
 pub use dictionary::*;
 #[cfg(not(mobile))]
 pub use experimental_asr::*;

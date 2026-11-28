@@ -137,6 +137,8 @@ impl CapsuleSnapshotState {
             return None;
         }
         *displayed = CapsulePayload {
+            reference_count: 0,
+            reference_notice: None,
             session_id: displayed.session_id.clone(),
             state: CapsuleState::Idle,
             level: 0.0,
@@ -326,6 +328,8 @@ mod tests {
 
     fn payload(session_id: SessionId, state: CapsuleState) -> CapsulePayload {
         CapsulePayload {
+            reference_count: 0,
+            reference_notice: None,
             session_id: Some(session_id.to_string()),
             state,
             level: 0.0,

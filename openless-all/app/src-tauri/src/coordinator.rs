@@ -1166,10 +1166,11 @@ impl Coordinator {
 
     fn present_core_capsule_at_revision(
         &self,
-        payload: CapsulePayload,
+        mut payload: CapsulePayload,
         expected_epoch: Option<u64>,
         captured_revision: u64,
     ) -> Option<u64> {
+        crate::dictation_references::project(&mut payload);
         let state = payload.state;
         // Core already owns this frame's translation, readiness, and session
         // ownership; the window layer must not rebuild it from stale late

@@ -35,11 +35,12 @@ fn key(value: &str) -> String {
         "super" | "command" => "cmd".into(),
         "control" => "ctrl".into(),
         "option" => "alt".into(),
+        "macdictationkey" => "fn".into(),
         " " => "space".into(),
         other => other.into(),
     }
 }
-fn matches(required: &str, physical: &str) -> bool {
+    fn matches(required: &str, physical: &str) -> bool {
     required == physical
         || matches!(required, "cmd" | "ctrl" | "alt" | "shift") && physical.starts_with(required)
 }
@@ -100,9 +101,6 @@ impl ChordState {
     }
 }
 pub(crate) fn configure(recording: ShortcutBinding, auxiliary: String) {
-    if !crate::build_identity::ask_anything_available() {
-        return;
-    }
     let mut route = route().lock().unwrap();
     route.state = ChordState {
         recording: Some(recording),

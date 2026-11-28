@@ -264,6 +264,7 @@ impl clipboard_delivery::ClipboardDelivery for NativeClipboardDelivery {
     }
 
     fn set_text(&mut self, text: &str) -> Result<(), String> {
+        let _own_write = crate::dictation_references::self_write();
         self.clipboard
             .set_text(text.to_string())
             .map_err(|error| error.to_string())

@@ -465,6 +465,8 @@ fn frame(
     warming: bool,
 ) {
     desktop.ports.capsule(CapsulePayload {
+        reference_count: 0,
+        reference_notice: None,
         session_id: Some(id.to_string()),
         state,
         level,
