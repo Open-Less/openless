@@ -1,6 +1,6 @@
 //! Session-owned reference collection and deterministic, platform-independent placement.
 use serde::{Deserialize, Serialize};
-use std::{collections::{BTreeMap, HashSet}, fs, io::{self, Read, Write}, path::{Path, PathBuf}};
+use std::{collections::{BTreeMap, HashSet}, fs, io::{self, Read, Write}, path::{Path, PathBuf}, sync::Arc};
 
 pub const RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 pub const MAX_BYTES: u64 = 20 * 1024 * 1024;
@@ -9,6 +9,8 @@ pub const MAX_REFERENCES: usize = 64;
 pub const INLINE_CHARS: usize = 80;
 const MARKER: &str = ".openless-references.json";
 const OWNER: &str = "openless.dictation-references.v1";
+const PROCESS_MARKER: &str = ".openless-process.json";
+const PROCESS_OWNER: &str = "openless.dictation-reference-process.v1";
 pub const CUES: &[&str] = &["这张图", "看这张", "报错是这个", "这个报错", "this error", "this screenshot", "this image"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,11 +77,48 @@ struct Manifest { owner: String, created_ms: u64 }
 
 /// Root is supplied by the host, never by clipboard data. User paths are read-only.
 #[derive(Debug, Clone)]
-pub struct ReferenceStore { root: PathBuf }
+pub struct ReferenceStore { root: PathBuf, _lease: Option<Arc<fs::File>> }
 impl ReferenceStore {
     pub fn new(root: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&root)?;
-        Ok(Self { root: fs::canonicalize(root)? })
+        Ok(Self { root: fs::canonicalize(root)?, _lease: None })
+    }
+    /// Call once after the host's single-instance gate. An OS lease protects every
+    /// copy for the process lifetime, including cancelled/retired recordings.
+    /// Crashes release the lease; another live process is never swept.
+    pub fn for_process(root: PathBuf) -> io::Result<Self> {
+        let parent = Self::new(root)?;
+        let startup = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .open(parent.root.join(".startup.lock"))?;
+        startup.lock()?;
+        for entry in fs::read_dir(&parent.root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() { continue; }
+            let dir = entry.path();
+            let marker = dir.join(PROCESS_MARKER);
+            let lease = dir.join(".lease");
+            let regular = |path: &Path| fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink() && m.len() < 4096);
+            if !regular(&marker) || !regular(&lease) { continue; }
+            let owned = fs::read(&marker).ok().and_then(|bytes| serde_json::from_slice::<Manifest>(&bytes).ok())
+                .is_some_and(|m| m.owner == PROCESS_OWNER);
+            if !owned { continue; }
+            let Ok(file) = fs::OpenOptions::new().read(true).write(true).open(&lease) else { continue; };
+            if file.try_lock().is_err() { continue; }
+            // The startup lock prevents another process from claiming a run
+            // between releasing its stale lease and removing its owned tree.
+            drop(file);
+            fs::remove_dir_all(dir)?;
+        }
+        let dir = parent.root.join(format!("run-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir)?;
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+        }
+        let lease = fs::OpenOptions::new().read(true).write(true).create_new(true).open(dir.join(".lease"))?;
+        lease.lock()?;
+        fs::write(dir.join(PROCESS_MARKER), serde_json::to_vec(&Manifest { owner: PROCESS_OWNER.into(), created_ms: 0 })?)?;
+        Ok(Self { root: dir, _lease: Some(Arc::new(lease)) })
     }
     pub fn begin(&self, id: &str, now_ms: u64) -> io::Result<PathBuf> {
         if id.is_empty() || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
@@ -252,6 +291,33 @@ mod tests {
         assert!(output.contains("看这张图。 [A]"));
         assert!(!output.contains("file-1"));
         assert_eq!(b.references[0].elapsed_ms, 9);
+    }
+    #[test]
+    fn references_process_lifetime_sweeps_only_unlocked_owned_previous_runs() {
+        let root = std::env::temp_dir().join(format!("openless-process-refs-{}", uuid::Uuid::new_v4()));
+        let first = ReferenceStore::for_process(root.clone()).unwrap();
+        let old = first.begin("cancelled-recording", 0).unwrap();
+        let copy = ReferenceStore::write_bytes(&old, 1, "pdf", b"local copy").unwrap();
+        let foreign = root.join("foreign");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("original.pdf"), b"original").unwrap();
+        let legacy = ReferenceStore::new(root.clone()).unwrap().begin("unleased-legacy", 0).unwrap();
+        let concurrent = ReferenceStore::for_process(root.clone()).unwrap();
+        assert!(copy.exists(), "a live other process owns this copy");
+        let current = concurrent.begin("current", u64::MAX).unwrap();
+        let current_copy = ReferenceStore::write_bytes(&current, 1, "txt", b"current").unwrap();
+        let clone = first.clone();
+        drop(first);
+        let third = ReferenceStore::for_process(root.clone()).unwrap();
+        assert!(copy.exists(), "all process store clones retain the lease");
+        drop(clone);
+        let next_launch = ReferenceStore::for_process(root.clone()).unwrap();
+        assert!(!copy.exists(), "the next startup removes the prior run regardless of age");
+        assert!(current_copy.exists());
+        assert!(foreign.join("original.pdf").exists());
+        assert!(legacy.exists(), "unknown legacy process ownership cannot authorize deletion");
+        drop((concurrent, third, next_launch));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn references_storage_cleanup_expiry_and_original_ownership() {
