@@ -330,6 +330,12 @@ export const ko: typeof zhCN = {
     durationMinutes: '{{value}}분',
   },
   capsule: {
+    references: '첨부 {{count}}개',
+    referenceNotice: {
+      screenPermission: '화면 기록 권한 필요',
+      tooLarge: '항목이 너무 큼',
+      captureFailed: '항목을 가져오지 못함',
+    },
     emptyTranscript: '빈 초안 · 음성 없음',
     transcribing: '변환 중',
     asking: '무엇이든 질문',
@@ -1251,6 +1257,15 @@ export const ko: typeof zhCN = {
       phoneTitle: '휴대폰과 원격 입력',
       phoneDesc: '휴대폰이나 다른 기기를 연결해 원격으로 입력합니다.',
     },
+    dictationReferences: {
+      enabledLabel: '받아쓰는 중에 첨부',
+      enabledDesc: '스크린샷과 복사한 항목이 해당 문장 옆에 추가됩니다',
+      keyLabel: '스크린샷 키',
+      keyDesc: '녹음 중에 녹음 키와 이 키를 눌러 캡처',
+      keyConflict: '이미 사용 중인 키입니다',
+      permissionNote: '화면 기록 권한 필요',
+      openSettings: '시스템 설정 열기',
+    },
     advancedPages: {
       polishStrategyTitle: '다듬기 전략',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
@@ -1258,6 +1273,7 @@ export const ko: typeof zhCN = {
       liveInputTitle: '텍스트 삽입',
       experiments: '실험 기능과 확장 옵션을 설정합니다.',
       voiceEnhancementTitle: '음성 향상과 재생 억제',
+      dictationReferencesTitle: '받아쓰기 첨부',
       cursorContextTitle: '인식',
       startupDiagnosticsTitle: '시작 진단',
       cursorContextHint:

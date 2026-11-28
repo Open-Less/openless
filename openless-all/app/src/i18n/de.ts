@@ -349,6 +349,12 @@ export const de: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
+    references: '{{count}} angehängt',
+    referenceNotice: {
+      screenPermission: 'Bildschirmaufnahme erlauben',
+      tooLarge: 'Anhang zu groß',
+      captureFailed: 'Anhang nicht erfasst',
+    },
     emptyTranscript: 'Leer · Keine Sprache',
     transcribing: 'Transkription',
     asking: 'Frag etwas',
@@ -1297,6 +1303,15 @@ export const de: typeof zhCN = {
       phoneTitle: 'Telefon und Ferneingabe',
       phoneDesc: 'Ein Telefon oder ein anderes Gerät für die Ferneingabe verbinden.',
     },
+    dictationReferences: {
+      enabledLabel: 'Beim Diktieren Anhänge einfügen',
+      enabledDesc: 'Screenshots und kopierte Inhalte stehen neben dem jeweiligen Satz',
+      keyLabel: 'Screenshot-Taste',
+      keyDesc: 'Bei der Aufnahme die Aufnahmetaste und diese Taste drücken',
+      keyConflict: 'Diese Taste ist bereits belegt',
+      permissionNote: 'Bildschirmaufnahme erlauben',
+      openSettings: 'Systemeinstellungen öffnen',
+    },
     advancedPages: {
       polishStrategyTitle: 'Überarbeitungsstrategie',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
@@ -1304,6 +1319,7 @@ export const de: typeof zhCN = {
       liveInputTitle: 'Texteingabe',
       experiments: 'Experimentelle Funktionen und Erweiterungen konfigurieren.',
       voiceEnhancementTitle: 'Sprachverbesserung und Wiedergabeunterdrückung',
+      dictationReferencesTitle: 'Diktatanhänge',
       cursorContextTitle: 'Wahrnehmung',
       startupDiagnosticsTitle: 'Startdiagnose',
       cursorContextHint:

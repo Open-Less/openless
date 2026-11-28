@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  getDictationReferencesStatus,
+  type DictationReferencesStatus,
+} from '../../../api/dictationReferences';
 import { ensureLocaleLoaded, SUPPORTED_LOCALES } from '../../../i18n';
 import { isTauriHost, type OS } from '../../../runtime/environment';
 import { getCachedPlatformCapabilities, getPlatformCapabilities } from '../../../runtime/platform';
@@ -56,6 +60,9 @@ export function useSettingsNavigation({
   const [asrNavigation, setAsrNavigation] = useState(0);
   const [query, setQuery] = useState('');
   const [platformCaps, setPlatformCaps] = useState(getCachedPlatformCapabilities);
+  const [referencesStatus, setReferencesStatus] = useState<DictationReferencesStatus>();
+  const [checkingReferences, setCheckingReferences] = useState(true);
+  const referencesChecked = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -74,11 +81,13 @@ export function useSettingsNavigation({
   );
   const searching = query.trim().length > 0;
   const results = searchSettingsSections(sections, query);
-  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os);
+  const referencesSupported = referencesStatus?.supported === true;
+  const advancedPages = visibleAdvancedPages(platformCaps?.platform, os, referencesSupported);
   const activeAdvancedPage =
     section === 'advanced' && !searching
       ? advancedPages.find((page) => page.id === advancedPage)
       : undefined;
+  const viewingReferences = activeAdvancedPage?.id === 'dictationReferences';
   const activeGeneralPage =
     section === 'general' && !searching
       ? visibleGeneralPages(platformCaps?.platform, os, isTauriHost()).find(
@@ -99,15 +108,17 @@ export function useSettingsNavigation({
     ? t('modal.searchCount', { count: results.length })
     : showingVoiceSettings
       ? t('settings.recording.dsp.description')
-      : activeAdvancedPage
-        ? t(
-            activeAdvancedPage.id === 'intentRouting'
-              ? 'askEntrySettings.routingHint'
-              : `modal.advancedPages.${activeAdvancedPage.id}`,
-          )
-        : activeGeneralPage
-          ? t(activeGeneralPage.descriptionKey)
-          : t(`modal.descriptions.${section}`);
+      : viewingReferences
+        ? ''
+        : activeAdvancedPage
+          ? t(
+              activeAdvancedPage.id === 'intentRouting'
+                ? 'askEntrySettings.routingHint'
+                : `modal.advancedPages.${activeAdvancedPage.id}`,
+            )
+          : activeGeneralPage
+            ? t(activeGeneralPage.descriptionKey)
+            : t(`modal.descriptions.${section}`);
 
   useEffect(() => {
     let active = true;
@@ -124,6 +135,37 @@ export function useSettingsNavigation({
   }, []);
 
   useEffect(() => {
+    if (platformCaps?.platform !== 'desktop' || (!viewingReferences && referencesChecked.current)) return;
+    let active = true;
+    let pending = false;
+    const refresh = () => {
+      if (pending) return;
+      pending = true;
+      setCheckingReferences(true);
+      void getDictationReferencesStatus().then((status) => {
+        pending = false;
+        if (!active) return;
+        referencesChecked.current = true;
+        setReferencesStatus(status);
+        setCheckingReferences(false);
+      });
+    };
+    refresh();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    if (viewingReferences) {
+      window.addEventListener('focus', onVisible);
+      document.addEventListener('visibilitychange', onVisible);
+    }
+    return () => {
+      active = false;
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [platformCaps?.platform, viewingReferences]);
+
+  useEffect(() => {
     if (!supportsShortcuts && section === 'shortcuts') setSection('general');
     if (platformCaps && platformCaps.platform !== 'android' && section === 'inputMethod')
       setSection('general');
@@ -137,10 +179,12 @@ export function useSettingsNavigation({
     if (advancedPage !== 'voiceEnhancement' && voiceSettingsOpen) setVoiceSettingsOpen(false);
     if (
       advancedPage &&
-      !visibleAdvancedPages(platformCaps?.platform, os).some((page) => page.id === advancedPage)
+      !visibleAdvancedPages(platformCaps?.platform, os, referencesSupported).some(
+        (page) => page.id === advancedPage,
+      )
     )
       setAdvancedPage(null);
-  }, [advancedPage, voiceSettingsOpen, platformCaps, os]);
+  }, [advancedPage, voiceSettingsOpen, platformCaps, os, referencesSupported]);
 
   const closeSettings = () => {
     void beforeLeave(() => {
@@ -162,6 +206,7 @@ export function useSettingsNavigation({
     });
   };
   const openAdvancedPage = (page: AdvancedPageId) => {
+    if (page === 'dictationReferences') setCheckingReferences(true);
     returnEntry.current = null;
     focusHeading.current = true;
     setAdvancedPage(page);
@@ -263,6 +308,8 @@ export function useSettingsNavigation({
     openAdvancedPage,
     openLocalModels: () => selectSection('services', false, 'models'),
     platformCaps,
+    referenceScreenCapture: checkingReferences ? undefined : referencesStatus?.screenCapture,
+    onReferencePermissionSettingsUnavailable: () => setReferencesStatus(undefined),
     query,
     requestedServiceView,
     results,

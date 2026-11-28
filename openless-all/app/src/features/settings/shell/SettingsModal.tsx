@@ -95,6 +95,8 @@ export function SettingsModal({
     openAdvancedPage,
     openLocalModels,
     platformCaps,
+    referenceScreenCapture,
+    onReferencePermissionSettingsUnavailable,
     query,
     requestedServiceView,
     results,
@@ -399,22 +401,23 @@ export function SettingsModal({
                                   {contentTitle}
                                 </h2>
                               )}
-                              {activeAdvancedPage?.id !== 'localModels' && (
-                                <p
-                                  style={{
-                                    margin:
-                                      mobile && !activeAdvancedPage && !activeGeneralPage
-                                        ? '7px 0 0'
-                                        : 0,
-                                    fontSize: 13,
-                                    lineHeight: 1.6,
-                                    color: 'var(--ol-ink-3)',
-                                  }}
-                                  aria-live="polite"
-                                >
-                                  {contentDescription}
-                                </p>
-                              )}
+                              {activeAdvancedPage?.id !== 'localModels' &&
+                                activeAdvancedPage?.id !== 'dictationReferences' && (
+                                  <p
+                                    style={{
+                                      margin:
+                                        mobile && !activeAdvancedPage && !activeGeneralPage
+                                          ? '7px 0 0'
+                                          : 0,
+                                      fontSize: 13,
+                                      lineHeight: 1.6,
+                                      color: 'var(--ol-ink-3)',
+                                    }}
+                                    aria-live="polite"
+                                  >
+                                    {contentDescription}
+                                  </p>
+                                )}
                             </div>
                           </>
                         }
@@ -547,6 +550,8 @@ export function SettingsModal({
                               <AdvancedTab
                                 pages={advancedPages}
                                 page={advancedPage}
+                                referenceScreenCapture={referenceScreenCapture}
+                                onReferencePermissionSettingsUnavailable={onReferencePermissionSettingsUnavailable}
                                 onOpenPage={openAdvancedPage}
                                 experimentalAsr={experimentalAsr}
                                 onOpenAsr={openExperimentalAsrChannels}

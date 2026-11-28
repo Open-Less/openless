@@ -2,7 +2,7 @@ import { motion } from 'framer-motion';
 import { collectCapsuleInputRegions } from '../../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getRuntimeOS, isTauriHost, type OS } from '../../runtime/environment';
+import { getRuntimeEnvironment, isTauriHost, type OS } from '../../runtime/environment';
 import { createCapsuleRegionPublisher } from '../../runtime/windows/capsuleInput';
 import { warmUpSiriShaders } from './SiriGL';
 import { useReducedMotion } from '../../lib/motion';
@@ -11,6 +11,13 @@ import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
 import { CapsulePickerMenu } from './capsulePickerMenu';
 import { CapsuleStyleBadge } from './CapsuleStyleBadge';
+import { CapsuleReferenceBadge } from './CapsuleReferenceBadge';
+import {
+  REFERENCE_NOTICE_MS,
+  referenceBadgeView,
+  updateReferenceBadge,
+  type ReferenceBadgeState,
+} from './referenceBadgeView';
 import {
   projectCapsuleOutputStyle,
   sameCapsuleOutputStyle,
@@ -343,7 +350,9 @@ interface CapsuleProps {
 
 export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const { t } = useTranslation();
-  const os = forcedOs ?? getRuntimeOS();
+  const environment = getRuntimeEnvironment();
+  const os = forcedOs ?? environment.os;
+  const canShowReferences = os === 'mac' && !environment.isMobile;
   const isTauri = isTauriHost();
   const [publishInputRegions] = useState(createCapsuleRegionPublisher);
   const [pickerController] = useState(() => new CapsulePickerMenu());
@@ -352,6 +361,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const metrics = getCapsulePillMetrics(os);
   const [state, setState] = useState<CapsuleState>(preview.state);
   const [displayedSession, setDisplayedSession] = useState<string>();
+  const [referenceBadge, setReferenceBadge] = useState<ReferenceBadgeState | null>(null);
+  const [, setReferenceNoticeExpiry] = useState(0);
   const [level, setLevel] = useState<number>(preview.level);
   const [message, setMessage] = useState<string | undefined>(preview.message);
   const [localAsrText, setLocalAsrText] = useState(() =>
@@ -482,6 +493,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         }
         setState(p.state);
         setDisplayedSession(p.sessionId ?? undefined);
+        if ((p.referenceCount !== undefined || p.referenceNotice !== undefined) && canShowReferences) {
+          const now = performance.now();
+          setReferenceBadge((current) => updateReferenceBadge(current, p, now));
+        }
         setLevel(p.level ?? 0);
         setMessage(p.message ?? undefined);
         const previous = capsuleStateRef.current;
@@ -608,7 +623,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       cancelled = true;
       events.dispose();
     };
-  }, []);
+  }, [canShowReferences]);
 
   // Subscribe before reading preferences, covering both the first load of a hidden
   // window and a live restyle mid-session.
@@ -762,11 +777,30 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     !leaving &&
     translation &&
     (!isClassic || ['recording', 'transcribing', 'polishing'].includes(renderedState));
+  const referenceNoticeUntil = referenceBadge?.notice
+    ? referenceBadge.noticeSince + REFERENCE_NOTICE_MS
+    : undefined;
+  useEffect(() => {
+    if (referenceNoticeUntil === undefined) return;
+    const remaining = referenceNoticeUntil - performance.now();
+    const timer = window.setTimeout(
+      () => setReferenceNoticeExpiry(referenceNoticeUntil),
+      Math.max(0, Math.ceil(remaining)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [referenceNoticeUntil]);
+  const referenceView =
+    !leaving &&
+    (state === 'recording' || state === 'transcribing' || state === 'polishing') &&
+    canShowReferences &&
+    referenceBadge?.sessionId === displayedSession
+      ? referenceBadgeView(referenceBadge, performance.now())
+      : null;
   const badgeOffset = isClassic
     ? getClassicCapsuleGeometry(
         os,
         transcriptVisible || (!splitTranscriptRail && showLiveTranscript),
-        translating || Boolean(outputStyle),
+        translating || Boolean(outputStyle) || referenceView !== null,
         !splitTranscriptRail,
       ).badgeBottomOffset
     : badgeBottom;
@@ -978,6 +1012,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         <motion.div
           className="ol-capsule-status-lane"
           data-with-style={Boolean(outputStyle)}
+          data-with-references={referenceView !== null}
           data-translating={translating}
           initial={false}
           animate={{ bottom: badgeOffset }}
@@ -1001,6 +1036,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             pickerEnabled={stylePickerEnabled && !leaving}
             captureSessionId={state === 'recording' ? displayedSession : undefined}
           />
+          {canShowReferences && referenceBadge && (
+            <CapsuleReferenceBadge view={referenceView} reducedMotion={reducedMotion} />
+          )}
         </motion.div>
       )}
       {!renderedSelectionPolish &&

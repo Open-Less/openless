@@ -44,6 +44,8 @@ import { AboutSection } from '../sections/AboutSection';
 import { AskEntrySettingsSection, IntentRoutingSection } from '../sections/AskEntrySettingsSection';
 import { PolishStrategySection } from '../sections/PolishStrategySection';
 import { AskHistorySection } from '../sections/AskHistorySection';
+import { DictationReferencesSection } from '../sections/DictationReferencesSection';
+import type { DictationReferencesStatus } from '../../../api/dictationReferences';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
 import type { PipelineMode, PlatformCapabilities, PlatformKind } from '../../../api/contracts';
@@ -155,7 +157,7 @@ function SettingsCategoryEntry({
   general?: boolean;
   icon: string;
   title: string;
-  description: string;
+  description?: string;
   beta?: boolean;
   onClick: () => void;
 }) {
@@ -166,7 +168,7 @@ function SettingsCategoryEntry({
       type="button"
       className="ol-settings-category-entry"
       aria-label={t(title)}
-      aria-describedby={descriptionId}
+      aria-describedby={description ? descriptionId : undefined}
       data-ol-general-entry={general ? id : undefined}
       data-ol-advanced-entry={general ? undefined : id}
       onClick={onClick}
@@ -179,7 +181,7 @@ function SettingsCategoryEntry({
           <span>{t(title)}</span>
           {beta && <span className="ol-beta-tag">Beta</span>}
         </strong>
-        <span id={descriptionId}>{t(description)}</span>
+        {description && <span id={descriptionId}>{t(description)}</span>}
       </span>
       <Icon name="chevRight" size={17} />
     </button>
@@ -677,12 +679,16 @@ export function PrivacyTab() {
 export function AdvancedTab({
   pages,
   page,
+  referenceScreenCapture,
+  onReferencePermissionSettingsUnavailable,
   onOpenPage,
   experimentalAsr,
   onOpenAsr,
 }: {
   pages: AdvancedPage[];
   page: AdvancedPageId | null;
+  referenceScreenCapture?: DictationReferencesStatus['screenCapture'];
+  onReferencePermissionSettingsUnavailable: () => void;
   onOpenPage: (page: AdvancedPageId) => void;
   experimentalAsr: ExperimentalAsrController;
   onOpenAsr: () => Promise<void>;
@@ -699,7 +705,13 @@ export function AdvancedTab({
           icon={item.icon}
           title={item.titleKey}
           beta={'beta' in item && item.beta}
-          description={item.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${item.id}`}
+          description={
+            item.id === 'dictationReferences'
+              ? undefined
+              : item.id === 'intentRouting'
+                ? 'askEntrySettings.routingHint'
+                : `modal.advancedPages.${item.id}`
+          }
           onClick={() => onOpenPage(item.id)}
         />
       ))}
@@ -723,6 +735,12 @@ export function AdvancedTab({
             )}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
             {item.id === 'liveInput' && <LiveInputSection />}
+            {item.id === 'dictationReferences' && (
+              <DictationReferencesSection
+                screenCapture={referenceScreenCapture}
+                onPermissionSettingsUnavailable={onReferencePermissionSettingsUnavailable}
+              />
+            )}
             {item.id === 'cursorContext' && (
               <div
                 className="ol-awareness-sections"

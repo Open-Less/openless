@@ -352,6 +352,12 @@ export const fr: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    references: 'Pièces jointes : {{count}}',
+    referenceNotice: {
+      screenPermission: 'Autoriser la capture d’écran',
+      tooLarge: 'Élément trop volumineux',
+      captureFailed: 'Élément non capturé',
+    },
     emptyTranscript: 'Vide · Aucune voix',
     transcribing: 'Transcription',
     asking: 'Posez une question',
@@ -1307,6 +1313,15 @@ export const fr: typeof zhCN = {
       phoneTitle: 'Téléphone et saisie à distance',
       phoneDesc: 'Connecter un téléphone ou un autre appareil pour la saisie à distance.',
     },
+    dictationReferences: {
+      enabledLabel: 'Joindre des éléments pendant la dictée',
+      enabledDesc: 'Les captures et les éléments copiés sont ajoutés à côté de la phrase dictée',
+      keyLabel: 'Touche de capture d’écran',
+      keyDesc: 'En dictant, appuyez sur la touche d’enregistrement et cette touche',
+      keyConflict: 'Cette touche est déjà utilisée',
+      permissionNote: 'Autoriser la capture d’écran',
+      openSettings: 'Ouvrir Réglages Système',
+    },
     advancedPages: {
       polishStrategyTitle: 'Stratégie de reformulation',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
@@ -1314,6 +1329,7 @@ export const fr: typeof zhCN = {
       liveInputTitle: 'Insertion de texte',
       experiments: 'Configurer les fonctions expérimentales et les extensions.',
       voiceEnhancementTitle: 'Amélioration vocale et suppression de lecture',
+      dictationReferencesTitle: 'Pièces jointes de dictée',
       cursorContextTitle: 'Perception',
       startupDiagnosticsTitle: 'Diagnostic de démarrage',
       cursorContextHint:

@@ -150,6 +150,22 @@ assert.equal(
   'Harmony has no cursor-context reader',
 );
 const advancedIds: readonly string[] = ADVANCED_PAGES.map((item) => item.id);
+for (const pages of [
+  visibleAdvancedPages(undefined, 'mac', true),
+  visibleAdvancedPages('android', 'android', true),
+  visibleAdvancedPages('mobile', 'mac', true),
+  visibleAdvancedPages('harmony', 'harmony', true),
+  visibleAdvancedPages('desktop', 'win', false),
+  visibleAdvancedPages('desktop', 'mac', false),
+  visibleAdvancedPages('desktop', 'mac'),
+]) {
+  assert.equal(pages.some(({ id }) => id === 'dictationReferences'), false, 'attachments require desktop support');
+}
+assert.equal(
+  visibleAdvancedPages('desktop', 'mac', true).some(({ id }) => id === 'dictationReferences'),
+  true,
+  'attachments are available when the desktop host reports support',
+);
 assert.equal(
   advancedIds.includes('vocabularyLearning'),
   false,
