@@ -95,10 +95,16 @@ pub fn add_correction_rule(
 /// marker; it can be deleted from the vocabulary page at any time.
 #[tauri::command]
 pub fn accept_pending_correction(
+    app: AppHandle,
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
     id: String,
 ) -> Result<(), String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Some(observation) = core.pending_corrections().iter().find(|item| item.id == id)
+        .and_then(|item| item.observation_id) {
+        if !app.try_state::<crate::core_adapters::VocabPlacementState>().is_some_and(|state| state.source_is_current(observation)) { return Err("learningSourceExpired".into()); }
+    }
     match core.accept_pending_correction(&id) {
         Ok(Some(_)) => {
             coord.refresh_vocab_suggestion_presentation(!core.pending_corrections().is_empty());

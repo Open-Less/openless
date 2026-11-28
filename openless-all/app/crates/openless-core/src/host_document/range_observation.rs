@@ -2,6 +2,58 @@
 
 use super::{minimal_edit, EditPair};
 
+/// Bounded snapshot evidence from ordinary native controls. This is deliberately
+/// separate from trusted owner revisions: AX notifications are not edit spans.
+/// The host supplies consecutive keyboard/notification samples of the SAME owner.
+pub struct SnapshotObservation {
+    original: String,
+    previous: Vec<u16>,
+    start: usize,
+    length: usize,
+    sequence: u64,
+    valid: bool,
+}
+
+impl SnapshotObservation {
+    pub fn delivered(field: &str, start: usize, original: String, sequence: u64) -> Option<Self> {
+        let units: Vec<u16> = field.encode_utf16().collect();
+        let inserted: Vec<u16> = original.encode_utf16().collect();
+        if units.len() > 20_000 || inserted.is_empty()
+            || units.get(start..start.checked_add(inserted.len())?)? != inserted {
+            return None;
+        }
+        Some(Self { original, previous: units, start, length: inserted.len(), sequence, valid: true })
+    }
+
+    pub fn sample(&mut self, field: &str, selection: (usize, usize), sequence: u64) -> Option<EditPair> {
+        if !self.valid { return None; }
+        // Duplicate/no-change notifications and skipped keyboard events are a
+        // discontinuity; a later equal value cannot resurrect this observation.
+        self.valid = false;
+        if Some(sequence) != self.sequence.checked_add(1) { return None; }
+        let next: Vec<u16> = field.encode_utf16().collect();
+        if next.len() > 20_000 || next == self.previous { return None; }
+        let prefix = self.previous.iter().zip(&next).take_while(|(a,b)| a == b).count();
+        let suffix = self.previous[prefix..].iter().rev().zip(next[prefix..].iter().rev())
+            .take_while(|(a,b)| a == b).count();
+        let removed_end = self.previous.len() - suffix;
+        let added_end = next.len() - suffix;
+        if prefix < self.start || removed_end > self.start + self.length { return None; }
+        let length = self.length.checked_sub(removed_end - prefix)?.checked_add(added_end - prefix)?;
+        if length > RangeObservation::MAX_INSERTION_UTF16 || selection.0 < self.start
+            || selection.0.checked_add(selection.1)? > self.start + length { return None; }
+        let current = String::from_utf16(next.get(self.start..self.start + length)?).ok()?;
+        self.previous = next;
+        self.length = length;
+        self.sequence = sequence;
+        self.valid = true;
+        minimal_edit(&self.original, &current)
+    }
+
+    pub fn is_valid(&self) -> bool { self.valid }
+    pub fn original(&self) -> &str { &self.original }
+}
+
 /// Host-local identity of one frozen owner and one successful delivery in one
 /// recording. Not IPC/model/history data. A future trusted editor adapter must
 /// obtain these identities from its owner, not from the document's contents.
@@ -171,6 +223,28 @@ impl RangeObservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_snapshot_positive_path_and_permanent_discontinuities() {
+        let mut proof = SnapshotObservation::delivered("HEAD 请使用 codx 完成任务 TAIL", 5,
+            "请使用 codx 完成任务".into(), 10).unwrap();
+        let edit = proof.sample("HEAD 请使用 codex 完成任务 TAIL", (14, 0), 11).unwrap();
+        assert_eq!(edit.source, "");
+        assert_eq!(edit.target, "e");
+        assert!(proof.is_valid());
+        // Equal total length never establishes range: an outside change ends it.
+        assert!(proof.sample("HEAd 请使用 codex 完成任务 TAIL", (14, 0), 12).is_none());
+        assert!(!proof.is_valid());
+        assert!(proof.sample("HEAD 请使用 codx 完成任务 TAIL", (13, 0), 13).is_none());
+        for sequence in [10, 12] {
+            let mut proof = SnapshotObservation::delivered("codx", 0, "codx".into(), 10).unwrap();
+            assert!(proof.sample("codex", (5, 0), sequence).is_none());
+            assert!(!proof.is_valid());
+        }
+        let mut proof = SnapshotObservation::delivered("codx", 0, "codx".into(), 10).unwrap();
+        assert!(proof.sample("codx", (4, 0), 11).is_none());
+        assert!(!proof.is_valid());
+    }
 
     fn identity() -> OwnedRangeIdentity {
         OwnedRangeIdentity {

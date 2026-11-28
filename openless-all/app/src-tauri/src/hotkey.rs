@@ -1000,6 +1000,7 @@ pub(crate) mod platform {
         observe_shift_event(ctx, event_type, event);
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
+                crate::host_document::macos::record_learning_key(-1, 0, false);
                 crate::capsule_style_menu::invalidate();
                 reset_shared_held_state(&ctx.shared);
                 if let Some(pending) = ctx.pending_space.lock().take() {
@@ -1016,6 +1017,15 @@ pub(crate) mod platform {
             _ => {}
         }
 
+        // Metadata only; no text is read on the event-tap thread. Synthetic
+        // events and non-edit keys break attribution rather than arming learning.
+        if event_type == KEY_DOWN {
+            crate::host_document::macos::record_learning_key(
+                unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) },
+                unsafe { CGEventGetFlags(event) },
+                unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } == 0,
+            );
+        }
         if unsafe { CGEventGetIntegerValueField(event, SOURCE_USER_DATA_FIELD) } == REPLAYED_SPACE {
             return event;
         }

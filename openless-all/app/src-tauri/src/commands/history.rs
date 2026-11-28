@@ -384,3 +384,37 @@ mod retranscription_path_tests {
         assert!(super::recording_path_candidates("not-a-session").is_err());
     }
 }
+
+// Explicit in-app history feedback never reads an external AX control.
+fn require_learning_window(window: &Window) -> Result<(), String> {
+    if window.label() == "main" { Ok(()) } else { Err("learningWindowDenied".into()) }
+}
+
+#[tauri::command]
+pub fn begin_history_learning(window: Window, core: CoreState<'_>, history_id: String)
+    -> Result<openless_core::api::history_learning::LearningSource, String> {
+    require_learning_window(&window)?;
+    core.begin_history_learning(&history_id).map_err(|e| e.message)
+}
+
+#[tauri::command]
+pub fn submit_history_learning(window: Window, core: CoreState<'_>, token: String,
+    corrected_text: String, request_vocabulary: bool, request_expression: bool)
+    -> Result<openless_core::api::history_learning::LearningResult, String> {
+    require_learning_window(&window)?;
+    core.submit_history_learning(&token, corrected_text, request_vocabulary, request_expression).map_err(|e| e.message)
+}
+
+#[tauri::command]
+pub fn accept_history_learning(window: Window, core: CoreState<'_>, token: String, candidate_id: String)
+    -> Result<bool, String> {
+    require_learning_window(&window)?;
+    core.accept_history_learning(&token, &candidate_id).map_err(|e| e.message)
+}
+
+#[tauri::command]
+pub fn cancel_history_learning(window: Window, core: CoreState<'_>, token: String) -> Result<(), String> {
+    require_learning_window(&window)?;
+    core.cancel_history_learning(&token);
+    Ok(())
+}

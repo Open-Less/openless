@@ -52,3 +52,5 @@ export async function exportAudioRecording(sessionId: string): Promise<void> {
   }
   downloadUrl(dataUrl, `openless-recording-${sessionId}.wav`);
 }
+
+export { beginHistoryLearning, submitHistoryLearning, acceptHistoryLearning, cancelHistoryLearning, type HistoryLearningSource, type HistoryLearningCandidate, type HistoryLearningResult, type HistoryLearningErrorKey } from '../lib/ipc/historyLearning';

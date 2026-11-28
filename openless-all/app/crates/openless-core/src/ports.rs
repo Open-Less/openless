@@ -933,6 +933,13 @@ pub trait TextInsertionSession: Send + Sync {
 /// document baseline. Keeping that decision here prevents macOS AX code from
 /// owning vocabulary policy or accepting a report from a stale generation.
 pub trait EditObservationSink: Send + Sync {
+    /// Snapshot-based native evidence may propose confirmed words only.
+    /// Expression samples need the explicit history feedback choice.
+    fn publish_vocabulary_only(&self, edit: crate::host_document::EditPair) -> bool {
+        let _ = edit;
+        false
+    }
+
     fn observation_id(&self) -> Option<u64> {
         None
     }

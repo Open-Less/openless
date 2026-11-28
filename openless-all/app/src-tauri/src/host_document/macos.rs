@@ -39,7 +39,7 @@ pub(crate) use context::capture as capture_document_context;
 mod edit_observation;
 pub(crate) use edit_observation::{
     complete as complete_edit_delivery, prepare as prepare_edit_delivery,
-    spawn as spawn_edit_watcher, DeliveredInsertion, LearningStart,
+    spawn as spawn_edit_watcher, record_key as record_learning_key, DeliveredInsertion, LearningStart,
 };
 
 /// Above this UTF-16 length, skip a full `AXValue` read and use

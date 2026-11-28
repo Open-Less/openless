@@ -2813,6 +2813,9 @@ pub struct AsrUsage {
     pub last_local: Option<bool>,
 }
 
+#[path = "history_learning.rs"]
+pub mod history_learning;
+
 pub struct OpenLessBackend {
     config: BackendConfig,
     startup_error: Option<BackendError>,
@@ -2849,6 +2852,7 @@ pub struct OpenLessBackend {
     encrypted_sync: Option<crate::cloud_sync_e2ee::EncryptedSyncService>,
     encrypted_sync_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
     local_migration_store: Option<Arc<crate::cloud_sync_e2ee_store::CoreSyncStore>>,
+    history_learning: Mutex<history_learning::LearningState>,
     pending_corrections: Arc<Mutex<Vec<PendingCorrection>>>,
     edit_observation_generation: Arc<AtomicU64>,
     text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
@@ -2916,6 +2920,10 @@ struct CombinedEditObservationSink {
 }
 
 impl EditObservationSink for CombinedEditObservationSink {
+    fn publish_vocabulary_only(&self, edit: crate::host_document::EditPair) -> bool {
+        self.vocabulary.as_ref().is_some_and(|sink| sink.publish(edit))
+    }
+
     fn observation_id(&self) -> Option<u64> {
         Some(self.expected_generation)
     }
@@ -3737,6 +3745,7 @@ impl OpenLessBackend {
             encrypted_sync,
             encrypted_sync_store,
             local_migration_store,
+            history_learning: Mutex::new(Default::default()),
             pending_corrections: Arc::new(Mutex::new(Vec::new())),
             edit_observation_generation: Arc::new(AtomicU64::new(0)),
             text_insertions: Arc::new(Mutex::new(HashMap::new())),
@@ -8529,6 +8538,8 @@ impl OpenLessBackend {
         &self,
         id: &str,
     ) -> Result<Option<PendingCorrection>, BackendError> {
+        let _settings = self.settings_write_gate.lock().map_err(|_| BackendError::new(
+            BackendErrorCode::Internal, "learningStoreFailed"))?;
         let (suggestion, added, snapshot) = {
             let mut pending = self
                 .pending_corrections
@@ -8538,6 +8549,11 @@ impl OpenLessBackend {
                 return Ok(None);
             };
             let suggestion = pending[index].clone();
+            if suggestion.observation_id.is_some_and(|generation|
+                generation != self.edit_observation_generation.load(Ordering::Acquire)
+                    || !self.get_preferences().vocabulary_learning_enabled) {
+                return Err(BackendError::new(BackendErrorCode::InvalidArgument, "learningSourceExpired"));
+            }
             if suggestion.expires_at_ms <= chrono::Utc::now().timestamp_millis() {
                 pending.remove(index);
                 self.events.publish(
@@ -22323,4 +22339,132 @@ mod tests {
         assert_eq!(final_history[0].error_code, None);
         assert_eq!(final_history[0].final_text, "long polished text");
     }
+    fn history_learning_fixture(backend: &OpenLessBackend, text: &str) -> DictationSession {
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = true;
+        prefs.expression_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        let entry: DictationSession = serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "createdAt": backend.clock.now_utc().to_rfc3339(),
+            "source": "voice", "rawTranscript": text, "finalText": text,
+            "mode": "light", "insertStatus": "copiedFallback"
+        })).unwrap();
+        backend.append_history(entry.clone(), 30, None).unwrap();
+        entry
+    }
+
+    #[test]
+    fn history_feedback_confirmation_updates_next_recognition_vocabulary_only_once() {
+        let (backend, _) = backend();
+        let entry = history_learning_fixture(&backend, "请使用 codx 完成这个任务");
+        let source = backend.begin_history_learning(&entry.id).unwrap();
+        let old_snapshot = backend.asr_vocabulary_phrases();
+        let result = backend.submit_history_learning(&source.token,
+            "请使用 codex 完成这个任务".into(), true, false).unwrap();
+        assert_eq!(result.candidates.len(), 1);
+        assert!(!result.expression_recorded);
+        assert!(!backend.asr_vocabulary_phrases().contains(&"codex".into()));
+        let retry = backend.submit_history_learning(&source.token,
+            "请使用 codex 完成这个任务".into(), true, false).unwrap();
+        assert_eq!(retry.candidates[0].id, result.candidates[0].id);
+        let id = &result.candidates[0].id;
+        assert!(backend.accept_history_learning(&source.token, id).unwrap());
+        assert!(!backend.accept_history_learning(&source.token, id).unwrap());
+        assert!(backend.asr_vocabulary_phrases().contains(&"codex".into()));
+        assert!(backend.enabled_vocabulary_phrases().contains(&"codex".into()));
+        assert!(!old_snapshot.contains(&"codex".into()));
+        assert_eq!(backend.list_history().unwrap()[0].final_text, entry.final_text);
+        assert_eq!(backend.submit_history_learning(&source.token,
+            "another payload".into(), true, false).err().unwrap().message, "learningPayloadConflict");
+    }
+
+    #[test]
+    fn history_feedback_rewrite_punctuation_cancel_permissions_and_source_revision() {
+        let (backend, _) = backend();
+        let entry = history_learning_fixture(&backend, "请使用 codx 完成这个任务");
+        let source = backend.begin_history_learning(&entry.id).unwrap();
+        let rewrite = backend.submit_history_learning(&source.token,
+            "明天再去公园讨论完全不同的话题".into(), true, true).unwrap();
+        assert!(rewrite.candidates.is_empty());
+        assert!(!rewrite.expression_recorded);
+        backend.cancel_history_learning(&source.token);
+        assert!(backend.submit_history_learning(&source.token, entry.final_text.clone(), true, false).is_err());
+        let source = backend.begin_history_learning(&entry.id).unwrap();
+        let mut changed = entry.clone();
+        changed.final_text = "changed".into();
+        backend.update_history_entry(changed).unwrap();
+        backend.update_history_entry(entry.clone()).unwrap();
+        assert!(backend.submit_history_learning(&source.token,
+            "请使用 codex 完成这个任务".into(), true, false).is_err());
+        let source = backend.begin_history_learning(&entry.id).unwrap();
+        let result = backend.submit_history_learning(&source.token,
+            "请使用 codex 完成这个任务".into(), true, false).unwrap();
+        let mut prefs = backend.get_preferences();
+        prefs.vocabulary_learning_enabled = false;
+        backend.set_preferences(prefs.clone()).unwrap();
+        assert_eq!(backend.accept_history_learning(&source.token, &result.candidates[0].id)
+            .err().unwrap().message, "learningPermissionOff");
+        prefs.vocabulary_learning_enabled = true;
+        backend.set_preferences(prefs).unwrap();
+        assert!(backend.accept_history_learning(&source.token, &result.candidates[0].id).is_err());
+        let punctuation = history_learning_fixture(&backend,
+            "这是一个足够长的句子，里面还有另一个，分隔符");
+        let source = backend.begin_history_learning(&punctuation.id).unwrap();
+        let result = backend.submit_history_learning(&source.token,
+            "这是一个足够长的句子。里面还有另一个。分隔符".into(), true, true).unwrap();
+        assert!(result.candidates.is_empty());
+        assert!(backend.asr_vocabulary_phrases().is_empty());
+    }
+
+    #[test]
+    fn history_feedback_rejects_translation_selection_unknown_candidates_and_expiry() {
+        let (backend, _) = backend();
+        let mut entry = history_learning_fixture(&backend, "请使用 codx 完成这个任务");
+        for source_kind in [HistorySource::Qa, HistorySource::SelectionPolish, HistorySource::VoiceEdit] {
+            entry.source = source_kind;
+            backend.update_history_entry(entry.clone()).unwrap();
+            assert_eq!(backend.begin_history_learning(&entry.id).err().unwrap().message, "learningNotEligible");
+        }
+        entry.source = HistorySource::Voice;
+        entry.translation_active = true;
+        backend.update_history_entry(entry.clone()).unwrap();
+        assert!(backend.begin_history_learning(&entry.id).is_err());
+        entry.translation_active = false;
+        backend.update_history_entry(entry.clone()).unwrap();
+        let source = backend.begin_history_learning(&entry.id).unwrap();
+        assert!(backend.accept_history_learning(&source.token, "invented").is_err());
+        backend.history_learning.lock().unwrap().tokens.get_mut(&source.token).unwrap().source.expires_at_ms = 0;
+        assert!(backend.submit_history_learning(&source.token,
+            "请使用 codex 完成这个任务".into(), true, false).is_err());
+    }
+
+    #[test]
+    fn history_expression_opt_in_is_abstract_and_once_per_session_on_feedback_day() {
+        let (backend, _) = backend();
+        let original = "今天我们先完成这个工作然后再讨论";
+        let corrected = "今天我们先完成这个工作\n然后再讨论";
+        let entry = history_learning_fixture(&backend, original);
+        let source = backend.begin_history_learning(&entry.id).unwrap();
+        let no_expression = backend.submit_history_learning(&source.token, corrected.into(), true, false).unwrap();
+        assert!(!no_expression.expression_recorded);
+        assert!(no_expression.candidates.is_empty());
+        let source = backend.begin_history_learning(&entry.id).unwrap();
+        let result = backend.submit_history_learning(&source.token, corrected.into(), true, true).unwrap();
+        assert!(result.expression_recorded);
+        assert!(result.candidates.is_empty());
+        let retry = backend.submit_history_learning(&source.token, corrected.into(), true, true).unwrap();
+        assert!(retry.expression_recorded);
+        let another = backend.begin_history_learning(&entry.id).unwrap();
+        assert!(!backend.submit_history_learning(&another.token, corrected.into(), false, true).unwrap().expression_recorded);
+        let stored = std::fs::read_to_string(backend.config.data_dir.join("expression-profile.json")).unwrap();
+        assert!(!stored.contains(original));
+        assert!(!stored.contains("今天"));
+        let document: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(document["evidence"].as_array().unwrap().len(), 1);
+        use chrono::Datelike;
+        assert_eq!(document["evidence"][0]["day"].as_i64().unwrap(), i64::from(backend.clock.today_local().num_days_from_ce()));
+        assert!(backend.expression_profile_directions().unwrap().is_empty());
+    }
+
 }

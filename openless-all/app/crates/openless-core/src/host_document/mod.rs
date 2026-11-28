@@ -17,7 +17,7 @@ pub use diff::{
 };
 pub use observation::ObservedInsertion;
 pub use range_observation::{
-    OwnedRangeChange, OwnedRangeIdentity, OwnedRangeRevision, RangeObservation,
+    OwnedRangeChange, OwnedRangeIdentity, OwnedRangeRevision, RangeObservation, SnapshotObservation,
 };
 pub use context::CursorContext;
 pub use window::{

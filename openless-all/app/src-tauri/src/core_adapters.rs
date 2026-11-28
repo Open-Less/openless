@@ -4243,7 +4243,7 @@ fn learning_is_enabled(backend: &BackendSlot) -> bool {
     let backend = backend.lock().as_ref().and_then(std::sync::Weak::upgrade);
     backend.is_some_and(|backend| {
         let preferences = backend.get_preferences();
-        preferences.vocabulary_learning_enabled || preferences.expression_learning_enabled
+        preferences.vocabulary_learning_enabled
     })
 }
 
@@ -4275,14 +4275,17 @@ impl VocabPlacementState {
         self.anchors.lock().begin(id);
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub(crate) fn source_is_current(&self, id: u64) -> bool {
         self.observed_targets
             .lock()
             .iter()
             .find(|(key, _)| *key == id)
             .is_some_and(|(_, target)| {
-                crate::selection::selection_insertion_target_is_current(target)
+                #[cfg(target_os = "macos")]
+                { crate::host_document::macos::with_frozen_target_read(target, |_| Ok(())).is_ok() }
+                #[cfg(target_os = "windows")]
+                { crate::selection::selection_insertion_target_is_current(target) }
             })
     }
 
@@ -4320,11 +4323,12 @@ impl EditObservationAdapter for TauriEditObservationAdapter {
             drop(state);
             *self.watcher.lock() = delivery.and_then(|delivery| {
                 crate::host_document::watch_delivered_edits(
-                    delivery, sink.observation_duration(), move |edit| sink.publish(edit),
+                    delivery, sink.observation_duration(), move |edit| sink.publish_vocabulary_only(edit),
                     move || {
                         if let (Some(app), Some(id)) = (app.as_ref(), id) {
                             if let Some(state) = app.try_state::<VocabPlacementState>() {
                                 state.anchors.lock().invalidate(id);
+                                state.observed_targets.lock().retain(|(key, _)| *key != id);
                             }
                         }
                     },

@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::{Clock, SystemClock};
 use crate::errors::{BackendError, BackendErrorCode};
@@ -13,6 +14,7 @@ pub const HISTORY_CAP: usize = 200;
 pub struct HistoryStore {
     path: PathBuf,
     lock: Mutex<()>,
+    learning_revision: AtomicU64,
     /// 保留裁剪和「最近 N 分钟」都只认这一个时钟，而不是各自去读
     /// `chrono::Utc::now()`：后者会让注入固定时钟的后端（测试、回放）里
     /// `created_at` 与裁剪依据分成两套时间，条目可能在写入的瞬间就超期。
@@ -30,6 +32,7 @@ impl HistoryStore {
         Self {
             path,
             lock: Mutex::new(()),
+            learning_revision: AtomicU64::new(0),
             clock: Mutex::new(Arc::new(SystemClock)),
         }
     }
@@ -67,6 +70,7 @@ impl HistoryStore {
         let _guard = self.lock_store()?;
         let bytes = serde_json::to_vec_pretty(records)
             .map_err(|_| persistence_error("encode restored history"))?;
+        self.learning_revision.fetch_add(1, Ordering::AcqRel);
         crate::persistence::atomic_write_for_sync(&self.path, &bytes, permit)
     }
 
@@ -207,6 +211,25 @@ impl HistoryStore {
         )
     }
 
+    /// Execute source validation and its sink under the same history write lock.
+    /// Every write attempt invalidates old feedback, including restore and A→B→A.
+    pub(crate) fn with_learning_source<T>(
+        &self, id: &str, expected: Option<u64>,
+        operation: impl FnOnce(&DictationSession, u64) -> Result<T, BackendError>,
+    ) -> Result<T, BackendError> {
+        let _guard = self.lock_store().map_err(|_| BackendError::new(
+            BackendErrorCode::Internal, "learningStoreFailed"))?;
+        let revision = self.learning_revision.load(Ordering::Acquire);
+        if expected.is_some_and(|value| value != revision) {
+            return Err(BackendError::new(BackendErrorCode::InvalidArgument, "learningSourceExpired"));
+        }
+        let records = self.read_locked().map_err(|_| BackendError::new(
+            BackendErrorCode::Internal, "learningStoreFailed"))?;
+        let entry = records.iter().find(|entry| entry.id == id).ok_or_else(||
+            BackendError::new(BackendErrorCode::InvalidArgument, "learningSourceExpired"))?;
+        operation(entry, revision)
+    }
+
     fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, ()>, BackendError> {
         self.lock.lock().map_err(|_| {
             BackendError::new(BackendErrorCode::Internal, "history store lock poisoned")
@@ -220,6 +243,7 @@ impl HistoryStore {
     fn write_locked(&self, sessions: &[DictationSession]) -> Result<(), BackendError> {
         let json = serde_json::to_vec_pretty(sessions)
             .map_err(|_| persistence_error("encode history entries"))?;
+        self.learning_revision.fetch_add(1, Ordering::AcqRel);
         atomic_write(&self.path, &json)
     }
 }
