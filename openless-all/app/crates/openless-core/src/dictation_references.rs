@@ -58,7 +58,74 @@ impl ClipboardFilter {
 
 #[derive(Debug, Default)]
 pub struct Collector { pub references: Vec<Reference>, bytes: u64 }
+#[derive(Debug)]
+pub enum ClipboardContent { Text(String), Image(Vec<u8>, &'static str), Files(Vec<PathBuf>), TooLarge }
+impl ClipboardContent {
+    pub fn fingerprint(&self) -> (u64, u64) {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        let size = match self {
+            Self::Text(text) => { 1u8.hash(&mut hash); text.hash(&mut hash); text.len() as u64 }
+            Self::Image(bytes, ext) => { 2u8.hash(&mut hash); bytes.hash(&mut hash); ext.hash(&mut hash); bytes.len() as u64 }
+            Self::Files(paths) => { 3u8.hash(&mut hash); paths.hash(&mut hash); 0 }
+            Self::TooLarge => MAX_BYTES + 1,
+        };
+        (hash.finish(), size)
+    }
+}
 impl Collector {
+    /// Host-only IO after revision/ownership checks. Raw materials stay local;
+    /// hosts enrich text only after model processing has completed.
+    pub fn capture(&mut self, dir: &Path, elapsed_ms: u64, content: ClipboardContent) -> Option<String> {
+        if self.references.len() >= MAX_REFERENCES || matches!(content, ClipboardContent::TooLarge) { return Some("tooLarge".into()); }
+        let mut notice = None;
+        let materials = match content {
+            ClipboardContent::Files(paths) => {
+                let mut reserved = self.bytes;
+                paths.into_iter().enumerate().map(|(offset, path)| {
+                    let meta = fs::symlink_metadata(&path);
+                    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                    let directory = meta.as_ref().is_ok_and(|m| m.is_dir());
+                    let n = self.references.len() as u32 + offset as u32 + 1;
+                    let limit = n as usize > MAX_REFERENCES || size > MAX_BYTES || reserved.saturating_add(size) > MAX_SESSION_BYTES;
+                    let copied = if limit || directory { None } else { ReferenceStore::copy_file(dir, n, &path).ok() };
+                    if copied.is_some() { reserved = reserved.saturating_add(size); }
+                    if limit { notice = Some("tooLarge".into()); }
+                    else if copied.is_none() && !directory && notice.is_none() { notice = Some("captureFailed".into()); }
+                    Reference { kind: if directory { ReferenceKind::Directory } else { ReferenceKind::File }, elapsed_ms, sequence: 0,
+                        name: format!("File {}", path.file_name().unwrap_or_default().to_string_lossy()), original_only: copied.is_none(),
+                        path: copied.unwrap_or(path), source: "clipboard".into(), size, original_url: None, inline: None, transcript_chars: None }
+                }).collect::<Vec<_>>()
+            }
+            ClipboardContent::Text(text) => {
+                if text.is_empty() { return None; }
+                if text.len() as u64 > MAX_BYTES || self.bytes.saturating_add(text.len() as u64) > MAX_SESSION_BYTES { return Some("tooLarge".into()); }
+                let n = self.references.len() as u32 + 1;
+                let Ok(path) = ReferenceStore::write_bytes(dir, n, "txt", text.as_bytes()) else { return Some("captureFailed".into()); };
+                let link = url::Url::parse(text.trim()).ok().filter(|u| matches!(u.scheme(), "http" | "https")).map(|u| u.to_string());
+                vec![Reference { kind: if link.is_some() { ReferenceKind::Link } else { ReferenceKind::ClipboardText }, elapsed_ms, sequence: 0, path,
+                    source: "clipboard".into(), size: text.len() as u64, name: format!("Copied text {n}"), original_url: link,
+                    inline: Some(text), transcript_chars: None, original_only: false }]
+            }
+            ClipboardContent::Image(bytes, ext) => {
+                if bytes.len() as u64 > MAX_BYTES || self.bytes.saturating_add(bytes.len() as u64) > MAX_SESSION_BYTES { return Some("tooLarge".into()); }
+                let n = self.references.len() as u32 + 1;
+                let Ok(path) = ReferenceStore::write_bytes(dir, n, ext, &bytes) else { return Some("captureFailed".into()); };
+                vec![Reference { kind: ReferenceKind::ClipboardImage, elapsed_ms, sequence: 0, path, source: "clipboard".into(),
+                    size: bytes.len() as u64, name: format!("Copied image {n}"), original_url: None, inline: None, transcript_chars: None, original_only: false }]
+            }
+            ClipboardContent::TooLarge => return Some("tooLarge".into()),
+        };
+        for reference in materials {
+            let owned = (!reference.original_only).then(|| reference.path.clone());
+            if self.push(reference).is_err() {
+                if let Some(path) = owned { let _ = fs::remove_file(path); }
+                notice = Some("tooLarge".into());
+            }
+        }
+        if ReferenceStore::save_references(dir, &self.references).is_err() { notice = Some("captureFailed".into()); }
+        notice
+    }
     pub fn push(&mut self, mut reference: Reference) -> Result<u32, FilterResult> {
         let owned_bytes = if reference.original_only { 0 } else { reference.size };
         if self.references.len() >= MAX_REFERENCES || self.bytes.saturating_add(owned_bytes) > MAX_SESSION_BYTES {
@@ -189,6 +256,9 @@ fn image_url(url: &str) -> bool {
 }
 pub fn render(reference: &Reference) -> String {
     let label = escaped(&reference.name);
+    if matches!(reference.kind, ReferenceKind::ClipboardText | ReferenceKind::Link) {
+        if let Some(text) = &reference.inline { return text.clone(); }
+    }
     if expired(reference) { return format!("[{label}: expired — {}]", escaped(&reference.path.to_string_lossy())); }
     if let Some(url) = &reference.original_url {
         let safe = url.replace('>', "%3E").replace(['\n', '\r'], "");

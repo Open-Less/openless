@@ -1,7 +1,7 @@
 //! Recording-owned clipboard collection. Native reads and file IO never hold the session map.
 use openless_core::{dictation_references::*, SessionId};
 use parking_lot::Mutex;
-use std::{collections::{HashMap, HashSet, VecDeque}, path::PathBuf, sync::{Arc, OnceLock, atomic::{AtomicBool, Ordering}}, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, VecDeque}, path::PathBuf, sync::{Arc, OnceLock, atomic::{AtomicBool, Ordering}}, time::{Instant, SystemTime, UNIX_EPOCH}};
 
 #[cfg(any(target_os = "windows", test))]
 mod windows_formats;
@@ -52,12 +52,17 @@ pub(crate) fn bind_target(id: SessionId) {
     targets.push_back(id);
     while targets.len() > 256 { targets.pop_front(); }
 }
-fn store() -> Option<ReferenceStore> { ReferenceStore::new(crate::persistence::data_dir().ok()?.join("dictation-references")).ok() }
+fn store() -> Option<ReferenceStore> {
+    static STORE: OnceLock<Option<ReferenceStore>> = OnceLock::new();
+    STORE.get_or_init(|| {
+        let root = crate::persistence::data_dir().ok()?.join("dictation-references");
+        ReferenceStore::for_process(root).map_err(|e| log::warn!("[references] startup: {e}")).ok()
+    }).clone()
+}
 pub(crate) fn cleanup() {
-    if let Some(store) = store() {
-        let active = sessions().lock().keys().map(ToString::to_string).collect::<HashSet<_>>();
-        if let Err(e) = store.cleanup(now_ms(), RETENTION_MS, &active) { log::warn!("[references] cleanup: {e}"); }
-    }
+    // Initialized once by setup, after the single-instance plugin. Retirement
+    // only releases session memory; all copies retain the process store lease.
+    let _ = store();
 }
 pub(crate) struct RecordingLease { id: SessionId }
 pub(crate) struct StoppedCollection { session: Arc<Session>, revision: Option<u64> }
@@ -137,8 +142,7 @@ pub(crate) fn project(payload: &mut crate::types::CapsulePayload) {
 pub(crate) struct Status { supported: bool }
 pub(crate) fn status() -> Status { Status { supported: cfg!(any(target_os = "macos", target_os = "windows")) } }
 
-#[derive(Debug)]
-enum Content { Text(String), Image(Vec<u8>, &'static str), Files(Vec<PathBuf>), TooLarge }
+use openless_core::dictation_references::ClipboardContent as Content;
 
 #[cfg(target_os = "macos")]
 fn clipboard_content() -> Result<Option<Content>, &'static str> {
@@ -222,66 +226,14 @@ fn poll_revision(session: &Session, revision: u64, stopped: bool) {
 }
 
 fn collect(s: &mut Collection, revision: u64, content: Content) {
-    use std::hash::{Hash, Hasher};
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    let size = match &content {
-        Content::Text(text) => { 1u8.hash(&mut hash); text.hash(&mut hash); text.len() as u64 }
-        Content::Image(bytes, ext) => { 2u8.hash(&mut hash); bytes.hash(&mut hash); ext.hash(&mut hash); bytes.len() as u64 }
-        Content::Files(paths) => { 3u8.hash(&mut hash); paths.hash(&mut hash); 0 }
-        Content::TooLarge => MAX_BYTES + 1,
-    };
-    match s.filter.observe(revision, hash.finish(), size, false) {
+    let (hash, size) = content.fingerprint();
+    match s.filter.observe(revision, hash, size, false) {
         FilterResult::TooLarge => { s.notice = Some("tooLarge".into()); return; }
         FilterResult::Accept => {}
         _ => return,
     }
-    let owned_bytes: u64 = s.collector.references.iter().filter(|r| !r.original_only).map(|r| r.size).sum();
-    if s.collector.references.len() >= MAX_REFERENCES || owned_bytes.saturating_add(size) > MAX_SESSION_BYTES {
-        s.notice = Some("tooLarge".into()); return;
-    }
     let elapsed_ms = s.started.elapsed().as_millis() as u64;
-    let mut reserved_bytes = owned_bytes;
-    let mut failure = None;
-    let materials = match content {
-        Content::Files(paths) => paths.into_iter().enumerate().map(|(offset, path)| {
-            let meta = std::fs::symlink_metadata(&path);
-            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-            let directory = meta.as_ref().is_ok_and(|m| m.is_dir());
-            let n = s.collector.references.len() as u32 + offset as u32 + 1;
-            let limit = n as usize > MAX_REFERENCES || size > MAX_BYTES || reserved_bytes.saturating_add(size) > MAX_SESSION_BYTES;
-            let copied = if limit || directory { None } else { ReferenceStore::copy_file(&s.dir, n, &path).ok() };
-            if copied.is_some() { reserved_bytes = reserved_bytes.saturating_add(size); }
-            let original_only = copied.is_none();
-            if limit { failure = Some("tooLarge".to_string()); }
-            else if original_only && !directory && failure.is_none() { failure = Some("captureFailed".to_string()); }
-            Reference { kind: if directory { ReferenceKind::Directory } else { ReferenceKind::File }, elapsed_ms, sequence: 0,
-                name: format!("File {}", path.file_name().unwrap_or_default().to_string_lossy()), path: copied.unwrap_or(path), source: "clipboard".into(), size, original_url: None, inline: None, transcript_chars: None, original_only }
-        }).collect::<Vec<_>>(),
-        Content::Text(text) => {
-            if text.is_empty() { return; }
-            let n = s.collector.references.len() as u32 + 1;
-            let Ok(path) = ReferenceStore::write_bytes(&s.dir, n, "txt", text.as_bytes()) else { s.notice = Some("captureFailed".into()); return; };
-            let link = url::Url::parse(text.trim()).ok().filter(|u| matches!(u.scheme(), "http" | "https")).map(|u| u.to_string());
-            let inline = (link.is_none() && !text.contains(['\n', '\r']) && text.chars().count() <= INLINE_CHARS).then_some(text);
-            vec![Reference { kind: if link.is_some() { ReferenceKind::Link } else { ReferenceKind::ClipboardText }, elapsed_ms, sequence: 0, path, source: "clipboard".into(), size,
-                name: format!("Copied text {n}"), original_url: link, inline, transcript_chars: None, original_only: false }]
-        }
-        Content::Image(bytes, ext) => {
-            let n = s.collector.references.len() as u32 + 1;
-            let Ok(path) = ReferenceStore::write_bytes(&s.dir, n, ext, &bytes) else { s.notice = Some("captureFailed".into()); return; };
-            vec![Reference { kind: ReferenceKind::ClipboardImage, elapsed_ms, sequence: 0, path, source: "clipboard".into(), size, name: format!("Copied image {n}"), original_url: None, inline: None, transcript_chars: None, original_only: false }]
-        }
-        Content::TooLarge => return,
-    };
-    s.notice = failure;
-    for reference in materials {
-        let owned_path = (!reference.original_only).then(|| reference.path.clone());
-        if s.collector.push(reference).is_err() {
-            if let Some(path) = owned_path { let _ = std::fs::remove_file(path); }
-            s.notice = Some("tooLarge".into());
-        }
-    }
-    if ReferenceStore::save_references(&s.dir, &s.collector.references).is_err() { s.notice = Some("captureFailed".into()); }
+    s.notice = s.collector.capture(&s.dir, elapsed_ms, content);
 }
 
 #[cfg(test)]
