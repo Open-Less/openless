@@ -360,13 +360,13 @@ check(
 // Native changes must exercise the pinned minimum compiler on every platform.
 check(
   'macos msrv is not skipped when stable has the same version',
-  workflow.includes("if: needs.changes.outputs.msrv != 'false' &&"),
-  false,
+  workflow.includes("if: needs.changes.outputs.msrv != 'false' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos')"),
+  true,
 );
 // Windows runs the same pinned checks in parallel, with its own target cache.
 check(
   'windows msrv job follows the source gate',
-  /windows-msrv:[\s\S]*?inputs\.platform != 'macos'\) && needs\.changes\.outputs\.msrv != 'false'/.test(
+  /windows-msrv:[\s\S]*?inputs\.platform == 'all' \|\| inputs\.platform == 'windows'\) && needs\.changes\.outputs\.msrv != 'false'/.test(
     workflow,
   ),
   true,
@@ -387,7 +387,7 @@ check(
 );
 check(
   'android gate is fail-open',
-  /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.android != 'false'/.test(workflow),
+  /inputs\.platform == 'all'\) && needs\.changes\.outputs\.android != 'false'/.test(workflow),
   true,
 );
 check(
@@ -397,7 +397,7 @@ check(
 );
 check(
   'ui motion gate follows the rendered surface',
-  /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.frontend != 'false'/.test(workflow),
+  /inputs\.platform == 'all'\) && needs\.changes\.outputs\.frontend != 'false'/.test(workflow),
   true,
 );
 check(

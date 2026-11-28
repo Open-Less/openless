@@ -198,7 +198,7 @@ fn clipboard_content() -> Result<Option<Content>, &'static str> {
             }
         }
         if !files.is_empty() { return Ok(Some(Content::Files(files))); }
-        for (ty, ext) in [("public.png", "png"), ("public.tiff", "tiff")] {
+        for (ty, ext) in [("public.png", "png"), ("public.tiff", "tiff"), ("public.jpeg", "jpg")] {
             let data: *mut AnyObject = msg_send![board, dataForType: &*NSString::from_str(ty)];
             if data.is_null() { continue; }
             let length: usize = msg_send![data, length];

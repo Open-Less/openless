@@ -85,12 +85,19 @@ mod native {
             let mut bytes = Vec::new();
             if file.take(openless_core::dictation_references::MAX_BYTES + 1).read_to_end(&mut bytes).is_err()
                 || bytes.len() as u64 > openless_core::dictation_references::MAX_BYTES { return false; }
-            match self { Self::Wayland(c) => c.write_bytes("image/png", bytes), #[cfg(feature = "x11-overlay")] Self::X11(c) => c.write_bytes("image/png", bytes) }
+            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+            let mime = match extension.as_str() { "jpg" | "jpeg" => "image/jpeg", "tif" | "tiff" => "image/tiff", _ => "image/png" };
+            match self { Self::Wayland(c) => c.write_bytes(mime, bytes), #[cfg(feature = "x11-overlay")] Self::X11(c) => c.write_bytes(mime, bytes) }
         }
     }
     pub(super) fn content(mime: &str, bytes: Vec<u8>) -> Option<ClipboardContent> {
         if bytes.len() as u64 > openless_core::dictation_references::MAX_BYTES { return Some(ClipboardContent::TooLarge); }
-        if mime == "image/png" { return Some(ClipboardContent::Image(bytes, "png")); }
+        match mime {
+            "image/png" => return Some(ClipboardContent::Image(bytes, "png")),
+            "image/jpeg" => return Some(ClipboardContent::Image(bytes, "jpg")),
+            "image/tiff" => return Some(ClipboardContent::Image(bytes, "tiff")),
+            _ => {}
+        }
         let text = String::from_utf8(bytes).ok()?;
         if mime == "text/uri-list" {
             let paths = openless_core::dictation_references::clipboard_uri_paths(&text);

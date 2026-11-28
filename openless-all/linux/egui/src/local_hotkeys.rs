@@ -323,6 +323,7 @@ mod tests {
     fn target() -> HotkeyRuntimeTarget {
         HotkeyRuntimeTarget {
             dictation: binding("A", &["alt"]),
+            skip_auto_style: binding("B", &["alt"]),
             dictation_mode: HotkeyMode::Toggle,
             qa: Some(binding(";", &["ctrl", "shift"])),
             qa_companion_key: "Space".into(),

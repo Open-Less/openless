@@ -26,6 +26,7 @@ impl Clipboard {
         let device = manager.get_data_device(&seat, &qh, ());
         let mut state = State::default();
         queue.roundtrip(&mut state).ok()?;
+        if state.finished { return None; }
         Some(Self { connection, queue, state, manager, device, source: None })
     }
     pub fn pump(&mut self) {
@@ -43,7 +44,7 @@ impl Clipboard {
         let Some(offer) = self.state.selected.clone() else { return Some(Snapshot { revision, own: false, content: None }); };
         let mimes = self.state.mimes.get(&offer.id())?;
         if mimes.iter().any(|m| m == OWN) { return Some(Snapshot { revision, own: true, content: None }); }
-        let mime = ["text/uri-list", "image/png", TEXT, "text/plain"].into_iter().find(|mime| mimes.iter().any(|m| m == mime));
+        let mime = ["text/uri-list", "image/png", "image/jpeg", "image/tiff", TEXT, "text/plain"].into_iter().find(|mime| mimes.iter().any(|m| m == mime));
         let Some(mime) = mime else { return Some(Snapshot { revision, own: false, content: None }); };
         let (mut reader, writer) = UnixStream::pair().ok()?;
         reader.set_nonblocking(true).ok()?;
@@ -98,6 +99,10 @@ impl Dispatch<device::ZwlrDataControlDeviceV1, ()> for State {
                 state.selected = id;
             }
             device::Event::Finished => state.finished = true,
+            device::Event::PrimarySelection { id: Some(offer) } => {
+                state.mimes.remove(&offer.id());
+                offer.destroy();
+            }
             _ => {}
         }
     }

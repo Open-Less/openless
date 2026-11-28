@@ -295,8 +295,10 @@ impl material_delivery::MaterialClipboard for NativeClipboardDelivery {
                 let data_class = AnyClass::get("NSData").ok_or("data unavailable")?;
                 let data: *mut AnyObject = msg_send![data_class, dataWithBytes: bytes.as_ptr().cast::<std::ffi::c_void>(), length: bytes.len()];
                 if board.is_null() || data.is_null() { return Err("image clipboard unavailable".into()); }
-                let ty = if path.extension().is_some_and(|e| e == "tiff") { "public.tiff" } else { "public.png" };
+                let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+                let ty = match extension.as_str() { "tif" | "tiff" => "public.tiff", "jpg" | "jpeg" => "public.jpeg", _ => "public.png" };
                 let _: isize = msg_send![board, clearContents];
+                own_write.commit();
                 let written: bool = msg_send![board, setData: data, forType: &*NSString::from_str(ty)];
                 if written { own_write.commit(); Ok(()) } else { Err("image clipboard write failed".into()) }
             })

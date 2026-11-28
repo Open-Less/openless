@@ -128,7 +128,7 @@ impl Clipboard {
         let atoms = available.chunks_exact(4).map(|a| u32::from_ne_bytes(a.try_into().unwrap())).collect::<Vec<_>>();
         if atoms.contains(&self.own) { return Some(Snapshot { revision, own: true, content: None }); }
         let mut selected = None;
-        for mime in ["text/uri-list", "image/png", "UTF8_STRING", "text/plain;charset=utf-8", "text/plain"] {
+        for mime in ["text/uri-list", "image/png", "image/jpeg", "image/tiff", "UTF8_STRING", "text/plain;charset=utf-8", "text/plain"] {
             let atom = self.connection.intern_atom(false, mime.as_bytes()).ok()?.reply().ok()?.atom;
             if atoms.contains(&atom) { selected = Some((mime, atom)); break; }
         }

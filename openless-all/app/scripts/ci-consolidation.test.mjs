@@ -24,7 +24,7 @@ for (const [id, area] of [
 ]) {
   assert.equal(
     ci.jobs[id].if,
-    `${includeNonDesktop} && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.${area} != 'false'`,
+    `${includeNonDesktop} && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all') && needs.changes.outputs.${area} != 'false'`,
   );
 }
 assert.equal(
@@ -49,7 +49,7 @@ for (const id of ['ios-test', 'ios-device-build']) {
   assert.equal(job.env.CARGO_PROFILE_TEST_DEBUG, 0);
   assert.equal(
     job.if,
-    `${includeNonDesktop} && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'`,
+    `${includeNonDesktop} && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all') && needs.changes.outputs.ios != 'false'`,
   );
   assert.ok(job.steps.some((s) => s.run?.includes('git diff --exit-code')));
 }
@@ -150,8 +150,15 @@ assert.equal(ci.jobs.changes.outputs.linux, undefined);
 const linux = ci.jobs['linux-validation'];
 assert.equal(
   linux.if,
-  "github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')",
+  "(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')) || (github.event_name == 'workflow_dispatch' && inputs.platform == 'linux')",
 );
+assert.deepEqual(ci.on.workflow_dispatch.inputs.platform.options, ['all', 'macos', 'windows', 'linux']);
+const focusedLinux = linux.steps.find((s) => s.name === 'Check recording materials on the Linux host');
+assert.equal(focusedLinux.if, "github.event_name == 'workflow_dispatch'");
+assert.match(focusedLinux.run, /cargo test --locked -p openless-core --lib references_/);
+assert.match(focusedLinux.run, /cargo test --locked -p openless-linux-egui --lib/);
+assert.match(focusedLinux.run, /cargo check --locked -p openless-linux-egui --bins/);
+assert.equal(linux.steps.find((s) => s.name === 'Package and verify locally').if, "github.event_name != 'workflow_dispatch'");
 assert.equal(linux['runs-on'], 'ubuntu-latest');
 assert.equal(linux['timeout-minutes'], 45);
 assert.equal(linux.defaults.run['working-directory'], 'openless-all/app');
@@ -191,16 +198,19 @@ assert.doesNotMatch(linuxCommands, /gh release|gh api|upload-artifact|curl|wget/
 // Evaluate the exact guard over default push/PR and explicit opt-in cases.
 for (const event of ['push', 'pull_request', 'workflow_dispatch']) {
   for (const labels of [[], ['unrelated'], ['ci:validate-linux']]) {
+    for (const platform of ['all', 'macos', 'windows', 'linux']) {
     const expression = linux.if
-      .replace('github.event_name', JSON.stringify(event))
+      .replaceAll('github.event_name', JSON.stringify(event))
+      .replaceAll('inputs.platform', JSON.stringify(platform))
       .replace(
         "contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')",
         String(labels.includes('ci:validate-linux')),
       );
     assert.equal(
       vm.runInNewContext(expression),
-      event === 'pull_request' && labels.includes('ci:validate-linux'),
+      (event === 'pull_request' && labels.includes('ci:validate-linux')) || (event === 'workflow_dispatch' && platform === 'linux'),
     );
+    }
   }
 }
 assert.equal(

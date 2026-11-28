@@ -281,7 +281,9 @@ pub enum DeliveryPart { Text(String), Image(PathBuf) }
 /// remains in the following text even when native paste is dispatched: a native
 /// paste receipt cannot establish that the recipient supports image content.
 pub fn delivery_plan(text: &str, references: &[Reference]) -> Vec<DeliveryPart> {
-    let mut images = references.iter().filter(|r| r.kind == ReferenceKind::ClipboardImage && !expired(r))
+    let mut images = references.iter().filter(|r| !expired(r) && (r.kind == ReferenceKind::ClipboardImage
+        || r.kind == ReferenceKind::File && !r.original_only && r.path.extension().and_then(|e| e.to_str())
+            .is_some_and(|ext| ["png", "jpg", "jpeg", "tif", "tiff"].contains(&ext.to_ascii_lowercase().as_str()))))
         .filter_map(|r| text.find(&render(r)).map(|at| (at, &r.path))).collect::<Vec<_>>();
     images.sort_by_key(|(at, _)| *at);
     let mut out = Vec::new();
