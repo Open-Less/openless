@@ -832,6 +832,37 @@ pub mod android {
         )
     }
 
+    /// Same as [`notify_overlay_bridge`], plus the optional capsule session id.
+    ///
+    /// The id-less 3-arg callback above stays as-is for compatibility. This overload
+    /// targets `OpenLessOverlayBridge.onCapsuleStateChangedWithSession`; a missing id is
+    /// sent as an empty string and normalised to null on the Kotlin side.
+    pub fn notify_overlay_bridge_with_session<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        state: &str,
+        message: Option<&str>,
+        level: f32,
+        session_id: Option<&str>,
+    ) -> Result<(), String> {
+        let state_obj = jobject_str(env, state)?;
+        let message_obj = jobject_str(env, message.unwrap_or(""))?;
+        let session_obj = jobject_str(env, session_id.unwrap_or(""))?;
+        call_static_void_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessOverlayBridge",
+            "onCapsuleStateChangedWithSession",
+            "(Ljava/lang/String;Ljava/lang/String;FLjava/lang/String;)V",
+            &[
+                JValue::Object(&state_obj),
+                JValue::Object(&message_obj),
+                JValue::Float(level),
+                JValue::Object(&session_obj),
+            ],
+        )
+    }
+
     pub fn notify_ime_session_event<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,

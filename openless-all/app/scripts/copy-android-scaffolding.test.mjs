@@ -153,6 +153,25 @@ try {
     ),
     'runtime lifecycle regression must reach the generated instrumentation source set',
   );
+  for (const [source, destination] of [
+    ['kotlin/ImeGestureSession.kt', 'src/main/java/com/openless/app/ImeGestureSession.kt'],
+    ['kotlin/ImeKeyboardModels.kt', 'src/main/java/com/openless/app/ImeKeyboardModels.kt'],
+    ['kotlin/ImeTypingPanel.kt', 'src/main/java/com/openless/app/ImeTypingPanel.kt'],
+    [
+      'kotlin/androidTest/ImeTypingPanelInstrumentedTest.kt',
+      'src/androidTest/java/com/openless/app/ImeTypingPanelInstrumentedTest.kt',
+    ],
+    [
+      'kotlin/test/ImeGestureSessionTest.kt',
+      'src/test/java/com/openless/app/ImeGestureSessionTest.kt',
+    ],
+  ]) {
+    assert.equal(
+      readFileSync(join(app, destination), 'utf8'),
+      readFileSync(new URL(`../../android/${source}`, import.meta.url), 'utf8'),
+      'gesture behavior model and JVM tests must reach the generated Android project',
+    );
+  }
   assert.match(first, /android:usesCleartextTraffic="true"/);
   assert.equal(run(), first, 'repeated scaffolding copies must preserve the debug manifest');
 } finally {

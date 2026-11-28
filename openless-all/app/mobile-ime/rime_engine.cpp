@@ -218,6 +218,14 @@ std::string request(const std::string& op, const std::string& handle, const std:
             if (n != separator || r != arg.size() - separator - 1 || revision != session.revision ||
                 !(op == "select_absolute" ? api->select_candidate(id, index) : api->select_candidate_on_current_page(id, index)))
                 throw std::runtime_error("Rime candidate is stale");
+        } else if (op == "delete_candidate") {
+            const auto separator = arg.find('@');
+            if (separator == std::string::npos) throw std::runtime_error("Rime candidate revision required");
+            size_t n = 0; auto index = std::stoul(arg.substr(0, separator), &n);
+            size_t r = 0; auto revision = std::stoul(arg.substr(separator + 1), &r);
+            if (n != separator || r != arg.size() - separator - 1 || revision != session.revision ||
+                !api->delete_candidate(id, index))
+                throw std::runtime_error("Rime candidate cannot be deleted");
         } else throw std::runtime_error("Unknown Rime operation");
     }
     // Observing a composition must not invalidate the displayed candidates.

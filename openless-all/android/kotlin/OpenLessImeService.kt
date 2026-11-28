@@ -6,10 +6,8 @@ import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.icu.text.Transliterator
@@ -21,7 +19,6 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.text.InputType
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -56,6 +53,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var lastCancelledImeRequest = 0L
     private var imeRequestId = 0L
     private var imeSessionId: String? = null
+    private var typingVoiceOwner: ImeRequestOwner? = null
+    private var activeImeOwner: ImeRequestOwner? = null
+    private val imeFrameGate = ImeScopedFrameGate()
+    private var externalVoiceSessionId: String? = null
+    private var imeStopRequested = false
+    private var imeCaptureEnded = false
+    private var externalRecording = false
+    private var externalProcessing = false
+    private var microphoneGranted = false
     private var pendingCloudArm = false
     private var pendingImeStop = false
     private var cloudNoteDestination: Pair<String, String>? = null
@@ -102,13 +108,23 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (imeRequestId != 0L) { lastCancelledImeRequest = imeRequestId; sendImeCommand("cancel") }
         imeRequestId = 0L
         imeSessionId = null
+        typingVoiceOwner = null
+        imeFrameGate.finish(activeImeOwner)
+        activeImeOwner = null
+        imeStopRequested = false
+        imeCaptureEnded = false
+        recording = false
+        processing = false
         pendingImeStop = false
         cloudNoteDestination = null
         pendingCloudArm = false
         cloudNoteSubmitting = false
+        renderVoiceUi()
     }
 
     private fun stopImeSession() {
+        imeStopRequested = true
+        imeCaptureEnded = true
         if (imeSessionId == null) pendingImeStop = true
         else if (!sendImeCommand("stop")) { recording = false; processing = false }
     }
@@ -116,6 +132,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun onImeSessionEvent(json: String) {
         val event = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
         if (event.optLong("requestId") != imeRequestId || imeRequestId == 0L) {
+            event.optString("sessionId").takeIf { it.isNotBlank() }?.let(imeFrameGate::retire)
             if (event.optLong("requestId") == lastCancelledImeRequest && event.optString("error") == "Persistence") {
                 OpenLessNativeNotice.makeText(this, ui("录音清理失败，重新打开应用后重试", "Recording cleanup failed; reopen the app to retry"), Toast.LENGTH_LONG).show()
             }
@@ -123,15 +140,50 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }
         when (event.optString("kind")) {
             "started" -> {
-                imeSessionId = event.getString("sessionId")
+                val identity = event.optString("sessionId")
+                val owner = activeImeOwner
+                if (owner == null || !owner.matches(sessionEpoch, imeRequestId)) {
+                    if (identity.isNotBlank()) imeFrameGate.retire(identity)
+                    return
+                }
+                if (imeSessionId == identity && imeFrameGate.isBound(owner, identity)) {
+                    // Replayed acknowledgements cannot reapply cloud mode or
+                    // resubmit stop after finalization has already begun.
+                    updateStatus(currentMessage)
+                    return
+                }
+                val buffered = imeFrameGate.bind(owner, identity)
+                if (!imeFrameGate.isBound(owner, identity)) {
+                    cancelImeSession()
+                    setState("error", ui("无法确认听写会话，请重试", "Could not identify the dictation session; retry"))
+                    return
+                }
+                imeSessionId = identity
+                if (!ImeVoiceFramePolicy.canApplyQueuedStartActions(buffered?.state)) {
+                    // The backend already stopped/failed before this ack. Stop is
+                    // not idempotent: never send another stop just to obtain text.
+                    pendingImeStop = false
+                    pendingCloudArm = false
+                    imeStopRequested = false
+                    buffered?.let { onCapsuleStateChangedWithSession(it.state, it.message, it.level, it.sessionId) }
+                    updateStatus(currentMessage)
+                    return
+                }
                 if (pendingCloudArm) { pendingCloudArm = false; cloudNoteArmed = true }
                 if (cloudNoteArmed && !sendImeCommand("cloud")) { cancelImeSession(); return }
                 if (pendingImeStop) { pendingImeStop = false; stopImeSession() }
+                buffered?.let { onCapsuleStateChangedWithSession(it.state, it.message, it.level, it.sessionId) }
+                updateStatus(currentMessage)
             }
             "completed" -> {
-                if (event.optString("sessionId") != imeSessionId) return
+                if (!ownsImeRequest() || event.optString("sessionId") != imeSessionId) return
                 val destination = cloudNoteDestination
                 val reviewCloudNote = cloudNoteReviewArmed
+                typingVoiceOwner = null
+                imeFrameGate.finish(activeImeOwner)
+                activeImeOwner = null
+                imeStopRequested = false
+                imeCaptureEnded = false
                 imeSessionId = null
                 recording = false
                 processing = false
@@ -144,12 +196,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 else commitImeText(event.optString("text"))
             }
             "error" -> {
+                typingVoiceOwner = null
+                imeFrameGate.finish(activeImeOwner)
+                activeImeOwner = null
+                imeStopRequested = false
+                imeCaptureEnded = false
                 recording = false
                 processing = false
                 imeSessionId = null
                 pendingImeStop = false
                 pendingCloudArm = false
-                setState("error", ui("听写失败，请重试", "Dictation failed; please retry"))
+                if (event.optString("error") == "Cancelled") setState("cancelled", ui("已取消", "Cancelled"))
+                else setState("error", ui("听写失败，请重试", "Dictation failed; please retry"))
             }
         }
     }
@@ -239,7 +297,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /** True from the start of a recording through the "thinking" step that follows it — the span an armed mode keeps its accent for. */
-    private fun dictationInProgress(): Boolean = state == "speaking" || state == "thinking"
+    private fun dictationInProgress(): Boolean = voiceUiState().editorLocked
 
     /** Status text color while a recording or thinking prompt is showing — the armed mode's accent, normal otherwise. */
     private fun recordingAccentColor(): Int =
@@ -254,6 +312,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // is ENGLISH, and "英文" while it's PINYIN.
     private var latinInputMode = LatinInputMode.ENGLISH
     private val rimePinyinController by lazy { RimePinyinController(this) }
+    private var pinyinComposingActive = false
+    private var quickChipPayload: String? = null
+    private var quickChipLabel: String? = null
+    private var quickChipExpiresAtMs: Long = 0L
+    private var quickChipIsUndoDelete: Boolean = false
     // The word currently being typed on the English keyboard — appended to
     // per letter, trimmed per backspace, cleared at every word boundary
     // (space/return/punctuation/candidate tap/mode or panel switch). Never
@@ -261,12 +324,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // committed immediately, same as before this feature: this buffer only
     // tracks what to re-query/replace for candidates.
     private val englishComposingWord = StringBuilder()
-    private var englishCandidateRow: LinearLayout? = null
-    // The row+divider bar as a whole (shown/hidden together when the
-    // suggestions setting is toggled) and its overflow "▼" button — see
-    // buildEnglishCandidateBar().
-    private var englishCandidateBarContainer: View? = null
-    private var englishExpandCandidatesButton: View? = null
     private var englishCandidateQueryEpoch = 0L
     // Lazy, not eager: the base dictionary/trie only gets built the first
     // time the English keyboard is actually opened (see
@@ -304,40 +361,19 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var lastEnglishSpaceAt = 0L
     private var state = "idle"
     private var currentMessage = "点击开始说话"
+    private var latestVoiceLevel = 0f
     private var status: TextView? = null
     private var voiceRawHint: TextView? = null
     private var statusNormalColor = Color.GRAY
-    // Single shared top-level preview bubble for every key across the
-    // English and stroke keyboards (see wrapWithKeyPreviewOverlay()) — reset
-    // on every panel rebuild since it lives inside that panel's own root
-    // View tree, same lifecycle as voiceButton/status below. Null in panels
-    // that never show a key preview (voice, clipboard, edit); callers use
-    // the safe-call operator so that's a no-op rather than a crash.
-    private var keyPreviewOverlay: KeyPreviewOverlay? = null
     // Last height_dp:raise_dp baked into the cached input view — compared in
     // onStartInputView so leaving keyboard settings and refocusing rebuilds
     // when the footprint prefs changed.
     private var appliedKeyboardFootprintKey: String? = null
-    // LETTERS layer's swipe-up-bearing keys (buildEnglishCharKey()'s
-    // wrapper -> its symbol — row1's digits, row2's @#$%&-+(), row3's
-    // :;'.,!?), so a swipe-armed drag can retarget across a row the same
-    // way a plain tap-drag already retargets across letters. Cleared and
-    // repopulated once per LETTERS render (see addEnglishCharRow()'s own
-    // row1 call, which always runs first — row2/row3 add straight into
-    // that same fresh map), since a shift toggle etc. throws the whole
-    // view tree away via refreshInputView() and would otherwise leave
-    // stale View keys behind.
-    private val englishSwipeSymbols = HashMap<View, String>()
-    // The letter keys and Shift key of the English panel on screen, so a
-    // Shift change can relabel them in place (applyShiftState()) instead of
-    // rebuilding the whole keyboard. Entries from an older panel are simply
-    // no longer attached to the window and get skipped.
-    private val englishLetterKeys = ArrayList<Pair<View, TextView>>()
-    private var englishShiftKey: ShiftKeyView? = null
-    // Binding behind each reusable candidate view in englishCandidateRow —
-    // see populateLatinCandidateRow().
-    private val latinCandidateSlots = java.util.WeakHashMap<View, LatinCandidateSlot>()
-    private var voiceButton: VoiceButton? = null
+    private var surfaceHost: ImeSurfaceHost? = null
+    private var keyboardSurface: View? = null
+    private var draftBar: ImeDraftBar? = null
+    private var voiceButton: ImeVoiceButton? = null
+    private var voicePanel: ImeVoicePanel? = null
     // Silence-detection for the main voice panel: if the mic capture never
     // reports a meaningful level for a while after recording starts, the
     // audio link is probably broken upstream (muted mic, dead capture
@@ -351,7 +387,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // later. Reassigned on every panel rebuild, same pattern as
     // voiceButton/status below.
     private var backendLinkIndicator: View? = null
-    private var backendLinkPulseAnimator: android.animation.ObjectAnimator? = null
+    private var keyboardHeader: ImeKeyboardHeader? = null
     // Which recognizer the next dictation uses, as nativeAsrRoute() reports
     // it ("cloud", "local", "localRaw", "unavailable"). The idle dot shows
     // local in dark green and pure-local raw output (no usable polish
@@ -433,13 +469,24 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     /** Picks `dark` or `light` for the current system theme — the one place every themed color in this file goes through. */
     internal fun tone(dark: Int, light: Int): Int = if (isDarkTheme) dark else light
-    // Mirrors whatever's currently in strokeCandidates (word/stroke matches
-    // or phrase associations) as plain (label, action) pairs, so the "show
-    // more" overlay can replay the exact same set without duplicating the
-    // stroke-match vs. association branching logic.
-    internal var candidateOverlayEntries: List<Pair<String, () -> Unit>> = emptyList()
-
     internal fun ui(zh: String, en: String) = if (englishUi) en else zh
+
+    internal fun keyboardPalette(): ImePalette = ImePalette.resolve(isDarkTheme)
+    internal fun interactionPolicy(): ImeInteractionPolicy = ImeInteractionPolicy.fromStoredRepeat(keyRepeatIntervalMs())
+    internal fun emitKeyFeedback() { performKeyHaptic() }
+
+    private fun refreshInteractionPolicy() {
+        val policy = interactionPolicy()
+        typingPanel?.applyInteractionPolicy(policy)
+        voicePanel?.applyInteractionPolicy(policy)
+        clipboardPanel?.applyInteractionPolicy(policy)
+        strokeController.applyInteractionPolicy(policy)
+    }
+
+    internal fun isKeyboardEditingBlocked(): Boolean = dictationEditingLocked()
+    internal fun buildKeyboardHeader(): View = buildVoiceHeader()
+    internal fun isEnglishKeyboardUi(): Boolean = englishUi
+
 
     internal fun outputScript(text: String): String {
         if (!traditionalOutput) return text
@@ -461,8 +508,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 'z' -> {
                     val start = builder.length
                     builder.append(' ')
+                    val align = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        android.text.style.DynamicDrawableSpan.ALIGN_CENTER
+                    } else {
+                        android.text.style.ImageSpan.ALIGN_BOTTOM
+                    }
                     builder.setSpan(
-                        android.text.style.ImageSpan(strokeFifthGlyphDrawable(), android.text.style.ImageSpan.ALIGN_BASELINE),
+                        android.text.style.ImageSpan(strokeFifthGlyphDrawable(), align),
                         start,
                         builder.length,
                         android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
@@ -477,7 +529,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     /** Same diagonal-then-horizontal shape as the "5" key's own icon, sized and colored to sit inline in strokePreview's text. */
     private fun strokeFifthGlyphDrawable(): android.graphics.drawable.Drawable {
-        val sizePx = (16.5f * resources.displayMetrics.scaledDensity).toInt().coerceAtLeast(dp(14))
+        val sizePx = (14f * resources.displayMetrics.scaledDensity).toInt().coerceAtLeast(dp(12))
         val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = strokeEncodeAccentColor
             style = Paint.Style.STROKE
@@ -549,9 +601,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun restoreLatinInputMode() {
-        latinInputMode = when (getSharedPreferences("openless_ime_ui", MODE_PRIVATE).getString("latin_input_mode", "english")) {
+        val stored = getSharedPreferences("openless_ime_ui", MODE_PRIVATE).getString("latin_input_mode", null)
+        latinInputMode = when (stored) {
             "pinyin" -> LatinInputMode.PINYIN
-            else -> LatinInputMode.ENGLISH
+            "english" -> LatinInputMode.ENGLISH
+            else -> if (englishUi) LatinInputMode.ENGLISH else LatinInputMode.PINYIN
         }
     }
 
@@ -572,6 +626,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun toggleLatinInputMode() {
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
+        clearPinyinComposingInEditor()
         rimePinyinController.clear()
         latinInputMode = latinInputMode.toggled()
         saveLatinInputMode(latinInputMode)
@@ -593,7 +648,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun refreshLatinCandidateBar() {
         if (latinInputMode == LatinInputMode.PINYIN) {
             rimePinyinController.refresh { renderPinyinCandidates(it) }
-            englishCandidateBarContainer?.visibility = View.VISIBLE
         } else {
             updateEnglishCandidates()
         }
@@ -611,6 +665,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             ?.coerceToText(this)?.toString()
         if (!text.isNullOrBlank()) {
             OpenLessClipboardHistory.recordCopy(this, text)
+            offerClipboardQuickChip(text)
         }
     }
 
@@ -622,7 +677,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     override fun onCreate() {
         super.onCreate()
+        microphoneGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         learningMigrationComplete = ImeLearningPolicy.migrate(this)
+        refreshLanguage()
         restoreInputMode()
         restoreScriptPreference()
         restoreLatinInputMode()
@@ -630,17 +687,15 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         OpenLessOverlayBridge.imeListener = this
         OpenLessOverlayBridge.imeSessionListener = ::onImeSessionEvent
         startRuntimeService()
-        // Load the offline stroke dictionary and the (much larger, ~220k-
-        // phrase) association dictionary while the IME is idle — the latter
-        // used to load lazily on whichever word's commit was the first to
-        // ever need an association, which is exactly the moment a user is
-        // sitting there waiting for the candidate row to update.
+        // Pre-warm offline stroke, phrase association, and Rime pinyin engines off the UI thread.
         strokeController.preloadAsync()
+        rimePinyinController.preload()
         clipboardManager.addPrimaryClipChangedListener(clipboardHistoryListener)
         backendHeartbeatHandler.post(backendHeartbeatRunnable)
     }
 
     override fun onDestroy() {
+        draftBar?.cancelInteractions()
         cancelImeSession()
         if (activeInstance?.get() === this) {
             activeInstance = null
@@ -650,7 +705,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             OpenLessOverlayBridge.imeSessionListener = null
         }
         backendHeartbeatHandler.removeCallbacks(backendHeartbeatRunnable)
-        backendLinkPulseAnimator?.cancel()
+        keyboardHeader?.cancelInteractions()
         clipboardManager.removePrimaryClipChangedListener(clipboardHistoryListener)
         stopRuntimeService()
         strokeController.shutdown()
@@ -697,7 +752,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             )
             addView(
                 View(this@OpenLessImeService).apply {
-                    setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
+                    setBackgroundColor(keyboardPalette().surface)
                     visibility = if (raisePx > 0) View.VISIBLE else View.GONE
                 },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, raisePx),
@@ -706,432 +761,172 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     override fun onCreateInputView(): View {
+        val host = ImeSurfaceHost(this)
+        surfaceHost = host
+        rebuildSurfaceContent()
+        return host.also { excludeFromSystemGestures(it) }
+    }
+
+    private fun rebuildSurfaceContent(): View {
+        draftBar?.cancelInteractions()
+        draftBar = null
+        typingPanel?.closeTransientUi()
+        clipboardPanel?.cancelInteractions()
+        strokeController.cancelInteractions()
+        keyboardHeader?.cancelInteractions()
+        keyboardHeader = null
+        clipboardPanel = null
+        typingPanel = null
+        voicePanel = null
+        voiceButton = null
+        status = null
+        voiceRawHint = null
+        voiceLinkWarning = null
+        dictationResultRow = null
+        undoRedoButton = null
+        editResultButton = null
         refreshLanguage()
-        startRuntimeService()
         val content = when {
-            inputMode == InputMode.ENGLISH -> wrapWithKeyPreviewOverlay(buildKeyboardView())
-            inputMode == InputMode.STROKE -> wrapWithKeyPreviewOverlay(
-                if (strokeController.strokeNumberMode) strokeController.buildStrokeNumberView()
-                else strokeController.buildStrokeView(),
-            )
+            inputMode == InputMode.ENGLISH -> buildKeyboardView()
+            inputMode == InputMode.STROKE -> strokeController.buildStrokeView()
             inputMode == InputMode.CLIPBOARD ->
                 if (clipboardHistoryMode) buildClipboardHistoryView() else buildClipboardView()
             else -> buildVoiceInputView()
         }
-        val view = applyKeyboardRaise(content)
+        val keyboard = applyKeyboardRaise(content)
+        keyboardSurface = keyboard
+        val draft = buildDraftBar()
+        surfaceHost?.render(keyboard, draft, draftEdit)
         appliedKeyboardFootprintKey = keyboardFootprintKey()
-        return wrapWithDraftBar(view)
+        return keyboard
     }
 
-    /** Voice panel + floating dictation-result overlay (former onCreateInputView body). */
+    private fun replaceSurfaceContent(): View {
+        if (surfaceHost == null) {
+            setInputView(onCreateInputView())
+            return requireNotNull(keyboardSurface)
+        }
+        return rebuildSurfaceContent()
+    }
+
+    /** View components render state; this adapter alone owns native operations. */
     private fun buildVoiceInputView(): View {
-        val panel = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
-            minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(16), dp(8), dp(16), dp(4))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-            clipChildren = false
-            clipToPadding = false
+        val palette = ImePalette.resolve(isDarkTheme)
+        return ImeVoicePanel(
+            this, palette, buildVoiceHeader(), englishUi,
+            onVoiceGesture = ::handleVoiceGesture,
+            onUndo = ::toggleUndoRedoDictation,
+            onEdit = { openDictationEditDraft(requireSelection = false) },
+            onEnter = { if (!dictationEditingLocked()) sendEnterKey() },
+            onBackspace = { if (!dictationEditingLocked()) deleteBackward() },
+            onAt = { if (!dictationEditingLocked()) currentInputConnection?.commitText("@", 1) },
+            onRestart = ::restartApp,
+            onFeedback = ::performKeyHaptic,
+            interactionPolicy = interactionPolicy(),
+        ).also { panel ->
+            voicePanel = panel
+            statusNormalColor = palette.secondaryText
+            status = panel.status
+            voiceButton = panel.voiceButton
+            voiceRawHint = panel.modeHint
+            voiceLinkWarning = panel.warning
+            undoRedoButton = panel.undo
+            editResultButton = panel.edit
+            dictationResultRow = panel.resultRow
+            updateStatus(currentMessage)
         }
-        panel.addView(buildVoiceHeader(), LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(38),
-        ))
-        statusNormalColor = tone(Color.rgb(190, 190, 190), Color.rgb(110, 110, 115))
-        status = TextView(this).apply {
-            text = displayStatus(currentMessage)
-            textSize = 16f
-            if (englishUi) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            gravity = android.view.Gravity.CENTER
-            setTextColor(statusNormalColor)
-            setPadding(0, dp(6), 0, dp(4))
-        }
-        panel.addView(status, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(38),
-        ))
+    }
 
-        voiceButton = VoiceButton(this, isDarkTheme).apply {
-            isClickable = true
-            setOnClickListener { toggleDictation() }
-            contentDescription = ui("OpenLess 语音听写", "OpenLess dictation")
-            // All four swipe gestures follow the same pattern: a LIVE
-            // boolean re-evaluated every ACTION_MOVE (not a one-way latch),
-            // a matching live visual on VoiceButton (idle capsule orange for
-            // swipe-up-to-raw / green for swipe-left-to-quick-notes / red for
-            // swipe-right-to-cloud-notes, waveform light red for swipe-down-to-
-            // cancel — all four ease back the moment the finger drops back
-            // below their own threshold), a single haptic tick on every
-            // crossing in either direction, and the actual action (cancel /
-            // enter raw mode / enter quick-notes mode / enter cloud-notes mode)
-            // only committed on release, gated on whichever one is still
-            // active at that instant. Nothing commits mid-drag — swipe down
-            // used to cancel the moment the threshold was first crossed
-            // during the move, but that gave no chance to back out of an
-            // accidental trigger, same reasoning as the swipe-up threshold's
-            // own move-to-release change earlier.
-            //
-            // requestDisallowInterceptTouchEvent is still claimed
-            // unconditionally on DOWN (not only once a threshold is
-            // crossed), matching buildEnglishCharKey()'s same fix earlier
-            // this session: without it, a downward drag here is
-            // indistinguishable from the enclosing SwipeModeContainer's own
-            // "long downward drag dismisses the keyboard" gesture, and that
-            // ancestor can steal the sequence before our own dp(30) check
-            // ever sees the full distance.
-            var downX = 0f
-            var downY = 0f
-            var swipeUpActive = false
-            var swipeDownActive = false
-            // Same shape as swipeUpActive (no `recording` gate on the MOVE
-            // check — armable both from idle and mid-recording), just on the
-            // horizontal axis — see cloudNoteArmed's own doc comment for what
-            // release does in each case.
-            var swipeRightActive = false
-            // Same shape again, mirrored to the other horizontal direction —
-            // see quickNoteArmed's own doc comment for what release does.
-            var swipeLeftActive = false
-            setOnTouchListener { view, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downX = event.x
-                        downY = event.y
-                        swipeUpActive = false
-                        swipeDownActive = false
-                        swipeRightActive = false
-                        swipeLeftActive = false
-                        view.parent?.requestDisallowInterceptTouchEvent(true)
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (recording) {
-                            val active = event.y - downY >= dp(30)
-                            if (active != swipeDownActive) {
-                                swipeDownActive = active
-                                voiceButton?.armedForCancel = active
-                                performKeyHaptic()
-                            }
-                        }
-                        val active = downY - event.y >= dp(30)
-                        if (active != swipeUpActive) {
-                            swipeUpActive = active
-                            // Mid Cloud-notes recording a swipe up asks for the
-                            // draft editor, not Raw — keep the orange preview off.
-                            voiceButton?.armedForRawSwipe = active && !(recording && (cloudNoteArmed || pendingCloudArm))
-                            // One tick every time the threshold is
-                            // crossed, either direction — entering AND
-                            // leaving the armed zone both get felt, not
-                            // just the eventual release.
-                            performKeyHaptic()
-                        }
-                        val activeRight = event.x - downX >= dp(30)
-                        if (activeRight != swipeRightActive) {
-                            swipeRightActive = activeRight
-                            voiceButton?.armedForCloudNote = activeRight
-                            performKeyHaptic()
-                        }
-                        val activeLeft = downX - event.x >= dp(30)
-                        if (activeLeft != swipeLeftActive) {
-                            swipeLeftActive = activeLeft
-                            voiceButton?.armedForQuickNote = activeLeft
-                            performKeyHaptic()
-                        }
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        if (swipeDownActive) {
-                            performDoubleKeyHaptic()
-                            cancelDictation()
-                        } else if (swipeUpActive) {
-                            if (recording && (cloudNoteArmed || pendingCloudArm)) {
-                                // Ends the recording right here; the result opens
-                                // in the draft bar instead of being sent. The
-                                // click that may follow this release is a no-op:
-                                // toggleDictation() ignores taps while processing.
-                                cloudNoteReviewArmed = true
-                                performDoubleKeyHaptic()
-                                toggleDictation()
-                            } else if (recording && !rawModeArmed) {
-                                rawModeArmed = true
-                                performDoubleKeyHaptic()
-                                updateStatus(currentMessage)
-                            } else if (!recording && !processing) {
-                                toggleDictation()
-                                if (recording) {
-                                    rawModeArmed = true
-                                    performDoubleKeyHaptic()
-                                    updateStatus(currentMessage)
-                                }
-                            }
-                        } else if (swipeRightActive) {
-                            if (recording && !cloudNoteArmed) {
-                                cloudNoteArmed = true
-                                performDoubleKeyHaptic()
-                                updateStatus(currentMessage)
-                            } else if (!recording && !processing) {
-                                toggleDictation(initialCloud = true)
-                                if (recording) {
-                                    cloudNoteArmed = true
-                                    performDoubleKeyHaptic()
-                                    updateStatus(currentMessage)
-                                }
-                            }
-                        } else if (swipeLeftActive) {
-                            if (recording && !quickNoteArmed) {
-                                quickNoteArmed = true
-                                performDoubleKeyHaptic()
-                                updateStatus(currentMessage)
-                            } else if (!recording && !processing) {
-                                toggleDictation()
-                                if (recording) {
-                                    quickNoteArmed = true
-                                    performDoubleKeyHaptic()
-                                    updateStatus(currentMessage)
-                                }
-                            }
-                        }
-                        swipeUpActive = false
-                        swipeDownActive = false
-                        swipeRightActive = false
-                        swipeLeftActive = false
-                        voiceButton?.armedForRawSwipe = false
-                        voiceButton?.armedForCancel = false
-                        voiceButton?.armedForQuickNote = false
-                        voiceButton?.armedForCloudNote = false
-                    }
-                    MotionEvent.ACTION_CANCEL -> {
-                        swipeUpActive = false
-                        swipeDownActive = false
-                        swipeRightActive = false
-                        swipeLeftActive = false
-                        voiceButton?.armedForRawSwipe = false
-                        voiceButton?.armedForCancel = false
-                        voiceButton?.armedForQuickNote = false
-                        voiceButton?.armedForCloudNote = false
-                    }
+    private fun dictationEditingLocked(): Boolean = voiceUiState().editorLocked
+
+    private fun ownsImeRequest(): Boolean = activeImeOwner?.matches(sessionEpoch, imeRequestId) == true
+    private fun hasForeignVoiceActivity(): Boolean = (externalRecording || externalProcessing) && !ownsImeRequest()
+
+    private fun voiceUiState(): ImeVoiceUiSnapshot {
+        val foreign = hasForeignVoiceActivity()
+        return ImeVoiceUiProjection.fromLegacy(
+            state, recording || externalRecording, processing || externalProcessing, cloudNoteSubmitting,
+            rawModeArmed && !foreign, quickNoteArmed && !foreign, (cloudNoteArmed || pendingCloudArm) && !foreign,
+            displayStatus(currentMessage), if (foreign) 0f else latestVoiceLevel,
+            awaitingStart = ownsImeRequest() && recording && imeSessionId == null,
+        ).withEligibility(ownsImeRequest(), microphoneGranted, isSensitiveField(currentInputEditorInfo), foreign)
+    }
+
+    private fun handleVoiceGesture(action: ImeVoiceGesture) {
+        if (hasForeignVoiceActivity()) { renderVoiceUi(); return }
+        if (processing && action != ImeVoiceGesture.CANCEL) return
+        when (action) {
+            ImeVoiceGesture.TAP -> toggleDictation()
+            ImeVoiceGesture.CANCEL -> if (recording || processing) cancelDictation()
+            ImeVoiceGesture.REVIEW_CLOUD -> {
+                if (recording && (cloudNoteArmed || pendingCloudArm)) {
+                    cloudNoteReviewArmed = true
+                    toggleDictation()
                 }
-                false
             }
-        }
-        // FrameLayout, not LinearLayout: voiceButton is centered purely by
-        // its own Gravity.CENTER, independent of whatever else shares this
-        // holder — a LinearLayout would instead center the *whole stack* of
-        // children as one block, which pushed the mic icon itself upward
-        // (away from the status line above) once voiceRawHint became a
-        // permanently-participating sibling instead of an occasional one.
-        // voiceRawHint/voiceLinkWarning use that same CENTER anchor plus a
-        // fixed topMargin, so they sit a fixed distance below the mic
-        // without perturbing its own position at all.
-        val buttonHolder = FrameLayout(this).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-            clipChildren = false
-            clipToPadding = false
-        }
-        buttonHolder.addView(voiceButton!!, FrameLayout.LayoutParams(dp(176), dp(72), android.view.Gravity.CENTER))
-
-        // Small companion hint — deliberately muted (low size + alpha) so it
-        // doesn't compete with "Tap to speak" for attention, but
-        // discoverable enough that a user notices the three swipe gestures
-        // exist at all. Sits just above the footer row (right above the
-        // Return key, which is horizontally centered there the same way
-        // this hint is) rather than directly under the mic — out of the way
-        // of the mic capsule and its own waveform/pill animations, but still
-        // close enough to read while a hand hovers over the mic. Tap or
-        // long-press explains what Raw mode actually does via a Toast,
-        // rather than building a dedicated tooltip bubble for a single
-        // one-off explanation. Hidden entirely while recording/thinking in
-        // an ordinary (non-Raw) dictation — see rawModeHintVisible() —
-        // since at that point it's neither teaching a still-relevant
-        // gesture nor confirming anything, just noise.
-        val rawModeTooltip = ui("Raw模式，语音原样转写，不做AI润色整理", "Raw mode, verbatim transcription without AI polishing")
-        voiceRawHint = TextView(this).apply {
-            text = rawModeHintText()
-            textSize = 11f
-            if (englishUi) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            gravity = android.view.Gravity.CENTER
-            setTextColor(rawModeHintColor())
-            visibility = if (rawModeHintVisible()) View.VISIBLE else View.GONE
-            isClickable = true
-            setOnClickListener { OpenLessNativeNotice.makeText(this@OpenLessImeService, rawModeTooltip, Toast.LENGTH_SHORT).show() }
-            setOnLongClickListener {
-                OpenLessNativeNotice.makeText(this@OpenLessImeService, rawModeTooltip, Toast.LENGTH_SHORT).show()
-                true
+            ImeVoiceGesture.RAW -> {
+                if (!recording) toggleDictation()
+                if (recording) {
+                    quickNoteArmed = false
+                    rawModeArmed = true
+                    performDoubleKeyHaptic()
+                    updateStatus(currentMessage)
+                }
             }
-        }
-        buttonHolder.addView(
-            voiceRawHint,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL,
-            ).apply {
-                bottomMargin = dp(6)
-            },
-        )
-        voiceLinkWarning = TextView(this).apply {
-            text = ui("检测到麦克风无声音，点击重启应用", "No mic audio detected — tap to restart the app")
-            textSize = 16f
-            if (englishUi) {
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            } else {
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            ImeVoiceGesture.QUICK_NOTE -> {
+                if (!recording) toggleDictation()
+                if (recording) {
+                    rawModeArmed = false
+                    quickNoteArmed = true
+                    performDoubleKeyHaptic()
+                    updateStatus(currentMessage)
+                }
             }
-            gravity = android.view.Gravity.CENTER
-            setTextColor(Color.rgb(255, 90, 90))
-            setPadding(dp(12), 0, dp(12), 0)
-            visibility = View.GONE
-            isClickable = true
-            setOnClickListener { restartApp() }
-        }
-        buttonHolder.addView(
-            voiceLinkWarning,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER).apply {
-                // Below where the Raw hint sits, so the two never overlap on
-                // the rare occasion both are visible at once (Raw-armed
-                // recording with a simultaneous mic-silence warning).
-                topMargin = dp(70)
-            },
-        )
-        panel.addView(buttonHolder, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            0,
-            1f,
-        ))
-
-        panel.addView(buildVoiceFooter(), LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            dp(84),
-        ))
-
-        // The undo/redo/edit controls float over the panel instead of taking
-        // a reserved slot in its own layout — that way showing or hiding
-        // them can never nudge the mic (or anything else) out of its
-        // original centered position, regardless of visibility state.
-        val overlayHost = FrameLayout(this).apply {
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
-        }
-        overlayHost.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        overlayHost.addView(buildDictationResultOverlay(), FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            android.view.Gravity.BOTTOM,
-        ).apply {
-            marginStart = dp(16)
-            marginEnd = dp(16)
-            // Panel's own bottom padding (4dp) + footer height (84dp) + a
-            // small gap (6dp), so this lands just above @ and backspace.
-            bottomMargin = dp(4) + dp(84) + dp(6)
-        })
-        return overlayHost
-    }
-
-    private fun buildVoiceHeader(): LinearLayout {
-        val header = LinearLayout(this).apply {
-            gravity = android.view.Gravity.CENTER_VERTICAL
-        }
-        header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(240), dp(38)))
-        return header
-    }
-
-    /** Flat pill fill (no elevation) shared by every footer-row button — @, return, backspace, undo/redo, edit. */
-    private fun flattenFooterButton(view: TextView, height: Int) {
-        view.elevation = 0f
-        view.translationZ = 0f
-        // A single flat fill, not roundedButton()'s layered "keycap" look
-        // (gradient face + exposed darker step) — genuinely flat, matching
-        // the mic capsule's own plain drawRoundRect fill exactly.
-        view.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = (height / 2).toFloat()
-            setColor(tone(Color.rgb(60, 60, 60), Color.rgb(225, 225, 228)))
+            ImeVoiceGesture.CLOUD_NOTE -> {
+                val prefs = getSharedPreferences("openless_ime_ui", MODE_PRIVATE)
+                val hasDestination = !prefs.getString("key_cloud_note_webhook_url", "").isNullOrBlank() &&
+                    !prefs.getString("key_cloud_note_webhook_token", "").isNullOrBlank()
+                if (!hasDestination) {
+                    updateStatus(ui("请先配置云笔记地址和 Token，未开始云笔记听写", "Configure the Cloud note URL and token first; recording was not changed"))
+                    return
+                }
+                if (!recording) toggleDictation(initialCloud = true)
+                if (recording) {
+                    cloudNoteArmed = true
+                    performDoubleKeyHaptic()
+                    updateStatus(currentMessage)
+                }
+            }
         }
     }
 
-    /** @ / return / backspace — the plain footer row, unaffected by the undo/redo/edit overlay above it. */
-    private fun buildVoiceFooter(): LinearLayout {
-        val footerButtonHeight = dp(48)
-        val footer = LinearLayout(this).apply {
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            clipChildren = false
-            clipToPadding = false
-        }
-        val atButton = keyboardKey("@", 1f, action = { currentInputConnection?.commitText("@", 1) }).apply {
-            textSize = 20f
-            contentDescription = ui("输入 @", "Insert at sign")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
-            flattenFooterButton(this, footerButtonHeight)
-        }
-        // Chinese UI shows "换行" (line break) instead of the English word
-        // "Return" — a real Chinese label reads better here than the
-        // borrowed English term, so it gets its own larger, bold treatment
-        // rather than reusing "Return"'s smaller size.
-        val returnLabel = if (englishUi) "Return" else "换行"
-        val returnButton = keyboardKey(returnLabel, 1f, action = { sendEnterKey() }).apply {
-            textSize = if (englishUi) 18f else 20f
-            if (englishUi) {
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            } else {
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            }
-            contentDescription = ui("回车", "Return")
-            layoutParams = LinearLayout.LayoutParams(dp(120), footerButtonHeight)
-            flattenFooterButton(this, footerButtonHeight)
-        }
-        val backspaceButton = keyboardKey(
-            "⌫",
-            1f,
-            action = { deleteBackward() },
-            repeatOnLongPress = true,
-            repeatAction = { deleteBackward() },
-        ).apply {
-            textSize = 22f
-            contentDescription = ui("退格", "Backspace")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
-            flattenFooterButton(this, footerButtonHeight)
-        }
-        val returnHolder = LinearLayout(this).apply {
-            gravity = android.view.Gravity.CENTER
-            addView(returnButton)
-        }
-        footer.addView(atButton)
-        footer.addView(returnHolder, LinearLayout.LayoutParams(0, dp(84), 1f))
-        footer.addView(backspaceButton)
-        return footer
-    }
-
-    /**
-     * Undo/redo + edit controls for the last dictation result, same size and
-     * style as the footer's @/backspace keys. Built standalone (not part of
-     * buildVoiceFooter()'s layout flow) so it can be positioned as a
-     * FrameLayout overlay above the footer — showing or hiding it can never
-     * shift the mic or footer since it never occupies space in their own
-     * LinearLayout.
-     */
-    private fun buildDictationResultOverlay(): View {
-        val footerButtonHeight = dp(48)
-        undoRedoButton = keyboardKey("✕", 1f, action = { toggleUndoRedoDictation() }).apply {
-            textSize = 20f
-            contentDescription = ui("撤销本次听写结果", "Undo this dictation")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
-            flattenFooterButton(this, footerButtonHeight)
-        }
-        editResultButton = keyboardKey("✎", 1f, action = { openDictationEditDraft(requireSelection = false) }).apply {
-            textSize = 20f
-            contentDescription = ui("编辑听写结果", "Edit dictation result")
-            layoutParams = LinearLayout.LayoutParams(dp(84), footerButtonHeight)
-            flattenFooterButton(this, footerButtonHeight)
-        }
-        val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        row.addView(undoRedoButton!!, LinearLayout.LayoutParams(dp(84), footerButtonHeight))
-        row.addView(View(this), LinearLayout.LayoutParams(0, footerButtonHeight, 1f))
-        row.addView(editResultButton!!, LinearLayout.LayoutParams(dp(84), footerButtonHeight))
-        dictationResultRow = row
-        updateDictationResultControls()
-        return row
+    private fun buildVoiceHeader(): ImeKeyboardHeader = ImeKeyboardHeader(
+        this, keyboardPalette(), buildModeToggle(), brandLogoBitmap,
+        onSettings = ::openSettings,
+        onKeyboardSettings = ::openKeyboardSettings,
+        onModeStep = ::swipeInputMode,
+        onHide = ::hideKeyboardPanel,
+    ).also {
+        keyboardHeader = it
+        backendLinkIndicator = it.indicator
+        updateBackendLinkIndicator()
     }
 
     internal fun refreshInputView() {
-        setInputView(onCreateInputView())
+        if (inputMode == InputMode.STROKE && appliedKeyboardFootprintKey == keyboardFootprintKey() &&
+            strokeController.refreshPanel()) return
+        if (inputMode == InputMode.CLIPBOARD && clipboardPanel != null &&
+            appliedKeyboardFootprintKey == keyboardFootprintKey()) {
+            renderClipboardPanel()
+            return
+        }
+        if (inputMode == InputMode.ENGLISH && typingPanel != null &&
+            appliedKeyboardFootprintKey == keyboardFootprintKey()) {
+            renderTypingKeyboard()
+            refreshLatinCandidateBar()
+            return
+        }
+        replaceSurfaceContent()
     }
 
     /**
@@ -1149,13 +944,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * width.
      */
     private fun refreshInputView(slideDirection: Int) {
-        val newView = onCreateInputView()
-        setInputView(newView)
+        val keyboard = replaceSurfaceContent()
         val offset = resources.displayMetrics.widthPixels.toFloat() * slideDirection
         // RaisedKeyboardHost wraps [panel, raiseSpacer] — slide the panel's
         // own children (skip header at 0), not the raise spacer. The draft
         // bar sits above that host and stays put as well.
-        val keyboard = (newView as? DraftHost)?.keyboard ?: newView
         val container = when (keyboard) {
             is RaisedKeyboardHost -> keyboard.getChildAt(0) as? ViewGroup
             is ViewGroup -> keyboard
@@ -1181,94 +974,18 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     // segment to the right slides in from the right, matching what a
     // swipe in that direction would already do. Tapping the
     // already-selected segment has no direction to slide from.
-    internal fun buildModeToggle(): View = ModeToggle(this, inputMode, isDarkTheme) { selected ->
+    internal fun buildModeToggle(): View = ImeModeBar(
+        this, ImePalette.resolve(isDarkTheme),
+        listOf(ui("语音", "Voice"), ui("笔画", "Stroke"), ui("编辑", "Edit"), ui("键盘", "Keys")),
+        inputMode.ordinal,
+    ) { index ->
+        val selected = InputMode.entries[index]
         val direction = when {
             selected.ordinal > inputMode.ordinal -> 1
             selected.ordinal < inputMode.ordinal -> -1
             else -> null
         }
         selectInputMode(selected, slideDirection = direction)
-    }
-
-    /**
-     * White-on-transparent wordmark used in every panel header, replacing
-     * the old text label, plus the backend-link status dot right after it.
-     * A plain horizontal LinearLayout (not a FrameLayout) so the dot just
-     * lands after the logo/text in sequence with a fixed gap, regardless of
-     * which of the two logo/text branches below actually renders — the
-     * existing call sites all pass their own LinearLayout.LayoutParams for
-     * this whole row.
-     */
-    internal fun buildBrandView(): View {
-        val bitmap = brandLogoBitmap
-        val wrapper = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
-            isClickable = true
-            contentDescription = ui("打开 OpenLess 设置", "Open OpenLess settings")
-            setOnClickListener { openSettings() }
-            // Long-press opens a full-screen native settings window for
-            // keyboard-only preferences (starting with vibration) that don't
-            // need the full OpenLess app — separate from the short-tap,
-            // which still opens the main app's own settings.
-            setOnLongClickListener {
-                openKeyboardSettings()
-                true
-            }
-        }
-        if (bitmap != null) {
-            // Half the wordmark's previous rendered size — at full size it
-            // crowded the header row next to the mode toggle/close button.
-            val heightPx = dp(19)
-            val widthPx = (heightPx.toFloat() * bitmap.width / bitmap.height).toInt()
-            wrapper.addView(android.widget.ImageView(this).apply {
-                setImageBitmap(bitmap)
-                scaleType = android.widget.ImageView.ScaleType.FIT_XY
-                // The wordmark asset is white-on-transparent; on the light
-                // theme's light panel that would be invisible, so it's
-                // recolored dark via a tint rather than shipping a second
-                // asset.
-                if (!isDarkTheme) {
-                    colorFilter = android.graphics.PorterDuffColorFilter(Color.rgb(30, 30, 34), android.graphics.PorterDuff.Mode.SRC_IN)
-                }
-            }, LinearLayout.LayoutParams(widthPx, heightPx))
-        } else {
-            wrapper.addView(TextView(this).apply {
-                text = "OpenLess"
-                textSize = 18f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setTextColor(tone(Color.WHITE, Color.rgb(30, 30, 34)))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        // Status dot: see backendLinkIndicator's field comment. Reassigned
-        // here on every panel rebuild (buildBrandView() is shared by every
-        // panel's own header), then immediately colored so it never shows a
-        // stale state (e.g. still green right after a rebuild that happened
-        // while actually recording) — visible everywhere per product
-        // request, not just the Voice panel.
-        backendLinkIndicator = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(LINK_COLOR_READY)
-            }
-        }
-        // Continuous breathing pulse so the dot reads as "alive" rather
-        // than a static badge — cancels whatever animator was running on
-        // the previous panel's now-discarded indicator first, since each
-        // rebuild creates a brand new View instance.
-        backendLinkPulseAnimator?.cancel()
-        backendLinkPulseAnimator = android.animation.ObjectAnimator.ofFloat(backendLinkIndicator, View.ALPHA, 1f, 0.35f).apply {
-            duration = BACKEND_LINK_READY_PULSE_DURATION_MS
-            repeatMode = android.animation.ValueAnimator.REVERSE
-            repeatCount = android.animation.ValueAnimator.INFINITE
-            start()
-        }
-        wrapper.addView(
-            backendLinkIndicator,
-            LinearLayout.LayoutParams(dp(12), dp(12)).apply { marginStart = dp(5) },
-        )
-        updateBackendLinkIndicator()
-        return wrapper
     }
 
     private fun selectInputMode(selected: InputMode, slideDirection: Int? = null) {
@@ -1278,6 +995,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         englishLayer = EnglishLayer.LETTERS
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
+        clearPinyinComposingInEditor()
         rimePinyinController.clear()
         rimePinyinController.resetAssociationContext()
         strokeController.resetForModeSwitch()
@@ -1294,7 +1012,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /**
-     * Left/right swipe on any panel steps through the same Voice-Stroke-English
+     * A deliberate header swipe steps through the same mode order
      * order as the toggle switch, clamped at both ends (no wraparound) —
      * swiping left keeps landing on Voice, right keeps landing on English.
      * The new panel slides in from the side matching the ordinal direction
@@ -1306,325 +1024,113 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         if (next != inputMode) selectInputMode(next, slideDirection = direction)
     }
 
-    /**
-     * English ABC/123/#+= keyboard — key relationships (rows, per-row key
-     * count, relative widths, and the 123/ABC/#+= switching logic) follow
-     * iOS 17's own English keyboard; colors, key surface, and every other
-     * visual detail are OpenLess's existing key styling (roundedButton()/
-     * tone()), matching the stroke panel. See EnglishLayer for the ABC/123/
-     * #+= state and README's "英文键盘 iOS 17 布局" entry for the full
-     * rationale.
-     */
-    /**
-     * Wraps a panel root in a plain FrameLayout with a KeyPreviewOverlay as
-     * its second (top-drawn) child, so every key preview bubble in that
-     * panel renders above the whole keyboard — unclipped by the panel's own
-     * clipChildren/candidate-row/mode-toggle bounds — without taking part in
-     * its layout at all. The wrapper takes on the panel's own layoutParams
-     * (every panel already sets its own fixed MATCH_PARENT x keyboardPanelHeightPx()) so
-     * this changes nothing about the panel's measured size; the panel then
-     * fills the wrapper exactly as it used to fill the IME window directly.
-     */
-    private fun wrapWithKeyPreviewOverlay(content: View): View {
-        val host = FrameLayout(this).apply {
-            layoutParams = content.layoutParams ?: ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
-            clipChildren = false
-            clipToPadding = false
-        }
-        host.addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        val overlay = KeyPreviewOverlay(this, isDarkTheme)
-        keyPreviewOverlay = overlay
-        host.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        return host
-    }
+    private var typingPanel: ImeTypingPanel? = null
 
+    /** Native presentation is independent of the IME's input/learning backends. */
     private fun buildKeyboardView(): View {
-        val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
-            minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-        }
-        val header = LinearLayout(this).apply {
-            gravity = android.view.Gravity.CENTER_VERTICAL
-        }
-        header.addView(buildBrandView(), LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(240), dp(38)))
-        // This panel's own root padding (8dp) is narrower than the voice panel's
-        // (16dp), which it needs for its body rows. Compensate with margins so
-        // the header/toggle still land at the same canonical 16dp/8dp inset as
-        // every other panel — otherwise the logo and toggle visibly jump left
-        // and up when switching modes.
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
-            marginStart = dp(8)
-            marginEnd = dp(8)
-        })
-
-        root.addView(buildEnglishCandidateBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        refreshLatinCandidateBar()
-
-        when (englishLayer) {
-            EnglishLayer.LETTERS -> {
-                addEnglishCharRow(
-                    root,
-                    listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
-                    swipeSymbols = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
-                )
-                // iOS insets this row by half a key on each side (9 keys
-                // spanning the same width as the 10-key rows above/below);
-                // 0.5f spacers on either side of 1f-weight letter keys
-                // reproduce that without a second, differently-measured row.
-                val row2 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-                row2.addView(View(this), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f))
-                listOf("a", "s", "d", "f", "g", "h", "j", "k", "l")
-                    .zip(listOf("~", "@", "#", "!", "%", "&", "*", "(", ")"))
-                    .forEach { (key, symbol) -> row2.addView(buildEnglishCharKey(key, 1f, swipeSymbol = symbol)) }
-                row2.addView(View(this), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.5f))
-                root.addView(row2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-                val row3 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-                row3.addView(keyboardKey("⇧", 1.5f, action = { cycleEnglishShift() }))
-                listOf("z", "x", "c", "v", "b", "n", "m")
-                    .zip(listOf("'", "/", "-", "_", ":", ";", "?"))
-                    .forEach { (key, symbol) -> row3.addView(buildEnglishCharKey(key, 1f, swipeSymbol = symbol)) }
-                row3.addView(
-                    keyboardKey("⌫", 1.5f, action = { englishDeleteBackward() }, repeatOnLongPress = true, repeatAction = { englishDeleteBackward() }).apply {
-                        // Same cherry red as the stroke panel's own
-                        // right-side action rail, matching the Return key
-                        // right next to it.
-                        background = roundedButton(Color.rgb(153, 26, 40), dp(5))
-                        setTextColor(Color.WHITE)
-                    },
-                )
-                root.addView(row3, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-            }
-            EnglishLayer.NUMBERS -> {
-                addEnglishCharRow(root, listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"))
-                addEnglishCharRow(root, listOf("-", "/", ":", ";", "(", ")", "$", "&", "@", "\""))
-                addEnglishSymbolActionRow(root, listOf(".", ",", "?", "!", "'"))
-            }
-            EnglishLayer.SYMBOLS -> {
-                addEnglishCharRow(root, listOf("[", "]", "{", "}", "#", "%", "^", "*", "+", "="))
-                addEnglishCharRow(root, listOf("_", "\\", "|", "~", "<", ">", "€", "£", "¥", "•"))
-                addEnglishSymbolActionRow(root, listOf(".", ",", "?", "!", "'"))
-            }
-        }
-
-        val bottom = LinearLayout(this).apply {
-            gravity = android.view.Gravity.CENTER_VERTICAL
-        }
-        // Same sans-serif-medium as the letter grid (buildEnglishCharKey()'s
-        // letterView), applied after the fact rather than as a keyboardKey()
-        // parameter — keyboardKey() is shared by every panel's keys, and
-        // only these two English bottom-row labels are meant to match the
-        // letters' new weight for now. Size/color/position left exactly as
-        // keyboardKey() already set them.
-        // Swipe up on "123" for a comma and on Space for a full stop — the
-        // two marks the letter grid's own swipe-up symbols leave out. Neither
-        // key shows a hint for it; the preview bubble names the mark mid-swipe.
-        val onLetters = englishLayer == EnglishLayer.LETTERS
-        val modeButton = keyboardKey(
-            if (onLetters) "123" else "ABC",
-            1.3f,
-            action = { handleEnglishBottomModeToggle() },
-            swipeUpAction = if (onLetters) ({ commitEnglishChar(",") }) else null,
-            swipePreview = if (onLetters) "," else null,
-        ).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
-        // "Space" stays keyboardKey()'s own plain centered label (own
-        // View, own vertical centering, untouched by the hint) — per
-        // real-device feedback, side-by-side (hint right-aligned next to
-        // "Space", both 12sp) reads much better than the two stacked-line
-        // approaches tried first (a single two-line SpannableString label,
-        // and before that a padding-pushed overlay), both of which fought
-        // this row's actual (tighter than assumed) real height.
-        val spaceButton = keyboardKey("Space", 5f, action = {
-            if (latinInputMode == LatinInputMode.PINYIN) {
-                rimePinyinController.space { renderPinyinCandidates(it) }
-                return@keyboardKey
-            }
-            finalizeEnglishComposingWord()
-            rimePinyinController.clear()
-            commitEnglishSpace()
-        }, swipeUpAction = { commitEnglishChar(".") }, swipePreview = ".", longPressAction = { toggleLatinInputMode() }).apply {
-            // Same size as Return (17sp — keyboardKey()'s own special case
-            // for that label), per real-device feedback.
-            textSize = 17f
-        }
-        // Own View, overlaid on top of spaceButton (not inside its own
-        // text) — left-aligned and vertically centered. The hint keeps its
-        // own tap/long-press target, while upward swipes are delegated to
-        // spaceButton so the key's existing preview and commit handling is
-        // shared. Shows BOTH labels (拼音 always on top, 英文 always on the
-        // bottom — fixed position, per user request) rather than just naming
-        // the target mode — whichever is currently active is cherry red, the
-        // other gray, so long-press's effect is legible at a glance either
-        // way.
-        val spaceHint = TextView(this).apply {
-            val pinyinLabel = ui("拼音", "PINYIN")
-            val englishLabel = ui("英文", "ENGLISH")
-            val hintText = "$pinyinLabel\n$englishLabel"
-            val englishStart = hintText.length - englishLabel.length
-            val activeColor = if (isDarkTheme) Color.rgb(190, 45, 60) else Color.rgb(153, 26, 40)
-            val inactiveColor = tone(Color.rgb(150, 150, 150), Color.rgb(140, 140, 145))
-            text = android.text.SpannableString(hintText).apply {
-                setSpan(
-                    android.text.style.ForegroundColorSpan(if (latinInputMode == LatinInputMode.PINYIN) activeColor else inactiveColor),
-                    0, pinyinLabel.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
-                )
-                setSpan(
-                    android.text.style.ForegroundColorSpan(if (latinInputMode == LatinInputMode.ENGLISH) activeColor else inactiveColor),
-                    englishStart, hintText.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
-                )
-            }
-            textSize = 12f
-            gravity = android.view.Gravity.CENTER
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            isClickable = true
-            isFocusable = true
-            contentDescription = ui("切换拼音和英文", "Switch between Pinyin and English")
-            setOnClickListener { toggleLatinInputMode() }
-            // Keep the hint above the raised space key so its tap target is
-            // the visible mode label rather than the key underneath it.
-            translationZ = dp(10).toFloat()
-        }
-        var forwardingSpaceSwipe = false
-        var spaceHintLongPressed = false
-        var spaceHintDown: MotionEvent? = null
-        fun dispatchSpaceTouch(event: MotionEvent) {
-            val forwarded = MotionEvent.obtain(event)
-            val hintLocation = IntArray(2)
-            val spaceLocation = IntArray(2)
-            spaceHint.getLocationOnScreen(hintLocation)
-            spaceButton.getLocationOnScreen(spaceLocation)
-            forwarded.offsetLocation(
-                (hintLocation[0] - spaceLocation[0]).toFloat(),
-                (hintLocation[1] - spaceLocation[1]).toFloat(),
-            )
-            spaceButton.dispatchTouchEvent(forwarded)
-            forwarded.recycle()
-        }
-        spaceHint.setOnLongClickListener {
-            spaceHintLongPressed = true
-            toggleLatinInputMode()
-            true
-        }
-        spaceHint.setOnTouchListener { view, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    spaceHintDown?.recycle()
-                    spaceHintDown = MotionEvent.obtain(event)
-                    forwardingSpaceSwipe = false
-                    spaceHintLongPressed = false
+        // Survives a presentation-only rebuild while processing, but this view
+        // still cannot cancel a different request started by a newer view.
+        var viewVoiceOwner = typingVoiceOwner
+        return ImeTypingPanel(
+            this,
+            ImePalette.resolve(isDarkTheme),
+            buildVoiceHeader(),
+            onAction = ::handleTypingAction,
+            onFeedback = ::performKeyHaptic,
+            onVoiceStart = {
+                if (recording || processing) {
                     false
+                } else if (!rimePinyinController.isEmpty()) {
+                    updateStatus(ui("请先确认拼音候选，再开始说话", "Confirm the Pinyin candidate before speaking"))
+                    false
+                } else {
+                    finalizeEnglishComposingWord()
+                    if (!recording && !processing) toggleDictation()
+                    if (recording) {
+                        viewVoiceOwner = ImeRequestOwner(sessionEpoch, imeRequestId)
+                        typingVoiceOwner = viewVoiceOwner
+                    }
+                    recording
                 }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!forwardingSpaceSwipe && !spaceHintLongPressed && spaceHintDown != null &&
-                        spaceHintDown!!.y - event.y >= dp(10)
-                    ) {
-                        forwardingSpaceSwipe = true
-                        view.cancelLongPress()
-                        view.isPressed = false
-                        view.parent?.requestDisallowInterceptTouchEvent(true)
-                        spaceHintDown?.let { dispatchSpaceTouch(it) }
-                        dispatchSpaceTouch(event)
-                        true
-                    } else if (forwardingSpaceSwipe) {
-                        dispatchSpaceTouch(event)
-                        true
-                    } else {
-                        false
+            },
+            onVoiceEnd = { cancelled ->
+                val owner = viewVoiceOwner
+                if (owner != null && owner == typingVoiceOwner && owner.matches(sessionEpoch, imeRequestId)) {
+                    if (cancelled) {
+                        viewVoiceOwner = null
+                        typingVoiceOwner = null
+                        if (recording || processing) cancelDictation()
+                    } else if (recording) {
+                        // Release stops capture, but ownership remains while the
+                        // result is processing so the visible Cancel still works.
+                        toggleDictation()
                     }
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (forwardingSpaceSwipe) {
-                        dispatchSpaceTouch(event)
-                        view.isPressed = false
-                        forwardingSpaceSwipe = false
-                        spaceHintDown?.recycle()
-                        spaceHintDown = null
-                        true
-                    } else {
-                        spaceHintDown?.recycle()
-                        spaceHintDown = null
-                        false
-                    }
+            },
+            interfaceEnglish = englishUi,
+            interactionPolicy = interactionPolicy(),
+            onClearPreedit = ::clearPinyinEncoding,
+            onCommitRawPreedit = ::commitRawPinyinInput,
+            onCursorMove = ::handleTypingCursorMove,
+            onDeleteWord = ::handleTypingDeleteWord,
+        ).also {
+            typingPanel = it
+            renderTypingKeyboard()
+            refreshLatinCandidateBar()
+            renderClipboardQuickChip()
+            renderVoiceUi()
+        }
+    }
+
+    private fun renderTypingKeyboard() {
+        typingPanel?.renderKeyboard(
+            ImeKeyboardLayer.valueOf(englishLayer.name),
+            if (latinInputMode == LatinInputMode.PINYIN) ImeTypingLanguage.PINYIN else ImeTypingLanguage.ENGLISH,
+            when (shiftState) {
+                ShiftState.OFF -> ImeLetterCase.LOWER
+                ShiftState.SHIFT_ONCE -> ImeLetterCase.SHIFT
+                ShiftState.CAPS_LOCK -> ImeLetterCase.CAPS_LOCK
+            },
+            editorActionLabel(),
+            englishUi,
+        )
+    }
+
+    private fun editorActionLabel(): String {
+        val options = currentInputEditorInfo?.imeOptions ?: 0
+        if (draftEdit != null || options and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) return ui("换行", "Return")
+        return when (options and EditorInfo.IME_MASK_ACTION) {
+            EditorInfo.IME_ACTION_SEARCH -> ui("搜索", "Search")
+            EditorInfo.IME_ACTION_SEND -> ui("发送", "Send")
+            EditorInfo.IME_ACTION_GO -> ui("前往", "Go")
+            EditorInfo.IME_ACTION_NEXT -> ui("下一项", "Next")
+            EditorInfo.IME_ACTION_DONE -> ui("完成", "Done")
+            else -> ui("换行", "Return")
+        }
+    }
+
+    private fun handleTypingAction(action: ImeKeyAction) {
+        if (recording || processing) return
+        when (action) {
+            is ImeKeyAction.Text -> commitEnglishChar(action.value)
+            ImeKeyAction.Backspace -> englishDeleteBackward()
+            ImeKeyAction.Shift -> cycleEnglishShift()
+            ImeKeyAction.Language -> toggleLatinInputMode()
+            ImeKeyAction.ToggleNumbers -> handleEnglishBottomModeToggle()
+            ImeKeyAction.ToggleSymbols -> handleEnglishRow3ModeToggle()
+            ImeKeyAction.Space -> {
+                if (latinInputMode == LatinInputMode.PINYIN) {
+                    rimePinyinController.space { renderPinyinCandidates(it) }
+                } else {
+                    finalizeEnglishComposingWord()
+                    commitEnglishSpace()
                 }
-                else -> forwardingSpaceSwipe
+            }
+            ImeKeyAction.Enter -> {
+                if (latinInputMode != LatinInputMode.PINYIN) finalizeEnglishComposingWord()
+                sendEnterKey()
             }
         }
-        val spaceWrapper = FrameLayout(this).apply {
-            addView(spaceButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(
-                spaceHint,
-                FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START).apply {
-                    marginStart = dp(14)
-                },
-            )
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 5f)
-        }
-        val returnButton = keyboardKey("Return", 1.7f, action = {
-            if (latinInputMode != LatinInputMode.PINYIN) finalizeEnglishComposingWord()
-            sendEnterKey()
-        }).apply {
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            // Same cherry red as the stroke panel's own right-side action
-            // rail (Color.rgb(153, 26, 40)), per product request; fixed
-            // white text regardless of theme since keyboardKey()'s own
-            // default text color reads poorly against red in light theme.
-            background = roundedButton(Color.rgb(153, 26, 40), dp(5))
-            setTextColor(Color.WHITE)
-        }
-        bottom.addView(modeButton)
-        bottom.addView(spaceWrapper)
-        bottom.addView(returnButton)
-        root.addView(bottom, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        return root
-    }
-
-    /**
-     * A plain character row (digits/symbols, no shift-sensitivity) built
-     * from buildEnglishCharKey() — key preview, no drag-to-adjacent-key
-     * distinction from a letter row since neither cares about shift.
-     *
-     * @param swipeSymbols Same size as [keys] when given (the QWERTY top
-     *   row's own q..p -> 1..0 mapping) — forwarded 1:1 as each key's own
-     *   swipe-up symbol. Left null for every other row (NUMBERS/SYMBOLS
-     *   layers are already digits/symbols themselves; nothing to swipe up
-     *   to). Clears englishSwipeSymbols first — this is always the first
-     *   row built for a fresh LETTERS render (see buildKeyboardView()), so
-     *   row2/row3's own direct buildEnglishCharKey() calls right after can
-     *   add straight into the same now-fresh map without re-clearing it.
-     */
-    private fun addEnglishCharRow(parent: LinearLayout, keys: List<String>, swipeSymbols: List<String>? = null) {
-        if (swipeSymbols != null) {
-            englishSwipeSymbols.clear()
-            englishLetterKeys.clear()
-        }
-        val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-        keys.forEachIndexed { index, key ->
-            row.addView(buildEnglishCharKey(key, 1f, swipeSymbol = swipeSymbols?.getOrNull(index)))
-        }
-        parent.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-    }
-
-    /**
-     * 123 page's row 3 (`#+=  .  ,  ?  !  '  ⌫`) and #+= page's row 3
-     * (`123  .  ,  ?  !  '  ⌫`) — same shape, only the leading toggle
-     * key's label/action differs, so both layers share this one builder.
-     */
-    private fun addEnglishSymbolActionRow(parent: LinearLayout, middleKeys: List<String>) {
-        val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-        val toggleLabel = if (englishLayer == EnglishLayer.NUMBERS) "#+=" else "123"
-        row.addView(keyboardKey(toggleLabel, 1.5f, action = { handleEnglishRow3ModeToggle() }))
-        middleKeys.forEach { row.addView(buildEnglishCharKey(it, 1f)) }
-        row.addView(
-            keyboardKey("⌫", 1.5f, action = { englishDeleteBackward() }, repeatOnLongPress = true, repeatAction = { englishDeleteBackward() }).apply {
-                background = roundedButton(Color.rgb(153, 26, 40), dp(5))
-                setTextColor(Color.WHITE)
-            },
-        )
-        parent.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
     /** Bottom-row toggle: always jumps straight to/from Letters, regardless of which of Numbers/Symbols was showing (matches iOS's own "ABC" key). */
@@ -1747,198 +1253,176 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         updateEnglishCandidates()
     }
 
-    /**
-     * The selected/first candidate is marked by color+weight only (the same
-     * red as the right-hand action rail's ←/↵/清除/123 keys, bold) — no
-     * size, background, border or shadow change, so it can't shift
-     * candidate width/spacing or row height. A real else branch (not just
-     * skipping the isFirst==false case) matters once populateCandidateRow()
-     * can reuse a view that used to be first-candidate for one that isn't.
-     */
-    internal fun styleCandidateFirstState(view: TextView, isFirst: Boolean) {
-        if (isFirst) {
-            // Same red as the action rail's own background
-            // (Color.rgb(153, 26, 40)), brightened a touch for dark
-            // theme only — same hue, just a bit lighter so it reads
-            // more clearly against a dark panel; light theme keeps the
-            // exact action-rail red.
-            view.setTextColor(if (isDarkTheme) Color.rgb(190, 45, 60) else Color.rgb(153, 26, 40))
-            view.setTypeface(view.typeface, android.graphics.Typeface.BOLD)
-        } else {
-            view.setTextColor(tone(Color.rgb(245, 245, 245), Color.rgb(30, 30, 34)))
-            view.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL)
-        }
-    }
-
-    /**
-     * Plain-text candidate item — no independent keycap background, just the
-     * label, matching a stroke candidate bar rather than a row of separate
-     * buttons. Height always comes from the parent row (MATCH_PARENT) so it
-     * can never itself grow the fixed 36dp candidate row.
-     */
-    internal fun candidateItemView(
-        label: String,
-        isFirst: Boolean,
-        onLongPress: (() -> Unit)? = null,
-        action: () -> Unit,
-    ): TextView {
-        return keyboardKey(label, 1f, action = action, longPressAction = onLongPress).apply {
-            // Was 20f/dp(9); briefly tried 17f/dp(12) to fix a clipped-glyph
-            // report on a Xiaomi MIUI device (that OEM's default system
-            // font renders visibly wider per character than stock Android
-            // at the same sp), but 20sp reads noticeably better across
-            // devices — settled on keeping the original text size and
-            // widening padding a bit instead (dp(9) -> dp(11)), which still
-            // gives MIUI's wider glyphs a bit more breathing room without
-            // shrinking the text everyone else sees.
-            textSize = 20f
-            setSingleLine(true)
-            maxLines = 1
-            background = null
-            elevation = 0f
-            translationZ = 0f
-            setPadding(dp(11), 0, dp(11), 0)
-            styleCandidateFirstState(this, isFirst)
-        }
-    }
-
-    /** What a reusable candidate view in englishCandidateRow does when tapped, swapped on every reuse. */
-    private class LatinCandidateSlot(val hasLongPress: Boolean) {
-        var action: () -> Unit = {}
-        var longPress: () -> Unit = {}
-    }
-
     private class LatinCandidate(val label: String, val longPress: (() -> Unit)?, val action: () -> Unit)
 
-    private var pinyinEncodingLabel: TextView? = null
-
-    /**
-     * Fills englishCandidateRow with [candidates] (after an optional
-     * non-clickable [leadingLabel], pinyin's in-progress encoding), reusing
-     * the candidate views already there — same idea as the stroke row's
-     * populateCandidateRow(): this runs on every keystroke, and creating a
-     * dozen keyboardKey() views each time was the costly part. A view's tap
-     * and long-press go through its LatinCandidateSlot, so reusing it only
-     * swaps the slot's actions; keyboardKey()'s own long-press handling
-     * (including swallowing the tap that ends a long press) stays intact.
-     * Only a view of the same kind is reused — whether it has a long press
-     * is fixed when keyboardKey() builds it.
-     */
-    private fun populateLatinCandidateRow(candidates: List<LatinCandidate>, leadingLabel: String? = null) {
-        val row = englishCandidateRow ?: return
-        val firstIsLabel = row.childCount > 0 && row.getChildAt(0) === pinyinEncodingLabel
-        var offset = 0
-        if (leadingLabel != null) {
-            val label = if (firstIsLabel) pinyinEncodingLabel!! else TextView(this).apply {
-                textSize = 16f
-                setSingleLine(true)
-                gravity = android.view.Gravity.CENTER
-                setTextColor(tone(Color.rgb(180, 180, 180), Color.rgb(120, 120, 125)))
-                setPadding(dp(9), 0, dp(9), 0)
-                isClickable = false
-            }.also {
-                pinyinEncodingLabel = it
-                row.addView(it, 0, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            }
-            label.text = leadingLabel
-            offset = 1
-        } else if (firstIsLabel) {
-            row.removeViewAt(0)
-        }
-        candidates.forEachIndexed { index, candidate ->
-            val position = offset + index
-            val existing = row.getChildAt(position) as? TextView
-            val existingSlot = existing?.let { latinCandidateSlots[it] }
-            val view: TextView
-            val slot: LatinCandidateSlot
-            if (existing != null && existingSlot != null && existingSlot.hasLongPress == (candidate.longPress != null)) {
-                view = existing
-                slot = existingSlot
-            } else {
-                val fresh = LatinCandidateSlot(candidate.longPress != null)
-                slot = fresh
-                view = candidateItemView(
-                    candidate.label,
-                    isFirst = index == 0,
-                    onLongPress = if (fresh.hasLongPress) ({ fresh.longPress() }) else null,
-                    action = { fresh.action() },
-                )
-                latinCandidateSlots[view] = fresh
-                if (existing != null || position < row.childCount) row.removeViewAt(position)
-                row.addView(view, position, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            }
-            slot.action = candidate.action
-            candidate.longPress?.let { slot.longPress = it }
-            if (view.text.toString() != candidate.label) view.text = candidate.label
-            view.contentDescription = candidate.label
-            styleCandidateFirstState(view, index == 0)
-        }
-        while (row.childCount > offset + candidates.size) row.removeViewAt(row.childCount - 1)
-        // Shared with the stroke panel's own candidate row (only one of the
-        // two is ever visible at a time) — see showCandidateOverlay().
-        candidateOverlayEntries = candidates.map { it.label to it.action }
-        if (candidates.isEmpty()) englishExpandCandidatesButton?.visibility = View.GONE
+    /** Provider callbacks become target-bound actions; presentation owns view reuse. */
+    private fun populateLatinCandidateRow(
+        candidates: List<LatinCandidate>,
+        leadingLabel: String? = null,
+        statusHint: String? = null,
+    ) {
+        val epoch = sessionEpoch
+        typingPanel?.submitCandidates(candidates.map { candidate ->
+            ImeTypingPanel.Candidate(
+                candidate.label,
+                select = { if (epoch == sessionEpoch && inputMode == InputMode.ENGLISH) candidate.action() },
+                forget = candidate.longPress?.let { action ->
+                    { if (epoch == sessionEpoch && inputMode == InputMode.ENGLISH) action() }
+                },
+            )
+        }, leadingLabel, statusHint)
     }
 
-    /**
-     * "Show more candidates" overlay — a PopupWindow anchored below the
-     * candidate row, wrapping the current full candidate/association list
-     * (whichever is showing) into a flow of rows. A PopupWindow floats over
-     * the existing panel without resizing or displacing it, matching the
-     * "must not push the keys below or change the keyboard height" rule.
-     */
-    internal fun showCandidateOverlay(anchor: View) {
-        if (candidateOverlayEntries.isEmpty()) return
-        var activePopup: android.widget.PopupWindow? = null
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+    private fun syncPinyinComposingText(preedit: String?) {
+        val connection = currentInputConnection
+        val allowed = connection != null &&
+            inputMode == InputMode.ENGLISH &&
+            latinInputMode == LatinInputMode.PINYIN &&
+            !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)
+        if (allowed && !preedit.isNullOrEmpty()) {
+            connection.setComposingText(preedit, 1)
+            pinyinComposingActive = true
+        } else {
+            clearPinyinComposingInEditor()
         }
-        var currentRow: LinearLayout? = null
-        var usedWidth = 0
-        val maxRowWidth = resources.displayMetrics.widthPixels - dp(32)
-        candidateOverlayEntries.forEach { (label, action) ->
-            val itemWidth = dp((label.codePointCount(0, label.length) * 24 + 20).coerceAtLeast(52))
-            if (currentRow == null || usedWidth + itemWidth > maxRowWidth) {
-                currentRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                content.addView(currentRow)
-                usedWidth = 0
+    }
+
+    private fun clearPinyinComposingInEditor() {
+        if (!pinyinComposingActive) return
+        pinyinComposingActive = false
+        currentInputConnection?.let { connection ->
+            connection.setComposingText("", 1)
+            connection.finishComposingText()
+        }
+    }
+
+    private fun clearPinyinEncoding() {
+        clearPinyinComposingInEditor()
+        rimePinyinController.clear()
+        renderPinyinCandidates(emptyList())
+    }
+
+    private fun commitRawPinyinInput() {
+        if (latinInputMode != LatinInputMode.PINYIN || ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) return
+        rimePinyinController.commitRawInput({ renderPinyinCandidates(it) }, {})
+    }
+
+    private fun handleTypingCursorMove(delta: Int) {
+        if (delta == 0) return
+        if (latinInputMode == LatinInputMode.PINYIN && !rimePinyinController.isEmpty()) return
+        finalizeEnglishComposingWord()
+        val key = if (delta > 0) android.view.KeyEvent.KEYCODE_DPAD_RIGHT else android.view.KeyEvent.KEYCODE_DPAD_LEFT
+        sendClipboardCursorKey(key)
+    }
+
+    private fun handleTypingDeleteWord() {
+        if (latinInputMode == LatinInputMode.PINYIN && !rimePinyinController.isEmpty()) {
+            clearPinyinEncoding()
+            return
+        }
+        clearEnglishAutoText()
+        finalizeEnglishComposingWord()
+        val connection = currentInputConnection ?: return
+        val selected = connection.getSelectedText(0)?.toString()
+        if (!selected.isNullOrEmpty()) {
+            if (connection.commitText("", 1)) offerUndoDeleteChip(selected)
+            return
+        }
+        val before = connection.getTextBeforeCursor(24, 0)?.toString().orEmpty()
+        if (before.isEmpty()) return
+        val deleteLen = computeWordDeleteLength(before)
+        if (deleteLen <= 0) return
+        val removed = before.takeLast(deleteLen)
+        if (connection.deleteSurroundingText(deleteLen, 0)) {
+            rimePinyinController.resetAssociationContext()
+            offerUndoDeleteChip(removed)
+        }
+    }
+
+    private fun computeWordDeleteLength(before: String): Int {
+        var idx = before.length
+        while (idx > 0 && before[idx - 1].isWhitespace()) idx--
+        if (idx == 0) return before.length
+        val last = before[idx - 1]
+        if (last.isLetterOrDigit() && last.code < 128) {
+            while (idx > 0 && (before[idx - 1].isLetterOrDigit() && before[idx - 1].code < 128 || before[idx - 1] == '\'')) idx--
+        } else if (last in '\u4e00'..'\u9fff') {
+            var chars = 0
+            while (idx > 0 && chars < 4 && before[idx - 1] in '\u4e00'..'\u9fff') {
+                idx--
+                chars++
             }
-            currentRow?.addView(
-                TextView(this).apply {
-                    text = label
-                    textSize = 21f
-                    setSingleLine(true)
-                    gravity = android.view.Gravity.CENTER
-                    setTextColor(tone(Color.rgb(245, 245, 245), Color.rgb(30, 30, 34)))
-                    setPadding(dp(10), dp(10), dp(10), dp(10))
-                    setOnClickListener {
-                        action()
-                        activePopup?.dismiss()
-                    }
-                },
-                LinearLayout.LayoutParams(itemWidth, dp(46)),
-            )
-            usedWidth += itemWidth
+        } else {
+            idx--
         }
-        val scroll = android.widget.ScrollView(this).apply {
-            isVerticalScrollBarEnabled = false
-            addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        return (before.length - idx).coerceAtLeast(1)
+    }
+
+    private fun offerUndoDeleteChip(deleted: String) {
+        if (deleted.isEmpty() || isSensitiveField(currentInputEditorInfo)) return
+        quickChipPayload = deleted
+        val preview = deleted.replace('\n', ' ').take(10)
+        quickChipLabel = ui("撤销删除「$preview」", "Undo \"$preview\"")
+        quickChipExpiresAtMs = android.os.SystemClock.elapsedRealtime() + 15_000L
+        quickChipIsUndoDelete = true
+        renderClipboardQuickChip()
+    }
+
+    private fun offerClipboardQuickChip(rawText: String) {
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty() || trimmed.length > 200) return
+        val otp = extractVerificationCode(trimmed)
+        if (otp != null) {
+            quickChipPayload = otp
+            quickChipLabel = ui("验证码: $otp", "Code: $otp")
+        } else {
+            quickChipPayload = trimmed
+            val preview = trimmed.replace('\n', ' ').take(18)
+            quickChipLabel = ui("粘贴: $preview", "Paste: $preview")
         }
-        val card = LinearLayout(this).apply {
-            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            background = roundedButton(tone(Color.rgb(45, 45, 45), Color.rgb(238, 238, 241)), dp(8))
+        quickChipExpiresAtMs = android.os.SystemClock.elapsedRealtime() + 120_000L
+        quickChipIsUndoDelete = false
+        renderClipboardQuickChip()
+    }
+
+    private fun extractVerificationCode(text: String): String? {
+        if (text.matches(Regex("\\d{4,8}"))) return text
+        val hasCue = text.contains("验证码") || text.contains("校验码") || text.contains("动态码") ||
+            text.contains("code", ignoreCase = true) || text.contains("otp", ignoreCase = true)
+        if (!hasCue) return null
+        return Regex("(?<!\\d)(\\d{4,8})(?!\\d)").find(text)?.groupValues?.getOrNull(1)
+    }
+
+    private fun dismissQuickChip() {
+        quickChipPayload = null
+        quickChipLabel = null
+        quickChipExpiresAtMs = 0L
+        quickChipIsUndoDelete = false
+        typingPanel?.setClipboardSuggestion(null, {}, {})
+    }
+
+    private fun renderClipboardQuickChip() {
+        val panel = typingPanel ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        val payload = quickChipPayload
+        val label = quickChipLabel
+        if (payload == null || label == null || now > quickChipExpiresAtMs ||
+            (!quickChipIsUndoDelete && isSensitiveField(currentInputEditorInfo))
+        ) {
+            panel.setClipboardSuggestion(null, {}, {})
+            return
         }
-        val popup = android.widget.PopupWindow(
-            card,
-            resources.displayMetrics.widthPixels,
-            dp(150),
-            true,
+        panel.setClipboardSuggestion(
+            label,
+            onPaste = {
+                val connection = currentInputConnection
+                if (connection != null && connection.commitText(payload, 1)) {
+                    performKeyHaptic()
+                    dismissQuickChip()
+                }
+            },
+            onDismiss = ::dismissQuickChip,
         )
-        activePopup = popup
-        popup.isOutsideTouchable = true
-        popup.elevation = dp(8).toFloat()
-        popup.showAsDropDown(anchor, -anchor.left, dp(2))
     }
 
     /**
@@ -1957,17 +1441,23 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val isLeft = code == android.view.KeyEvent.KEYCODE_DPAD_LEFT
         val isRight = code == android.view.KeyEvent.KEYCODE_DPAD_RIGHT
         if (clipboardSelectionMode && (isLeft || isRight)) {
-            if (clipboardSelectionAnchor < 0) {
-                val extracted = connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)
-                val start = extracted?.selectionStart?.coerceAtLeast(0) ?: 0
-                clipboardSelectionAnchor = start
-                clipboardSelectionActive = start
-            }
-            clipboardSelectionActive = (clipboardSelectionActive + if (isRight) 1 else -1).coerceAtLeast(0)
-            connection.setSelection(
-                minOf(clipboardSelectionAnchor, clipboardSelectionActive),
-                maxOf(clipboardSelectionAnchor, clipboardSelectionActive),
+            val extracted = connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)
+            val previous = if (clipboardSelectionAnchor >= 0 && clipboardSelectionActive >= 0) {
+                ImeSelectionRange(clipboardSelectionAnchor, clipboardSelectionActive)
+            } else null
+            val range = ImeSelectionPolicy.extend(
+                extracted?.text, extracted?.startOffset ?: -1,
+                extracted?.selectionStart ?: -1, extracted?.selectionEnd ?: -1,
+                previous, if (isRight) 1 else -1,
             )
+            if (range != null && connection.setSelection(minOf(range.anchor, range.active), maxOf(range.anchor, range.active))) {
+                clipboardSelectionAnchor = range.anchor
+                clipboardSelectionActive = range.active
+            } else {
+                // Unknown/partial/changed editor data must not select from a guessed zero.
+                clipboardSelectionAnchor = -1
+                clipboardSelectionActive = -1
+            }
             return
         }
         val now = android.os.SystemClock.uptimeMillis()
@@ -1975,883 +1465,121 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         connection.sendKeyEvent(android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_UP, code, 0))
     }
 
-    /**
-     * Clipboard panel: a direction pad (arrow keys double as selection
-     * extension when "选择" is toggled on) plus select-all/copy/paste and a
-     * button into the clipboard history browser. Styled like the stroke
-     * panel's own key grid.
-     */
-    private fun buildClipboardView(): View {
-        val root = SwipeModeContainer(this) { direction -> swipeInputMode(direction) }.apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
-            minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-        }
-        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
-            marginStart = dp(8)
-            marginEnd = dp(8)
-        })
+    private var clipboardPanel: ImeClipboardPanel? = null
 
-        // Most-recent-three-clips quick-tap strip (was four rows — reduced
-        // per user request, the freed space redistributed evenly across the
-        // remaining three so RECENT_CLIPS_COLUMN_HEIGHT_DP's own total is
-        // unchanged; see that constant's doc comment for the exact math).
-        // The rows use circled Unicode digits (①②③) for their prefixes; the
-        // glyphs come from Android's normal font fallback rather than a
-        // hand-drawn canvas shape. Flat gray now (was white prefix + cherry
-        // red content, before that a blue accent) — per user request, no
-        // color distinction between the prefix and the clip text anymore.
-        // The action grid below shrinks by the strip's fixed height
-        // automatically (LinearLayout's own weight=1f on `grid` further
-        // down already absorbs however much space this strip doesn't use —
-        // no separate shrink logic needed). Thin divider lines separate the
-        // rows rather than a colored background, matching the plain-divider
-        // treatment already used for the English candidate bar.
-        val circledIndices = listOf('①', '②', '③')
-        val recentClipTextColor = tone(Color.rgb(190, 190, 190), Color.rgb(140, 140, 145))
-        fun recentClipRow(index: Int, entry: ClipboardEntry?): TextView = TextView(this).apply {
-            text = entry?.let { "${circledIndices[index]} ${it.text}" } ?: ""
-            textSize = 16f
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            setTextColor(recentClipTextColor)
-            setPadding(dp(10), 0, dp(10), 0)
-            if (entry != null) {
-                isClickable = true
-                setOnClickListener {
-                    currentInputConnection?.commitText(entry.text, 1)
-                    OpenLessClipboardHistory.recordCopy(this@OpenLessImeService, entry.text)
-                    refreshInputView()
+    private fun buildClipboardView(): View = buildClipboardSurface()
+    private fun buildClipboardHistoryView(): View = buildClipboardSurface()
+
+    private fun buildClipboardSurface(): View = ImeClipboardPanel(
+        this, keyboardPalette(), buildVoiceHeader(), englishUi,
+        onCommand = ::handleClipboardCommand,
+        onCategory = { category ->
+            if (clipboardActionCurrent(sessionEpoch)) {
+                OpenLessClipboardHistory.Category.entries.firstOrNull { it.name == category }?.let {
+                    clipboardHistoryCategory = it
+                    renderClipboardPanel()
                 }
             }
-        }
-        // distinctBy(text): recordCopy() already dedupes going forward (an
-        // existing entry is moved to the front instead of a second row being
-        // added), but this guards the display itself against any duplicate
-        // already sitting in an existing history file (e.g. one written
-        // before that dedup existed) rather than trusting the stored data.
-        val recentClips = OpenLessClipboardHistory.load(this).distinctBy { it.text }
-        val recentClipsColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        recentClipsColumn.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
-        for (index in 0 until 3) {
-            recentClipsColumn.addView(
-                recentClipRow(index, recentClips.getOrNull(index)),
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
-            )
-            recentClipsColumn.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
-        }
-        // Added to root below the action grid, not here — per user request,
-        // the keyboard/action grid sits above the recent-clips strip now
-        // (was the other way around).
-
-        // Arrow keys and the Select toggle work as one unit: while selection
-        // mode is on, the arrows extend the selection instead of just moving
-        // the cursor, so they share the same active-highlight background as
-        // the Select button itself — and lose it the moment it's toggled off.
-        val gap = dp(6)
-        val mediumTypeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
-        val softWhite = tone(Color.rgb(224, 224, 224), Color.rgb(40, 40, 44))
-
-        // Same keycap background as the stroke panel's own keys (plain
-        // keyboardKey() default background/elevation for the normal state,
-        // roundedButton() with the same rose highlight the stroke panel's
-        // own "繁" toggle uses when active) — only the label/icon size and
-        // grid spacing are new, not the button's edge style or palette.
-        fun quickActionLabel(label: String, action: () -> Unit, textSizeSp: Float, highlighted: Boolean = false, midDivider: Boolean = false) =
-            keyboardKey(label, 1f, action = action, midDivider = midDivider).apply {
-                textSize = textSizeSp
-                typeface = mediumTypeface
-                setTextColor(softWhite)
-                if (highlighted) background = roundedButton(tone(Color.rgb(112, 78, 92), Color.rgb(232, 205, 213)), dp(5))
-                attachPressScale(this)
-            }
-
-        fun quickActionIcon(
-            graphicActionCode: String,
-            action: () -> Unit,
-            highlighted: Boolean = false,
-            rotationDegrees: Float = 0f,
-            repeatOnLongPress: Boolean = false,
-            // Unlike the stroke panel's always-dark-red action keys (white
-            // in both themes, StrokeActionView's own default), these icons
-            // normally sit on a normal or rose key that flips with the
-            // theme — pass an explicit color for a caller whose key is red
-            // regardless of theme (e.g. backspaceKey below), same reasoning
-            // as keyboardKey()'s own graphicIconColor doc comment.
-            iconColor: Int = tone(Color.WHITE, Color.rgb(30, 30, 34)),
-        ) = keyboardKey(
-            "",
-            1f,
-            action = action,
-            repeatOnLongPress = repeatOnLongPress,
-            repeatAction = if (repeatOnLongPress) action else null,
-            graphicActionCode = graphicActionCode,
-            // Rotates only the icon drawn on the canvas, not the button
-            // View itself — rotating the whole View would also distort its
-            // rectangular background in a non-square cell.
-            graphicRotation = rotationDegrees,
-            graphicIconColor = iconColor,
-        ).apply {
-            if (highlighted) background = roundedButton(tone(Color.rgb(112, 78, 92), Color.rgb(232, 205, 213)), dp(5))
-            attachPressScale(this)
-        }
-
-        fun cell(): LinearLayout.LayoutParams {
-            val params = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-            params.marginStart = gap / 2
-            params.marginEnd = gap / 2
-            return params
-        }
-
-        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val row1 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-        val selectKey = quickActionLabel(ui("选择", "Range"), {
-            clipboardSelectionMode = !clipboardSelectionMode
-            clipboardSelectionAnchor = -1
-            clipboardSelectionActive = -1
-            refreshInputView()
-        }, 20f, highlighted = clipboardSelectionMode)
-        val leftKey = quickActionIcon("dir-up", { sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_LEFT) }, clipboardSelectionMode, rotationDegrees = 270f)
-        val rightKey = quickActionIcon("dir-up", { sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_RIGHT) }, clipboardSelectionMode, rotationDegrees = 90f)
-        val upKey = quickActionIcon("dir-up", { sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_UP) }, clipboardSelectionMode, rotationDegrees = 0f)
-        val downKey = quickActionIcon("dir-up", { sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_DOWN) }, clipboardSelectionMode, rotationDegrees = 180f)
-        for (key in listOf(selectKey, leftKey, rightKey, upKey, downKey)) {
-            row1.addView(key, cell())
-        }
-        grid.addView(row1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-            bottomMargin = gap / 2
-            topMargin = gap / 2
-        })
-
-        val row2 = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-        val selectAllKey = quickActionLabel(ui("全选", "Select"), {
-            currentInputConnection?.performContextMenuAction(android.R.id.selectAll)
-        }, 20f)
-        val copyKey = quickActionLabel(ui("复制", "Copy"), {
-            currentInputConnection?.performContextMenuAction(android.R.id.copy)
-        }, 20f)
-        val pasteKey = quickActionLabel(ui("粘贴", "Paste"), {
-            currentInputConnection?.performContextMenuAction(android.R.id.paste)
-        }, 20f)
-        // Two lines ("History" / "Edit") since this button opens both the
-        // clipboard history browser (tap) and the draft bar for whatever's
-        // selected in the real input field (long-press).
-        // quickActionLabel()->keyboardKey()'s own '\n' handling shrinks only
-        // the label's first character (built for single-char rows like
-        // "1\n!"), which would leave just one letter undersized here, so the
-        // spanned text it sets is overwritten with a plain two-line string
-        // right after construction.
-        // Same cherry red as the stroke panel's own right-side action rail
-        // (Color.rgb(153, 26, 40)) — per product request, so these two keys
-        // read as the equivalent "action" keys on this panel.
-        val clipboardKey = quickActionLabel(ui("历史\n编辑", "History\nEdit"), {
-            clipboardHistoryMode = true
-            refreshInputView()
-        }, 17f, midDivider = true).apply {
-            text = ui("历史\n编辑", "History\nEdit")
-            background = roundedButton(Color.rgb(153, 26, 40), dp(5))
-            // quickActionLabel()'s own softWhite text color reads fine on a
-            // normal/rose key but not on this now-red one (dark gray in
-            // light theme, on dark red) — fixed white regardless of theme,
-            // same reasoning as backspaceKey's iconColor override below.
-            setTextColor(Color.WHITE)
-            setOnLongClickListener {
-                openDictationEditDraft(requireSelection = true)
-                true
-            }
-        }
-        val backspaceKey = quickActionIcon(
-            "backspace-icon",
-            { deleteBackward() },
-            repeatOnLongPress = true,
-            iconColor = Color.WHITE,
-        ).apply {
-            background = roundedButton(Color.rgb(153, 26, 40), dp(5))
-        }
-        for (key in listOf(selectAllKey, copyKey, pasteKey, clipboardKey, backspaceKey)) {
-            row2.addView(key, cell())
-        }
-        grid.addView(row2, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-            topMargin = gap / 2
-        })
-
-        root.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-            topMargin = dp(8)
-        })
-        root.addView(recentClipsColumn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(RECENT_CLIPS_COLUMN_HEIGHT_DP)).apply {
-            topMargin = dp(8)
-        })
-        return root
+        },
+        onFeedback = ::performKeyHaptic,
+        interactionPolicy = interactionPolicy(),
+    ).also {
+        clipboardPanel = it
+        renderClipboardPanel()
     }
 
-    /**
-     * Clipboard history browser: category tabs (全部/最近/文本/数字/链接) over a
-     * scrollable list of past clips. Tapping an entry commits it to the field
-     * and bumps it back to the front of the history, then returns to the
-     * direction-pad panel.
-     */
-    private fun buildClipboardHistoryView(): View {
-        // Assigned once `scroll` itself is built, further down — captured
-        // by reference here so SwipeModeContainer's verticalDismissAllowed
-        // lambda reads whatever scroll position exists at actual touch
-        // time (the lambda only ever runs from a real user gesture, well
-        // after this whole view is fully constructed).
-        var historyScroll: android.widget.ScrollView? = null
-        // Rows handle their own left/right swipe (favorite / correction
-        // rule); the panel-switch swipe would otherwise compete for the
-        // exact same gesture. A downward drag only dismisses the keyboard
-        // once the list below is already scrolled to its own top — per
-        // user request, so scrolling up through history doesn't get
-        // mistaken for "swipe down to hide" partway through.
-        val root = SwipeModeContainer(
-            this,
-            horizontalSwipeEnabled = false,
-            verticalDismissAllowed = { (historyScroll?.scrollY ?: 0) == 0 },
-        ) { direction -> swipeInputMode(direction) }.apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardPanelHeightPx())
-            minimumHeight = keyboardPanelHeightPx()
-            setPadding(dp(16), dp(8), dp(16), dp(8))
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-            clipChildren = false
-            clipToPadding = false
-        }
-        root.addView(buildVoiceHeader(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
-        root.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-            topMargin = dp(6)
-        })
+    private fun clipboardActionCurrent(epoch: Long): Boolean =
+        epoch == sessionEpoch && inputMode == InputMode.CLIPBOARD && isInputViewShown && !dictationEditingLocked()
 
-        val tabsRow = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        val tabs = listOf(
-            OpenLessClipboardHistory.Category.ALL to ui("全部", "All"),
-            OpenLessClipboardHistory.Category.RECENT to ui("最近", "Recent"),
-            OpenLessClipboardHistory.Category.TEXT to ui("文本", "Text"),
-            OpenLessClipboardHistory.Category.NUMBER to ui("数字", "Number"),
-            OpenLessClipboardHistory.Category.LINK to ui("链接", "Link"),
+    private fun renderClipboardPanel() {
+        val panel = clipboardPanel ?: return
+        val epoch = sessionEpoch
+        val all = OpenLessClipboardHistory.load(this).distinctBy { it.text }
+        val vocabulary = if (clipboardHistoryMode && isBackendReady()) {
+            runCatching {
+                val array = org.json.JSONArray(OpenLessNative.nativeVocabularyPhrases())
+                (0 until array.length()).mapTo(mutableSetOf()) { array.getString(it) }
+            }.getOrDefault(emptySet())
+        } else emptySet()
+        fun item(entry: ClipboardEntry) = ImeClipboardPanel.Item(
+            text = entry.text,
+            favorite = entry.favorite,
+            inDictionary = entry.text in vocabulary,
+            select = {
+                if (clipboardActionCurrent(epoch)) pasteClipboardHistory(entry.text)
+            },
+            toggleFavorite = {
+                if (clipboardActionCurrent(epoch)) {
+                    OpenLessClipboardHistory.toggleFavorite(this, entry.text)
+                    renderClipboardPanel()
+                }
+            },
+            remove = {
+                if (clipboardActionCurrent(epoch)) {
+                    OpenLessClipboardHistory.delete(this, entry.text)
+                    renderClipboardPanel()
+                }
+            },
+            toggleDictionary = {
+                if (clipboardActionCurrent(epoch)) toggleClipboardDictionary(entry.text, entry.text in vocabulary)
+            },
         )
-        tabs.forEach { (category, label) ->
-            val selected = category == clipboardHistoryCategory
-            tabsRow.addView(TextView(this).apply {
-                text = label
-                textSize = 14f
-                gravity = android.view.Gravity.CENTER
-                setTextColor(if (selected) Color.rgb(153, 26, 40) else tone(Color.rgb(190, 190, 190), Color.rgb(140, 140, 145)))
-                if (englishUi) {
-                    typeface = Typeface.create("sans-serif-medium", if (selected) Typeface.BOLD else Typeface.NORMAL)
-                } else {
-                    setTypeface(typeface, if (selected) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
-                }
-                setOnClickListener {
-                    clipboardHistoryCategory = category
-                    refreshInputView()
-                }
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-        }
-        // Not a category filter like the five tabs above — an action:
-        // deletes every non-favorited history entry outright (favorites are
-        // kept). Never shows "selected" styling since it isn't one of
-        // clipboardHistoryCategory's own values. No confirmation step per
-        // the request as given; only this app's own local history is
-        // affected, not anything external.
-        tabsRow.addView(TextView(this).apply {
-            text = ui("清空", "Clear")
-            textSize = 14f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(tone(Color.rgb(190, 190, 190), Color.rgb(140, 140, 145)))
-            if (englishUi) {
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            }
-            setOnClickListener {
-                OpenLessClipboardHistory.clearNonFavorites(this@OpenLessImeService)
-                refreshInputView()
-            }
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-        tabsRow.addView(flatCircleButton("✕", 26, ui("关闭粘贴板", "Close clipboard")) {
+        panel.render(
+            epoch, clipboardHistoryMode, clipboardSelectionMode, clipboardHistoryCategory.name,
+            OpenLessClipboardHistory.filter(all, clipboardHistoryCategory).map(::item),
+            all.take(3).map(::item),
+        )
+        panel.setBlocked(dictationEditingLocked())
+    }
+
+    private fun pasteClipboardHistory(text: String) {
+        if (currentInputConnection?.commitText(text, 1) == true) {
+            OpenLessClipboardHistory.recordCopy(this, text)
             clipboardHistoryMode = false
-            refreshInputView()
-        }, LinearLayout.LayoutParams(dp(30), dp(30)))
-        root.addView(tabsRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)).apply {
-            topMargin = dp(8)
-        })
-
-        root.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-            topMargin = dp(6)
-            bottomMargin = dp(6)
-        })
-
-        val listContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val entries = OpenLessClipboardHistory.filter(OpenLessClipboardHistory.load(this), clipboardHistoryCategory)
-        // The Dictionary lives in the Rust backend (CORE_BACKEND), which is
-        // only registered once mobile_runtime::run()'s setup() has actually
-        // executed — not guaranteed just because the IME is showing. Without
-        // this, nativeVocabularyPhrases()/nativeAddVocabularyWord() below
-        // silently no-op against an unregistered backend: the star-like icon
-        // never appears and the swipe zone's "add" never takes, with no
-        // visible error either place.
-        ensureBackendReady()
-        // Fetched once per panel build, not per row: a native round trip
-        // per row would be wasted work when a single JSON snapshot already
-        // answers "is this text already in the dictionary" for all of them.
-        val vocabularyPhrases: Set<String> = try {
-            val array = org.json.JSONArray(OpenLessNative.nativeVocabularyPhrases())
-            (0 until array.length()).mapTo(mutableSetOf()) { array.getString(it) }
-        } catch (error: Exception) {
-            emptySet()
-        }
-        if (entries.isEmpty()) {
-            listContainer.addView(TextView(this).apply {
-                text = ui("暂无粘贴板记录", "No clipboard history yet")
-                textSize = 14f
-                if (englishUi) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-                gravity = android.view.Gravity.CENTER
-                setTextColor(tone(Color.rgb(140, 140, 140), Color.rgb(140, 140, 145)))
-                setPadding(0, dp(20), 0, 0)
-            })
+            renderClipboardPanel()
         } else {
-            entries.forEachIndexed { index, entry ->
-                // Two fixed-width zones behind the row, revealed left-to-right
-                // as it's dragged right: favorite first, delete beyond it. A
-                // third zone behind the row's end, revealed right-to-left as
-                // it's dragged left, toggles a correction rule for this text.
-                val entryWrapper = FrameLayout(this)
-                val zoneWidth = dp(88)
-                val revealRow = LinearLayout(this)
-                val favoriteZone = TextView(this).apply {
-                    textSize = 13f
-                    setTypeface(typeface, android.graphics.Typeface.BOLD)
-                    gravity = android.view.Gravity.CENTER
-                    setTextColor(Color.WHITE)
-                    setBackgroundColor(Color.rgb(181, 136, 32))
-                    setPadding(dp(6), 0, dp(6), 0)
-                }
-                val deleteZone = TextView(this).apply {
-                    text = ui("删除", "Delete")
-                    textSize = 13f
-                    setTypeface(typeface, android.graphics.Typeface.BOLD)
-                    gravity = android.view.Gravity.CENTER
-                    setTextColor(Color.WHITE)
-                    setBackgroundColor(Color.rgb(153, 26, 40))
-                    setPadding(dp(6), 0, dp(6), 0)
-                }
-                revealRow.addView(favoriteZone, LinearLayout.LayoutParams(zoneWidth, ViewGroup.LayoutParams.MATCH_PARENT))
-                revealRow.addView(deleteZone, LinearLayout.LayoutParams(zoneWidth, ViewGroup.LayoutParams.MATCH_PARENT))
-                entryWrapper.addView(revealRow, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                val correctionZone = TextView(this).apply {
-                    textSize = 13f
-                    setTypeface(typeface, android.graphics.Typeface.BOLD)
-                    gravity = android.view.Gravity.CENTER
-                    setTextColor(Color.WHITE)
-                    setBackgroundColor(Color.rgb(46, 108, 168))
-                    setPadding(dp(6), 0, dp(6), 0)
-                }
-                entryWrapper.addView(
-                    correctionZone,
-                    FrameLayout.LayoutParams(zoneWidth, ViewGroup.LayoutParams.MATCH_PARENT, android.view.Gravity.END),
-                )
-
-                val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-                val star = TextView(this).apply {
-                    text = if (entry.favorite) "★" else "☆"
-                    textSize = 14f
-                    setTextColor(
-                        if (entry.favorite) Color.rgb(153, 26, 40) else tone(Color.rgb(120, 120, 120), Color.rgb(180, 180, 184)),
-                    )
-                }
-                row.addView(star, LinearLayout.LayoutParams(dp(22), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(4) })
-                row.addView(
-                    TextView(this).apply {
-                        text = entry.text
-                        textSize = 14f
-                        setTextColor(tone(Color.rgb(230, 230, 230), Color.rgb(30, 30, 34)))
-                        maxLines = 2
-                        ellipsize = android.text.TextUtils.TruncateAt.END
-                    },
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-                )
-                // After the weighted text view, not before it, so this lands
-                // at the row's far right edge instead of crowding the star.
-                if (vocabularyPhrases.contains(entry.text)) {
-                    row.addView(
-                        TextView(this).apply {
-                            text = "✎"
-                            textSize = 13f
-                            setTextColor(Color.rgb(90, 156, 224))
-                        },
-                        LinearLayout.LayoutParams(dp(16), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) },
-                    )
-                }
-                // Plain flat row — no keycap-style background/press effect —
-                // but still opaque, so it fully hides the reveal zones until dragged.
-                row.setPadding(dp(12), dp(10), dp(12), dp(10))
-                row.setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-                entryWrapper.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-
-                var suppressRowClick = false
-                row.setOnClickListener {
-                    if (suppressRowClick) {
-                        suppressRowClick = false
-                        return@setOnClickListener
-                    }
-                    currentInputConnection?.commitText(entry.text, 1)
-                    OpenLessClipboardHistory.recordCopy(this@OpenLessImeService, entry.text)
-                    clipboardHistoryMode = false
-                    refreshInputView()
-                }
-                attachClipboardRowSwipe(
-                    row = row,
-                    zoneWidth = zoneWidth,
-                    favoriteZone = favoriteZone,
-                    correctionZone = correctionZone,
-                    isFavorite = { entry.favorite },
-                    hasCorrectionRule = { vocabularyPhrases.contains(entry.text) },
-                    addLabel = ui("加入收藏", "Add"),
-                    removeLabel = ui("取消收藏", "Remove"),
-                    addCorrectionLabel = ui("加入词典", "Add to dictionary"),
-                    removeCorrectionLabel = ui("移出词典", "Remove from dictionary"),
-                    onSuppressClick = { suppressRowClick = true },
-                    onToggleFavorite = {
-                        OpenLessClipboardHistory.toggleFavorite(this, entry.text)
-                        refreshInputView()
-                    },
-                    onDelete = {
-                        OpenLessClipboardHistory.delete(this, entry.text)
-                        refreshInputView()
-                    },
-                    onAddCorrection = {
-                        runNativeAction("加入词典") { OpenLessNative.nativeAddVocabularyWord(entry.text) }
-                        refreshInputView()
-                    },
-                    onRemoveCorrection = {
-                        OpenLessNative.nativeRemoveVocabularyWord(entry.text)
-                        refreshInputView()
-                    },
-                )
-                listContainer.addView(entryWrapper, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                if (index < entries.lastIndex) {
-                    listContainer.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
-                }
-            }
-        }
-        val scroll = android.widget.ScrollView(this).apply {
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            addView(listContainer, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        historyScroll = scroll
-        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        return root
-    }
-
-    /**
-     * Left/right swipe on one clipboard history row: the row itself tracks
-     * the finger 1:1 via translationX, revealing fixed-width zones behind it
-     * — favorite then delete to the right as it's dragged right, a single
-     * correction-rule zone to the left as it's dragged left — each clamped
-     * so the drag can't pull the row past its own side's zone width(s).
-     * Releasing inside a zone commits that zone's action; releasing short
-     * of it just springs the row back with no effect, on either side.
-     *
-     * Uses rawX/rawY, not the view-local x/y: once translationX starts
-     * moving the row mid-gesture, view-local coordinates from the same
-     * ongoing touch stream are reported relative to the view's shifting
-     * transform and drift, while raw screen coordinates stay stable for the
-     * whole gesture.
-     *
-     * onSuppressClick runs synchronously inside this same ACTION_UP handling
-     * — not deferred — because the row's own click (paste + close panel)
-     * gets evaluated by the View's default onTouchEvent immediately after
-     * this listener returns, within the very same event. Deferring the
-     * suppress flag (as a first cut of this did, bundled inside the action
-     * callback) let that stale click fire first: it pasted the row's text,
-     * reordered it to the front via recordCopy(), and closed back to the
-     * main clipboard view — exactly the "jumps back / reorders" symptom.
-     * onToggleFavorite/onDelete/onAddCorrection/onRemoveCorrection can still
-     * be posted, since only *those* (which rebuild the whole panel) need to
-     * avoid the panel flickering mid-gesture.
-     *
-     * The panel's own SwipeModeContainer has `horizontalSwipeEnabled = false`
-     * for this sub-panel specifically, so there is no competing ancestor
-     * gesture to race against here — recognizing the drag on ACTION_MOVE and
-     * calling requestDisallowInterceptTouchEvent is enough to keep the
-     * ScrollView from also treating it as a scroll attempt.
-     */
-    private fun attachClipboardRowSwipe(
-        row: View,
-        zoneWidth: Int,
-        favoriteZone: TextView,
-        correctionZone: TextView,
-        isFavorite: () -> Boolean,
-        hasCorrectionRule: () -> Boolean,
-        addLabel: String,
-        removeLabel: String,
-        addCorrectionLabel: String,
-        removeCorrectionLabel: String,
-        onSuppressClick: () -> Unit,
-        onToggleFavorite: () -> Unit,
-        onDelete: () -> Unit,
-        onAddCorrection: () -> Unit,
-        onRemoveCorrection: () -> Unit,
-    ) {
-        val touchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop
-        val maxDragRight = zoneWidth * 2f
-        val maxDragLeft = zoneWidth.toFloat()
-        var startRawX = 0f
-        var startRawY = 0f
-        var horizontalDrag = false
-        row.setOnTouchListener { view, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    startRawX = event.rawX
-                    startRawY = event.rawY
-                    horizontalDrag = false
-                    favoriteZone.text = if (isFavorite()) removeLabel else addLabel
-                    correctionZone.text = if (hasCorrectionRule()) removeCorrectionLabel else addCorrectionLabel
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - startRawX
-                    val dy = event.rawY - startRawY
-                    if (!horizontalDrag && kotlin.math.abs(dx) > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f) {
-                        horizontalDrag = true
-                        view.parent?.requestDisallowInterceptTouchEvent(true)
-                    }
-                    if (horizontalDrag) view.translationX = dx.coerceIn(-maxDragLeft, maxDragRight)
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (horizontalDrag) {
-                        val dx = event.rawX - startRawX
-                        if (dx > 0f) {
-                            val clamped = dx.coerceIn(0f, maxDragRight)
-                            when {
-                                clamped >= maxDragRight -> {
-                                    onSuppressClick()
-                                    view.post { onDelete() }
-                                }
-                                clamped >= zoneWidth -> {
-                                    onSuppressClick()
-                                    view.post { onToggleFavorite() }
-                                }
-                            }
-                        } else if (dx < 0f) {
-                            val clamped = dx.coerceIn(-maxDragLeft, 0f)
-                            // Only past the full zone width — the label is
-                            // fully revealed by then — does releasing commit
-                            // anything; short of that just springs back.
-                            if (clamped <= -zoneWidth) {
-                                onSuppressClick()
-                                if (hasCorrectionRule()) {
-                                    view.post { onRemoveCorrection() }
-                                } else {
-                                    view.post { onAddCorrection() }
-                                }
-                            }
-                        }
-                        view.animate().translationX(0f).setDuration(150L).start()
-                    }
-                    horizontalDrag = false
-                }
-            }
-            // Never consumed: a plain tap (no horizontal drag recognized)
-            // still needs to fall through to the row's own click listener.
-            false
+            OpenLessNativeNotice.makeText(this, ui("输入连接已失效，未粘贴", "Editor unavailable; nothing pasted"), Toast.LENGTH_SHORT).show()
         }
     }
 
-    internal fun keyboardKey(
-        label: String,
-        weight: Float,
-        action: () -> Unit = {},
-        repeatOnLongPress: Boolean = false,
-        repeatAction: (() -> Unit)? = null,
-        swipeUpAction: (() -> Unit)? = null,
-        swipePreview: String? = null,
-        // A single-shot delayed action, separate from
-        // repeatOnLongPress/repeatAction — used by the voice/mic key, whose
-        // long-press (switch to Voice mode) needs a longer fuse than the
-        // system's fixed ~500ms long-click timeout so a swipe-up gesture
-        // that pauses briefly before moving isn't preempted by it (see
-        // ACTION_MOVE below, which cancels this the moment the swipe-up
-        // threshold is crossed). setOnLongClickListener's timeout isn't
-        // adjustable per-view, so this schedules/cancels its own Handler
-        // callback instead of relying on it.
-        longPressAction: (() -> Unit)? = null,
-        longPressDelayMs: Long = 500L,
-        microphoneIcon: Boolean = false,
-        strokeIconCode: String? = null,
-        graphicCode: String? = null,
-        graphicActionCode: String? = null,
-        // Rotates only the icon drawn inside StrokeActionView's canvas, not
-        // the whole button (which would also rotate — and for a non-square
-        // cell, distort — its background).
-        graphicRotation: Float = 0f,
-        // Only meaningful with graphicActionCode: StrokeActionView's icon
-        // color. Left null for the always-dark-red action keys (white in
-        // both themes, StrokeActionView's own default); the clipboard
-        // panel's direction/undo icons — which sit on a normal or rose key,
-        // not red — pass the theme-appropriate color explicitly.
-        graphicIconColor: Int? = null,
-        // Draws a thin horizontal divider between the two lines of a
-        // two-line label (e.g. the clipboard panel's "History"/"Dict"
-        // key, which does two unrelated things depending on tap vs.
-        // long-press) — a plain '\n' alone read as one cramped label.
-        midDivider: Boolean = false,
-    ): TextView {
-        val keyView = when {
-            microphoneIcon -> MicrophoneKeyView(this, isDarkTheme)
-            strokeIconCode != null -> StrokeKeyView(this, strokeIconCode, isDarkTheme)
-            graphicCode != null -> StrokeGlyphView(this, graphicCode, isDarkTheme)
-            graphicActionCode != null -> if (graphicIconColor != null) {
-                StrokeActionView(this, graphicActionCode, graphicRotation, graphicIconColor)
-            } else {
-                StrokeActionView(this, graphicActionCode, graphicRotation)
-            }
-            label == "←" || label == "↵" -> ActionSymbolView(this, label, isDarkTheme)
-            label == "⇧" -> ShiftKeyView(this, shiftState, isDarkTheme).also { englishShiftKey = it }
-            midDivider -> MidDividerTextView(this, tone(Color.rgb(100, 100, 100), Color.rgb(205, 205, 209)))
-            else -> TextView(this)
+    private fun toggleClipboardDictionary(text: String, present: Boolean) {
+        if (!isBackendReady()) {
+            ensureBackendReady()
+            OpenLessNativeNotice.makeText(this, ui("词典服务正在准备，请稍后重试", "Dictionary is preparing; please retry"), Toast.LENGTH_SHORT).show()
+            return
         }
-        return keyView.apply {
-            text = if (strokeIconCode != null || graphicCode != null || graphicActionCode != null || label == "⇧") {
-                ""
-            } else if ('\n' in label) {
-                android.text.SpannableString(label).apply {
-                    setSpan(android.text.style.RelativeSizeSpan(0.55f), 0, 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
-            } else label
-            textSize = if (microphoneIcon) 10f else if (strokeIconCode != null) 1f else if (label == "Return") 17f else 22f
-            gravity = if (microphoneIcon) android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL else android.view.Gravity.CENTER
-            if (microphoneIcon) setPadding(0, dp(2), 0, 0)
-            setTextColor(tone(Color.rgb(245, 245, 245), Color.rgb(30, 30, 34)))
-            background = roundedButton(tone(Color.rgb(52, 52, 54), Color.rgb(255, 255, 255)), dp(5))
-            // Keep the existing palette and geometry, but give each key a subtle raised surface.
-            elevation = dp(5).toFloat()
-            translationZ = dp(1).toFloat()
-            contentDescription = label.ifBlank { ui("空格", "Space") }
-            // Retargetable like buildEnglishCharKey()'s tap preview: any
-            // sibling key built with its own swipeUpAction/swipePreview
-            // carries that pair here as its tag, so a swipe-up gesture that
-            // drags sideways onto a different key (e.g. across the stroke
-            // grid's digit shortcuts) can look up and commit THAT key's own
-            // digit instead of the one originally pressed.
-            tag = if (swipeUpAction != null && swipePreview != null) Pair(swipeUpAction, swipePreview) else null
-            var suppressNextClick = false
-            var downX = 0f
-            var downY = 0f
-            var swipePreviewShown = false
-            // A one-way latch, same as swipePreviewShown: once the finger
-            // has dragged sideways far enough from where it started, the
-            // gesture is treated as a deliberate retarget-drag for the
-            // rest of this touch sequence, not re-checked drag-by-drag.
-            // Before that latch trips, trackedView never changes even if
-            // the finger's raw position happens to land inside another
-            // key's real hit bounds — a plain swipe straight up (whose own
-            // vertical travel easily reaches a neighboring row) must not
-            // silently relabel itself just because it crossed into that
-            // row's territory with no real sideways intent.
-            var horizontalDragArmed = false
-            var trackedView: View = this
-            @Suppress("UNCHECKED_CAST")
-            fun swipeSpecOf(view: View): Pair<() -> Unit, String>? = view.tag as? Pair<() -> Unit, String>
-            setOnClickListener {
-                if (suppressNextClick) {
-                    suppressNextClick = false
-                } else {
-                    action()
-                }
-            }
-            val repeatHandler = if (repeatOnLongPress && repeatAction != null) {
-                Handler(Looper.getMainLooper())
-            } else null
-            val repeatRunnable = if (repeatHandler != null && repeatAction != null) {
-                object : Runnable {
-                    override fun run() {
-                        repeatAction.invoke()
-                        repeatHandler.postDelayed(this, keyRepeatIntervalMs())
-                    }
-                }
-            } else null
-            if (repeatHandler != null && repeatRunnable != null && repeatAction != null) {
-                setOnLongClickListener {
-                    repeatAction.invoke()
-                    repeatHandler.postDelayed(repeatRunnable, keyRepeatIntervalMs())
-                    true
-                }
-            }
-            val longPressHandler = if (longPressAction != null) Handler(Looper.getMainLooper()) else null
-            var longPressRunnable: Runnable? = null
+        runCatching {
+            if (present) OpenLessNative.nativeRemoveVocabularyWord(text) else OpenLessNative.nativeAddVocabularyWord(text)
+        }.onSuccess { renderClipboardPanel() }.onFailure {
+            OpenLessNativeNotice.makeText(this, ui("词典操作失败，请重试", "Dictionary operation failed; please retry"), Toast.LENGTH_SHORT).show()
+        }
+    }
 
-            // Hit-tests every swipe-capable sibling in this key's own row
-            // group, climbing to the row's own parent so a drag can
-            // retarget across rows too — same approach as
-            // buildEnglishCharKey()'s findTrackTargetAt, just keyed off a
-            // Pair(swipeUpAction, swipePreview) tag instead of a char tag.
-            //
-            // Vertical slop is deliberately tiny here (unlike the English
-            // version's generous dp(24)): the grid's rows sit almost flush
-            // against each other (~1dp margin, each row only ~1/4 of the
-            // grid's own height), so a large slop makes adjacent rows'
-            // hit zones overlap deeply — a plain straight swipe UP (whose
-            // whole point is to travel well past the pressed key, still
-            // within the same key's column) would then immediately
-            // "retarget" to the row above just from that expected vertical
-            // travel, with no real leftward/rightward drag at all. A
-            // near-zero vertical slop means only a finger that has
-            // genuinely reached a different row's real bounds retargets;
-            // once the finger is past every row (still swiping straight
-            // up), no row matches and findSwipeTargetAt falls back to
-            // returning trackedView — i.e. the original key stays selected
-            // for a simple swipe, exactly matching a single-key swipe-up's
-            // intent.
-            fun findSwipeTargetAt(rawX: Float, rawY: Float): View {
-                val row = parent as? ViewGroup ?: return this
-                val group = row.parent as? ViewGroup
-                val candidateRows = if (group != null) {
-                    (0 until group.childCount).mapNotNull { index ->
-                        (group.getChildAt(index) as? ViewGroup)?.takeIf { candidate ->
-                            (0 until candidate.childCount).any { candidate.getChildAt(it).tag is Pair<*, *> }
-                        }
-                    }
-                } else {
-                    listOf(row)
-                }
-                for (candidateRow in candidateRows) {
-                    for (index in 0 until candidateRow.childCount) {
-                        val sibling = candidateRow.getChildAt(index)
-                        if (sibling.tag !is Pair<*, *>) continue
-                        val loc = IntArray(2)
-                        sibling.getLocationOnScreen(loc)
-                        if (rawX >= loc[0] - dp(6) && rawX < loc[0] + sibling.width + dp(6) &&
-                            rawY >= loc[1] - dp(2) && rawY < loc[1] + sibling.height + dp(2)
-                        ) {
-                            return sibling
-                        }
-                    }
-                }
-                return trackedView
+    private fun handleClipboardCommand(command: String) {
+        if (!clipboardActionCurrent(sessionEpoch)) return
+        when (command) {
+            "range" -> {
+                clipboardSelectionMode = !clipboardSelectionMode
+                clipboardSelectionAnchor = -1
+                clipboardSelectionActive = -1
+                renderClipboardPanel()
             }
-
-            setOnTouchListener { view, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        // An out-of-bounds swipe may not dispatch a click to clear this flag.
-                        suppressNextClick = false
-                        downX = event.x
-                        downY = event.y
-                        horizontalDragArmed = false
-                        trackedView = view
-                        view.animate()
-                            .scaleX(0.97f)
-                            .scaleY(0.97f)
-                            .translationZ(dp(3).toFloat())
-                            .alpha(0.90f)
-                            .setDuration(65L)
-                            .start()
-                        performKeyHaptic()
-                        if (longPressHandler != null && longPressAction != null) {
-                            val runnable = Runnable {
-                                longPressAction.invoke()
-                                suppressNextClick = true
-                            }
-                            longPressRunnable = runnable
-                            longPressHandler.postDelayed(runnable, longPressDelayMs)
-                        }
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (swipeUpAction != null && swipePreview != null) {
-                            if (!swipePreviewShown && downY - event.y >= dp(10)) {
-                                // Armed only once the initial swipe-up
-                                // actually clears the threshold, not on
-                                // every key's plain DOWN (that would also
-                                // swallow the panel-switch swipe that
-                                // legitimately starts on top of a
-                                // non-swiping key) — so dragging across the
-                                // grid to retarget isn't stolen by
-                                // SwipeModeContainer's own swipe intercept
-                                // mid-gesture.
-                                view.parent?.requestDisallowInterceptTouchEvent(true)
-                                // Cancels the voice/mic key's own delayed
-                                // longPressAction (switch to Voice mode) the
-                                // moment a swipe-up is recognized — a no-op
-                                // for every other key (longPressRunnable is
-                                // only ever set when longPressAction != null).
-                                longPressRunnable?.let { longPressHandler?.removeCallbacks(it) }
-                                swipePreviewShown = true
-                            }
-                            if (swipePreviewShown) {
-                                // Retargeting itself is gated behind a
-                                // second, separate threshold: the finger
-                                // must have moved at least dp(10)
-                                // horizontally from where it first went
-                                // down, not merely landed inside another
-                                // key's hit bounds. A plain swipe straight
-                                // up travels well past the pressed key's
-                                // own row by design (that vertical distance
-                                // is the whole gesture), which — with no
-                                // sideways intent at all — would otherwise
-                                // still land inside a neighboring row's real
-                                // bounds and silently relabel the bubble
-                                // (e.g. "0" swiped straight up briefly
-                                // reading as "8", the key directly above
-                                // it). Once this latches on, though, any
-                                // further drag — down, sideways, or across
-                                // rows — keeps retargeting and following
-                                // the finger for the rest of the gesture;
-                                // release always commits whichever key is
-                                // currently tracked (see ACTION_UP).
-                                if (!horizontalDragArmed && kotlin.math.abs(event.x - downX) >= dp(10)) {
-                                    horizontalDragArmed = true
-                                }
-                                if (horizontalDragArmed) {
-                                    val target = findSwipeTargetAt(event.rawX, event.rawY)
-                                    if (target !== trackedView) {
-                                        trackedView = target
-                                        // Same haptic as a normal key press,
-                                        // so retargeting onto a new key
-                                        // reads as landing on that key, not
-                                        // just a silent label swap.
-                                        performKeyHaptic()
-                                    }
-                                }
-                                val spec = swipeSpecOf(trackedView)
-                                if (spec != null) {
-                                    // Pinned to the tracked key's own actual
-                                    // on-screen position, a fixed gap above
-                                    // it (see KeyPreviewOverlay.showSwipePreview()) —
-                                    // not to the finger's current height.
-                                    keyPreviewOverlay?.showSwipePreview(spec.second, trackedView)
-                                }
-                            }
-                        }
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        if (event.actionMasked == MotionEvent.ACTION_UP && swipePreviewShown) {
-                            swipeSpecOf(trackedView)?.first?.invoke()
-                            suppressNextClick = true
-                        }
-                        longPressRunnable?.let { longPressHandler?.removeCallbacks(it) }
-                        repeatHandler?.let { handler ->
-                            repeatRunnable?.let { handler.removeCallbacks(it) }
-                        }
-                        if (swipePreviewShown) {
-                            keyPreviewOverlay?.hide()
-                            swipePreviewShown = false
-                        }
-                        view.animate()
-                            .scaleX(1f)
-                            .scaleY(1f)
-                            .translationZ(0f)
-                            .alpha(1f)
-                            .setDuration(90L)
-                            .start()
-                    }
-                }
-                false
+            "left" -> sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+            "right" -> sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+            "up" -> sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_UP)
+            "down" -> sendClipboardCursorKey(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+            "all" -> currentInputConnection?.performContextMenuAction(android.R.id.selectAll)
+            "copy" -> currentInputConnection?.performContextMenuAction(android.R.id.copy)
+            "paste" -> currentInputConnection?.performContextMenuAction(android.R.id.paste)
+            "backspace" -> deleteBackward()
+            "history" -> {
+                if (!isBackendReady()) ensureBackendReady()
+                clipboardHistoryMode = true
+                renderClipboardPanel()
             }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
-                setMargins(dp(3), dp(3), dp(3), dp(3))
-            }
+            "close_history" -> { clipboardHistoryMode = false; renderClipboardPanel() }
+            "clear_history" -> { OpenLessClipboardHistory.clearNonFavorites(this); renderClipboardPanel() }
+            "edit" -> openDictationEditDraft(requireSelection = true)
         }
     }
 
@@ -2895,273 +1623,23 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         android.os.Handler(Looper.getMainLooper()).postDelayed({ performKeyHaptic() }, keyRepeatIntervalMs())
     }
 
-    /**
-     * A single ABC/123/#+= character-emitting key with an iOS-style press
-     * preview: a bubble above the key showing the character that will
-     * actually be committed (respecting shift for letters), with an arrow
-     * pointing at the key (KeyPreviewBubbleView, plain Canvas drawing — no
-     * new dependency). Dragging onto a horizontally adjacent sibling in the
-     * same row re-targets the preview and the eventual commit to that key
-     * instead (a "sloppy key", same idea as most predictive keyboards).
-     *
-     * @param swipeSymbol Any key that has one — top-row digits (q..p ->
-     *   1..0), row2's ~@#!%&*() and row3's '/-_:;? — swiping up commits
-     *   this symbol instead of the letter, same interaction as the stroke
-     *   panel's own swipe-up keys (see keyboardKey()'s swipeUpAction/
-     *   swipePreview). Shown as a small standalone hint pinned to the very
-     *   top of the key, NOT a second line of the letter's own text (that
-     *   was the first version of this — a single TextView with "symbol\n
-     *   letter" and block-centered gravity, which visibly shoved the
-     *   letter down off-center by about half the hint line's height).
-     *   Two independent views layered in a FrameLayout instead: the letter
-     *   stays exactly where it always was, completely unaffected by
-     *   whether a swipe-up hint exists at all.
-     *
-     *   This is a dedicated builder, not a keyboardKey() variant, precisely
-     *   so none of this touch handling can affect any other panel's keys.
-     */
-    /** What a char key types right now: its base character, uppercased for a letter while Shift is on. */
-    private fun englishCharFor(view: View): String {
-        val base = view.tag as? String ?: return ""
-        return if (shiftState != ShiftState.OFF && base.length == 1 && base[0].isLetter()) base.uppercase() else base
-    }
-
-    /**
-     * Shows the current shiftState on the English panel: relabels the letter
-     * keys and redraws Shift in place. Typing already reads shiftState at the
-     * moment of the tap (englishCharFor), so only the labels were stale —
-     * rebuilding the whole keyboard for that ran on every sentence start and
-     * every capital. Falls back to a rebuild when that panel isn't on screen.
-     */
+    /** Shift updates presentation in place; it never replaces the IME window. */
     private fun applyShiftState() {
-        val keys = englishLetterKeys.filter { it.first.isAttachedToWindow }
-        val shiftKey = englishShiftKey?.takeIf { it.isAttachedToWindow }
-        if (keys.isEmpty() || shiftKey == null) {
-            refreshInputView()
-            return
-        }
-        keys.forEach { (key, letter) ->
-            val char = englishCharFor(key)
-            letter.text = char
-            key.contentDescription = char
-        }
-        shiftKey.state = shiftState
-    }
-
-    private fun buildEnglishCharKey(baseChar: String, weight: Float, swipeSymbol: String? = null): View {
-        fun charFor(view: View): String = englishCharFor(view)
-        val letterView = TextView(this).apply {
-            textSize = 22f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            gravity = android.view.Gravity.CENTER
-            setTextColor(tone(Color.rgb(245, 245, 245), Color.rgb(30, 30, 34)))
-            isClickable = false
-            // A small nudge off dead-center, down toward the digit/symbol
-            // hint's baseline — a plain translationY (not padding) so it's
-            // a pure render-time shift that doesn't touch this view's
-            // measured layout at all.
-            translationY = dp(LETTER_VERTICAL_NUDGE_DP).toFloat()
-        }
-        return FrameLayout(this).apply {
-            tag = baseChar
-            if (swipeSymbol != null) englishSwipeSymbols[this] = swipeSymbol
-            letterView.text = charFor(this)
-            if (baseChar.length == 1 && baseChar[0].isLetter()) englishLetterKeys += this to letterView
-            addView(letterView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            if (swipeSymbol != null) {
-                addView(
-                    TextView(this@OpenLessImeService).apply {
-                        text = swipeSymbol
-                        textSize = SWIPE_SYMBOL_HINT_TEXT_SIZE_SP
-                        gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
-                        // Muted/secondary, not the same bright/near-black
-                        // tone as the letter — a small top-corner hint
-                        // should read as secondary at a glance, not
-                        // compete with the actual letter for attention.
-                        // (Tried matching the swipe-preview bubble's red
-                        // here — read as less legible at this size than
-                        // the plain gray, so reverted.)
-                        setTextColor(tone(Color.rgb(150, 150, 150), Color.rgb(140, 140, 145)))
-                        setPadding(0, dp(SWIPE_SYMBOL_HINT_TOP_PADDING_DP), 0, 0)
-                        isClickable = false
-                    },
-                    FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.TOP),
-                )
-            }
-            background = roundedButton(tone(Color.rgb(52, 52, 54), Color.rgb(255, 255, 255)), dp(5))
-            elevation = dp(5).toFloat()
-            translationZ = dp(1).toFloat()
-            contentDescription = charFor(this)
-            var trackedView: View = this
-            var downY = 0f
-            var swipePreviewShown = false
-
-            // Shown via the shared top-level KeyPreviewOverlay (see
-            // wrapWithKeyPreviewOverlay()) instead of a per-key PopupWindow —
-            // a single overlay reused by every key means dragging onto a
-            // different key just repositions the same bubble instead of
-            // tearing one popup down and standing up another.
-            fun showBubbleFor(target: View) {
-                keyPreviewOverlay?.showTapPreview(charFor(target), target)
-            }
-
-            // Hit-tests every char-key row in this key's own row group (not
-            // just its immediate row siblings) by their actual on-screen
-            // bounds — a little slop added on both axes, since a real
-            // finger drifts while sliding. Climbing to the row's own parent
-            // and collecting every child row that has at least one
-            // String-tagged (char) key lets a vertical drag retarget across
-            // rows (e.g. row2's "a" up to row1's "q") the same way a
-            // horizontal drag already retargets within one row — the
-            // candidate bar, header, and bottom row (space/return/mode
-            // toggle) never have any String-tagged children, so they're
-            // simply never included. Functional keys within an included row
-            // (shift/backspace, tag == null) are still never matched.
-            fun findTrackTargetAt(rawX: Float, rawY: Float): View {
-                val row = parent as? ViewGroup ?: return this
-                val group = row.parent as? ViewGroup
-                val candidateRows = if (group != null) {
-                    (0 until group.childCount).mapNotNull { index ->
-                        (group.getChildAt(index) as? ViewGroup)?.takeIf { candidate ->
-                            (0 until candidate.childCount).any { candidate.getChildAt(it).tag is String }
-                        }
-                    }
-                } else {
-                    listOf(row)
-                }
-                for (candidateRow in candidateRows) {
-                    for (index in 0 until candidateRow.childCount) {
-                        val sibling = candidateRow.getChildAt(index)
-                        if (sibling.tag !is String) continue
-                        val loc = IntArray(2)
-                        sibling.getLocationOnScreen(loc)
-                        if (rawX >= loc[0] - dp(6) && rawX < loc[0] + sibling.width + dp(6) &&
-                            rawY >= loc[1] - dp(24) && rawY < loc[1] + sibling.height + dp(24)
-                        ) {
-                            return sibling
-                        }
-                    }
-                }
-                return trackedView
-            }
-
-            // Same idea as findTrackTargetAt above, but only among this
-            // row's own swipe-symbol-bearing keys (englishSwipeSymbols) —
-            // once a swipe is armed, sliding sideways still retargets which
-            // symbol release will commit, and showSwipePreview() re-anchors
-            // to that key so the bubble visibly follows the finger instead
-            // of freezing above the key the gesture started on. A generous
-            // vertical band since an armed drag has already moved well
-            // above the row.
-            fun findSwipeTargetAt(rawX: Float, rawY: Float): View {
-                val row = parent as? ViewGroup ?: return trackedView
-                for (index in 0 until row.childCount) {
-                    val sibling = row.getChildAt(index)
-                    if (sibling !in englishSwipeSymbols) continue
-                    val loc = IntArray(2)
-                    sibling.getLocationOnScreen(loc)
-                    if (rawX >= loc[0] - dp(6) && rawX < loc[0] + sibling.width + dp(6) &&
-                        rawY >= loc[1] - dp(60) && rawY < loc[1] + sibling.height + dp(24)
-                    ) {
-                        return sibling
-                    }
-                }
-                return trackedView
-            }
-
-            setOnTouchListener { view, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        // Without this, a same-row drag to an adjacent key
-                        // (a clearly horizontal drag, same shape as a
-                        // panel-switch swipe) gets stolen mid-gesture by the
-                        // enclosing SwipeModeContainer's own horizontal-swipe
-                        // intercept once it crosses touchSlop — the key would
-                        // stop receiving MOVE/UP entirely, so the bubble
-                        // never follows the finger and nothing ever commits
-                        // on release. Claimed unconditionally on DOWN, not
-                        // only once a drag is detected: any movement that
-                        // starts on a key belongs to that key's own
-                        // press/retarget/commit handling, never to a
-                        // panel-switch gesture.
-                        view.parent?.requestDisallowInterceptTouchEvent(true)
-                        trackedView = view
-                        downY = event.y
-                        swipePreviewShown = false
-                        view.animate().scaleX(0.97f).scaleY(0.97f).translationZ(dp(3).toFloat()).alpha(0.90f).setDuration(65L).start()
-                        performKeyHaptic()
-                        showBubbleFor(view)
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        // Swipe-up-for-symbol (swipeSymbol != null; the
-                        // digit row, and now row2/row3's punctuation) —
-                        // same dp(10) arm threshold as keyboardKey()'s own
-                        // swipe handling. Once armed, sliding sideways
-                        // still retargets across the row's other
-                        // symbol-bearing keys via findSwipeTargetAt (the
-                        // bubble follows the finger to whichever symbol is
-                        // now under it), separate from findTrackTargetAt's
-                        // own retargeting used for the un-armed tap case.
-                        //
-                        // Live, not a one-way latch: armed is re-evaluated
-                        // against the finger's *current* height every move,
-                        // not just the first time it crosses the threshold
-                        // — dragging back down below it un-arms and falls
-                        // through to the normal tap-preview/retarget path
-                        // below, giving a way to back out of the symbol
-                        // mid-gesture without lifting the finger.
-                        if (swipeSymbol != null) {
-                            val armed = downY - event.y >= dp(10)
-                            if (armed != swipePreviewShown) {
-                                view.parent?.requestDisallowInterceptTouchEvent(true)
-                                swipePreviewShown = armed
-                            }
-                            if (swipePreviewShown) {
-                                val target = findSwipeTargetAt(event.rawX, event.rawY)
-                                if (target !== trackedView) trackedView = target
-                                val symbol = englishSwipeSymbols[trackedView] ?: swipeSymbol
-                                keyPreviewOverlay?.showSwipePreview(symbol, trackedView)
-                                return@setOnTouchListener true
-                            }
-                        }
-                        val target = findTrackTargetAt(event.rawX, event.rawY)
-                        if (target !== trackedView) trackedView = target
-                        showBubbleFor(trackedView)
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        keyPreviewOverlay?.hide()
-                        view.animate().scaleX(1f).scaleY(1f).translationZ(0f).alpha(1f).setDuration(90L).start()
-                        if (swipeSymbol != null && swipePreviewShown) {
-                            commitEnglishChar(englishSwipeSymbols[trackedView] ?: swipeSymbol)
-                        } else {
-                            commitEnglishChar(charFor(trackedView))
-                        }
-                    }
-                    MotionEvent.ACTION_CANCEL -> {
-                        keyPreviewOverlay?.hide()
-                        view.animate().scaleX(1f).scaleY(1f).translationZ(0f).alpha(1f).setDuration(90L).start()
-                    }
-                }
-                true
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
-                setMargins(dp(3), dp(3), dp(3), dp(3))
-            }
-        }
+        if (inputMode == InputMode.ENGLISH) renderTypingKeyboard()
     }
 
     private fun commitEnglishChar(char: String) {
         if (char.isEmpty()) return
         if (latinInputMode == LatinInputMode.PINYIN && !ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) {
             if (char.length == 1 && char[0].isLetter()) {
-                // Never calls commitText() — a letter only feeds the
-                // encoding buffer in Pinyin mode; see
-                // RimePinyinController's own doc comment.
+                // Feed letter to Rime composition; preserve uppercase when Shift/CapsLock is on
+                // so mixed English tokens (e.g. AI, DNA) work natively in rime_ice.
                 rimePinyinController.appendLetter(char[0]) { renderPinyinCandidates(it) }
                 consumeShiftOnce()
                 return
             }
-            rimePinyinController.insertLiteral(char) { renderPinyinCandidates(it) }
+            val mapped = smartPinyinPunctuation(char)
+            rimePinyinController.insertLiteral(mapped) { renderPinyinCandidates(it) }
             return
         }
         val connection = currentInputConnection ?: return
@@ -3213,74 +1691,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         getSharedPreferences("openless_ime_ui", MODE_PRIVATE).getBoolean("english_suggestions_enabled", true)
 
     /**
-     * Same presentation as the stroke panel's own candidate row: a
-     * HorizontalScrollView (so as many words as actually exist can be
-     * scrolled through, not a fixed 3-slot row) with the same
-     * touch-intercept override and the same overflow-triggered "▼ show
-     * more" button opening showCandidateOverlay() — the exact mechanism
-     * and candidateItemView() styling the stroke panel itself uses, reused
-     * as-is rather than a parallel implementation.
-     */
-    private fun buildEnglishCandidateBar(): View {
-        // Outer vertical wrapper — divider, the actual bar, divider — so
-        // hiding it (see updateEnglishCandidates()) when suggestions are
-        // off takes both border lines with it instead of leaving two empty
-        // lines with nothing between them.
-        val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        englishCandidateBarContainer = wrapper
-        wrapper.addView(
-            buildDivider(),
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                marginStart = dp(1)
-                marginEnd = dp(1)
-            },
-        )
-        val container = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        wrapper.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)))
-        wrapper.addView(
-            buildDivider(),
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                marginStart = dp(1)
-                marginEnd = dp(1)
-                bottomMargin = dp(2)
-            },
-        )
-        val scroll = object : android.widget.HorizontalScrollView(this) {
-            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-                if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
-                    parent?.requestDisallowInterceptTouchEvent(true)
-                }
-                return super.onInterceptTouchEvent(ev)
-            }
-        }.apply {
-            isHorizontalScrollBarEnabled = false
-            isFillViewport = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-        }
-        val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        englishCandidateRow = row
-        scroll.addView(row, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        container.addView(scroll, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-        val expandButton = StrokeActionView(
-            this,
-            "triangle-down",
-            iconColor = tone(Color.rgb(180, 180, 180), Color.rgb(130, 130, 135)),
-        ).apply {
-            contentDescription = ui("展开更多候选", "Show more candidates")
-            visibility = View.GONE
-            setOnClickListener { showCandidateOverlay(this) }
-        }
-        englishExpandCandidatesButton = expandButton
-        container.addView(expandButton, LinearLayout.LayoutParams(dp(28), ViewGroup.LayoutParams.MATCH_PARENT))
-        // Same idea as the stroke candidate row's own listener: only shown
-        // once the candidates actually overflow the visible scroll width.
-        scroll.viewTreeObserver.addOnGlobalLayoutListener {
-            expandButton.visibility = if (row.width > scroll.width) View.VISIBLE else View.GONE
-        }
-        return wrapper
-    }
-
-    /**
      * Re-queries EnglishCandidateProvider for the current englishComposingWord
      * prefix (or clears the bar if suggestions are off / nothing is being
      * typed) — called after every letter, backspace, and word boundary.
@@ -3289,13 +1699,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      */
     private fun updateEnglishCandidates() {
         val epoch = ++englishCandidateQueryEpoch
-        if (englishCandidateRow == null) return
+        if (typingPanel == null) return
         if (!personalizedLearningAllowed() || !englishSuggestionsEnabled()) {
             renderEnglishCandidates(emptyList())
-            englishCandidateBarContainer?.visibility = View.GONE
             return
         }
-        englishCandidateBarContainer?.visibility = View.VISIBLE
         val prefix = englishComposingWord.toString()
         if (prefix.isEmpty()) {
             renderEnglishCandidates(emptyList())
@@ -3368,11 +1776,49 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * a non-empty encoding, per phase-0 audit section 5, adding no new row
      * or container so the fixed 300dp panel height is never touched.
      */
+    private fun smartPinyinPunctuation(char: String): String {
+        if (char.length != 1) return char
+        val ch = char[0]
+        val afterDigit = rimePinyinController.isEmpty() &&
+            currentInputConnection?.getTextBeforeCursor(1, 0)?.lastOrNull()?.isDigit() == true
+        return when (ch) {
+            ',' -> "，"
+            '.' -> if (afterDigit) "." else "。"
+            '。' -> if (afterDigit) "." else "。"
+            ':' -> if (afterDigit) ":" else "："
+            '?' -> "？"
+            '!' -> "！"
+            ';' -> "；"
+            '(' -> "（"
+            ')' -> "）"
+            else -> char
+        }
+    }
+
     private fun renderPinyinCandidates(candidates: List<String>) {
+        val preedit = rimePinyinController.currentPreedit().takeIf { it.isNotEmpty() }
+        syncPinyinComposingText(preedit)
+        val allowForget = personalizedLearningAllowed() && preedit != null
         populateLatinCandidateRow(
-            candidates.map { char -> LatinCandidate(char, longPress = null) { selectPinyinCandidate(char) } },
-            leadingLabel = rimePinyinController.currentEncoding().takeIf { it.isNotEmpty() },
+            candidates.map { char ->
+                LatinCandidate(
+                    char,
+                    longPress = if (allowForget) ({ forgetPinyinCandidate(char) }) else null,
+                ) { selectPinyinCandidate(char) }
+            },
+            leadingLabel = preedit,
+            statusHint = rimePinyinController.statusHint(),
         )
+    }
+
+    private fun forgetPinyinCandidate(word: String) {
+        if (!personalizedLearningAllowed()) return
+        rimePinyinController.deleteCandidate(word, { renderPinyinCandidates(it) }) { deleted ->
+            if (deleted) {
+                performKeyHaptic()
+                OpenLessNativeNotice.makeText(this, ui("已删除「$word」", "Removed \"$word\""), Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** Candidate tap is the ONLY way a pinyin candidate reaches the field — see toggleLatinInputMode()'s doc comment on why Space deliberately never does this. */
@@ -3445,8 +1891,11 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val selected = connection.getSelectedText(0)
         if (!selected.isNullOrEmpty()) {
             connection.commitText("", 1)
-        } else {
-            connection.deleteSurroundingText(1, 0)
+        } else if (!connection.deleteSurroundingTextInCodePoints(1, 0)) {
+            // Editors without the codepoint API can interpret DEL themselves;
+            // deleting one UTF-16 unit could leave half of an emoji behind.
+            connection.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DEL))
+            connection.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DEL))
         }
     }
 
@@ -3461,11 +1910,17 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun sendEditorEnterKey() {
-        currentInputConnection?.sendKeyEvent(android.view.KeyEvent(
+        val connection = currentInputConnection ?: return
+        val options = currentInputEditorInfo?.imeOptions ?: 0
+        val action = options and EditorInfo.IME_MASK_ACTION
+        if (draftEdit == null && options and EditorInfo.IME_FLAG_NO_ENTER_ACTION == 0 &&
+            action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED &&
+            connection.performEditorAction(action)) return
+        connection.sendKeyEvent(android.view.KeyEvent(
             android.view.KeyEvent.ACTION_DOWN,
             android.view.KeyEvent.KEYCODE_ENTER,
         ))
-        currentInputConnection?.sendKeyEvent(android.view.KeyEvent(
+        connection.sendKeyEvent(android.view.KeyEvent(
             android.view.KeyEvent.ACTION_UP,
             android.view.KeyEvent.KEYCODE_ENTER,
         ))
@@ -3475,10 +1930,13 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         cancelImeSession()
         closeDraft()
         super.onStartInput(attribute, restarting)
+        keyboardHeader?.cancelInteractions()
+        typingPanel?.closeTransientUi()
+        clipboardPanel?.cancelInteractions()
+        refreshLanguage()
         restoreInputMode()
         restoreScriptPreference()
         restoreLatinInputMode()
-        refreshLanguage()
         strokeController.resetForNewInputSession()
         englishLayer = EnglishLayer.LETTERS
         // An automatic capital belonged to the old field's sentence start;
@@ -3488,12 +1946,19 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         clearEnglishAutoText()
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
+        clearPinyinComposingInEditor()
         rimePinyinController.clear()
         rimePinyinController.resetAssociationContext()
         rimePinyinController.setLearningAllowed(personalizedLearningAllowed())
+        rimePinyinController.bindAfterCommit {
+            if (inputMode == InputMode.ENGLISH && latinInputMode == LatinInputMode.PINYIN && rimePinyinController.isEmpty()) {
+                refreshPinyinAssociations()
+            }
+        }
         rimePinyinController.bindCommit { text ->
             if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) false
             else if (currentInputConnection?.commitText(text, 1) == true) {
+                pinyinComposingActive = false
                 // Typing an offered association out by hand counts as picking it.
                 if (personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
                     strokeController.phraseRepository.recordTypedContinuation(
@@ -3507,9 +1972,12 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
                 true
             } else false
         }
-        if (ImeLearningPolicy.isPassword(attribute?.inputType ?: 0)) {
+        if (ImeLearningPolicy.isPassword(attribute?.inputType ?: 0) ||
+            ImeEditorFieldPolicy.prefersNumeric(attribute?.inputType ?: 0)) {
+            // Field adaptation is temporary; do not overwrite the user's last page.
             inputMode = InputMode.ENGLISH
             latinInputMode = LatinInputMode.ENGLISH
+            if (ImeEditorFieldPolicy.prefersNumeric(attribute?.inputType ?: 0)) englishLayer = EnglishLayer.NUMBERS
         }
         renderEnglishCandidates(emptyList())
         startRuntimeService()
@@ -3530,6 +1998,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        refreshInteractionPolicy()
+        microphoneGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        renderVoiceUi()
         // InputMethodService caches onCreateInputView()'s result across hide/
         // show. Keyboard settings write height/raise prefs while that cached
         // view is still the old footprint — rebuild when they diverge so the
@@ -3540,20 +2011,38 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val rebuild = appliedKeyboardFootprintKey != key
         updateAutoShift(refresh = false)
         if (rebuild) {
-            appliedKeyboardFootprintKey = key
+            // Only onCreateInputView may acknowledge a newly built footprint.
+            // Updating this before refresh would incorrectly select the fast path.
             refreshInputView()
         } else if (inputMode == InputMode.ENGLISH && englishLayer == EnglishLayer.LETTERS) {
             applyShiftState()
+            refreshLatinCandidateBar()
+            renderClipboardQuickChip()
+        } else if (inputMode == InputMode.ENGLISH) {
+            // A cached alphabet page may now serve a numeric field with the
+            // same privacy footprint (for example password -> phone number).
+            renderTypingKeyboard()
+            refreshLatinCandidateBar()
+            renderClipboardQuickChip()
+        } else if (inputMode == InputMode.CLIPBOARD) {
+            renderClipboardPanel()
+        } else if (inputMode == InputMode.STROKE) {
+            strokeController.refreshPanel()
         }
     }
 
     private fun keyboardFootprintKey(): String =
-        "${keyboardPanelHeightDp()}:${raiseHeightDp(this)}:$inputMode:$latinInputMode:${personalizedLearningAllowed()}"
+        "${keyboardPanelHeightDp()}:${raiseHeightDp(this)}:$inputMode:$latinInputMode:${personalizedLearningAllowed()}:$isDarkTheme:$englishUi:draft=$draftToken:${draftEdit != null}"
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        draftBar?.cancelInteractions()
+        keyboardHeader?.cancelInteractions()
+        typingPanel?.closeTransientUi()
         clearEnglishAutoText()
         if (draftEdit != null && (recording || processing)) cancelDictation()
         closeDraft()
+        clipboardPanel?.cancelInteractions()
+        strokeController.cancelInteractions()
         super.onFinishInputView(finishingInput)
     }
 
@@ -3574,12 +2063,16 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     override fun onFinishInput() {
+        keyboardHeader?.cancelInteractions()
+        typingPanel?.closeTransientUi()
+        clipboardPanel?.cancelInteractions()
         clearEnglishAutoText()
         if (draftEdit != null && (recording || processing)) cancelDictation()
         closeDraft()
         cancelImeSession()
         englishCandidateQueryEpoch++
         englishComposingWord.clear()
+        clearPinyinComposingInEditor()
         rimePinyinController.clear()
         rimePinyinController.resetAssociationContext()
         strokeController.resetForNewInputSession()
@@ -3656,14 +2149,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     internal fun toggleDictation(initialCloud: Boolean = false) {
         if (processing) return
-        if (isSensitiveField(currentInputEditorInfo)) {
-            updateStatus("敏感字段，禁止听写")
-            return
-        }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            updateStatus("请先授予麦克风权限")
-            return
-        }
         if (recording && quickNoteArmed) {
             quickNoteDictation()
             return
@@ -3674,6 +2159,16 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             setState("thinking", "正在思考")
             stopImeSession()
         } else {
+            if (hasForeignVoiceActivity()) { renderVoiceUi(); return }
+        if (isSensitiveField(currentInputEditorInfo)) {
+            updateStatus("敏感字段，禁止听写")
+            return
+        }
+        microphoneGranted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (!microphoneGranted) {
+            updateStatus("请先授予麦克风权限")
+            return
+        }
             if (!isBackendReady()) {
                 if (!awaitingBackendReadyRecheck) {
                     backendRecheckStartedAtMs = android.os.SystemClock.elapsedRealtime()
@@ -3707,6 +2202,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             // callback ever arrives, so both were structurally unreachable
             // on every normal tap-to-start (silently never firing).
             recordingStartedAtMs = android.os.SystemClock.elapsedRealtime()
+            latestVoiceLevel = 0f
             maxObservedLevelThisSession = 0f
             voiceLinkWarning?.visibility = View.GONE
             performKeyHaptic()
@@ -3720,8 +2216,22 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             imeSessionId = null
             cloudNoteArmed = initialCloud
             imeRequestId = nextImeRequest.incrementAndGet()
+            activeImeOwner = ImeRequestOwner(sessionEpoch, imeRequestId)
+            activeImeOwner?.let(imeFrameGate::begin)
+            typingVoiceOwner = null
+            imeStopRequested = false
+            imeCaptureEnded = false
+            externalRecording = false
+            externalProcessing = false
+            externalVoiceSessionId = null
             pendingImeStop = false
-            if (!sendImeCommand("start", captureCursorContext())) { recording = false; processing = false }
+            if (!sendImeCommand("start", captureCursorContext())) {
+                recording = false
+                processing = false
+                imeFrameGate.finish(activeImeOwner)
+                activeImeOwner = null
+                updateStatus(currentMessage)
+            } else updateStatus(currentMessage)
         }
     }
 
@@ -3733,6 +2243,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         cloudNoteArmed = false
         cloudNoteSubmitting = false
         invalidateSession("已取消")
+        setState("cancelled", ui("已取消", "Cancelled"))
         cancelImeSession()
     }
 
@@ -3796,29 +2307,26 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
      * what the user described as the link being "disconnected".
      */
     private fun updateBackendLinkIndicator() {
-        val armedAccent = armedAccentColor()
+        val uiState = voiceUiState()
+        val displayCapture = uiState.phase == ImeVoicePhase.RECORDING || uiState.phase == ImeVoicePhase.STARTING
+        val displayProcessing = uiState.phase == ImeVoicePhase.PROCESSING || uiState.phase == ImeVoicePhase.SUBMITTING
+        val armedAccent = if (hasForeignVoiceActivity()) null else armedAccentColor()
         val color = when {
             // Matches VoiceButton's own waveform/dots color for each armed
             // gesture exactly (armedModeColor()) — the breathing dot and
             // the mic animation should never disagree about which mode a
             // dictation is currently armed for, recording or thinking.
-            (recording || processing || cloudNoteSubmitting) && armedAccent != null -> armedAccent
-            recording -> LINK_COLOR_RECORDING
-            processing -> LINK_COLOR_PROCESSING
+            (displayCapture || displayProcessing) && armedAccent != null -> armedAccent
+            displayCapture -> LINK_COLOR_RECORDING
+            displayProcessing -> LINK_COLOR_PROCESSING
             !backendLinkHealthy -> LINK_COLOR_ISSUE
             asrRoute == "localRaw" || (asrRoute == "local" && !networkAvailable) -> LINK_COLOR_READY_LOCAL_RAW
             asrRoute == "local" -> LINK_COLOR_READY_LOCAL
             asrRoute == "unavailable" -> LINK_COLOR_ISSUE
             else -> LINK_COLOR_READY
         }
-        (backendLinkIndicator?.background as? GradientDrawable)?.apply {
-            setColor(color)
-            // The light-white dot would vanish on the light keyboard without an edge.
-            if (color == LINK_COLOR_READY_LOCAL_RAW) setStroke(dp(1), Color.rgb(148, 163, 184)) else setStroke(0, Color.TRANSPARENT)
-        }
         val ready = color == LINK_COLOR_READY || color == LINK_COLOR_READY_LOCAL || color == LINK_COLOR_READY_LOCAL_RAW
-        backendLinkPulseAnimator?.duration =
-            if (ready) BACKEND_LINK_READY_PULSE_DURATION_MS else BACKEND_LINK_PULSE_DURATION_MS
+        keyboardHeader?.renderLink(color, ready)
     }
 
     /**
@@ -3896,17 +2404,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         }, 1000L)
     }
 
-    private fun runNativeAction(action: String, call: () -> Unit) {
-        try {
-            call()
-        } catch (error: Throwable) {
-            recording = false
-            processing = false
-            updateStatus("${action}失败，请打开 OpenLess 后重试")
-            android.util.Log.w("OpenLessImeService", "$action native bridge unavailable", error)
-        }
-    }
-
     /**
      * `message ?: fallback` only substitutes for a literal null — a native
      * capsule-state event carrying a blank-but-non-null message (empty
@@ -3921,70 +2418,111 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private fun String?.orDefault(fallback: String): String = this?.takeIf { it.isNotBlank() } ?: fallback
 
     override fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
-        voiceButton?.audioLevel = level.coerceIn(0f, 1f)
-        when (state) {
-            "recording" -> {
-                if (!recording) {
-                    // Fresh recording attempt — give it a clean silence watch.
-                    recordingStartedAtMs = android.os.SystemClock.elapsedRealtime()
-                    maxObservedLevelThisSession = 0f
-                    voiceLinkWarning?.visibility = View.GONE
-                    performKeyHaptic()
+        onCapsuleStateChangedWithSession(state, message, level, null)
+    }
+
+    override fun onCapsuleStateChangedWithSession(state: String, message: String?, level: Float, sessionId: String?) {
+        val frame = ImeCapsuleFrame(sessionId?.takeUnless { it.isBlank() }, state, message, level)
+        when (imeFrameGate.accept(frame)) {
+            ImeFrameDisposition.OWNED -> {
+                if (!ownsImeRequest()) return
+                externalRecording = false
+                externalProcessing = false
+                externalVoiceSessionId = null
+                applyOwnedCapsuleFrame(frame)
+            }
+            ImeFrameDisposition.EXTERNAL -> {
+                when (state) {
+                    "recording" -> { externalRecording = true; externalProcessing = false; externalVoiceSessionId = frame.sessionId }
+                    "transcribing", "polishing" -> { externalRecording = false; externalProcessing = true; externalVoiceSessionId = frame.sessionId }
+                    "idle", "done", "cancelled", "error" -> {
+                        if (frame.sessionId == null || externalVoiceSessionId == null || frame.sessionId == externalVoiceSessionId) {
+                            externalRecording = false
+                            externalProcessing = false
+                            externalVoiceSessionId = null
+                        }
+                        // Only real terminal frames retire a known foreign id.
+                        // Idle is a presentation cue and may be temporary.
+                        if (state != "idle") frame.sessionId?.let(imeFrameGate::retire)
+                    }
                 }
+                renderVoiceUi()
+            }
+            ImeFrameDisposition.BUFFERED, ImeFrameDisposition.FOREIGN,
+            ImeFrameDisposition.UNIDENTIFIED, ImeFrameDisposition.STALE -> Unit
+        }
+    }
+
+    private fun applyOwnedCapsuleFrame(frame: ImeCapsuleFrame) {
+        val state = frame.state
+        val message = frame.message
+        val level = frame.level
+        when (ImeVoiceFramePolicy.resolve(true, imeCaptureEnded, state, imeStopRequested)) {
+            ImeVoiceFrameAction.EXTERNAL -> return
+            ImeVoiceFrameAction.IGNORE -> return
+            ImeVoiceFrameAction.RECORDING -> {
+                latestVoiceLevel = level
                 recording = true
                 processing = false
-                maxObservedLevelThisSession = maxOf(maxObservedLevelThisSession, level)
+                maxObservedLevelThisSession = maxOf(maxObservedLevelThisSession, if (level.isFinite()) level else 0f)
                 val elapsedMs = android.os.SystemClock.elapsedRealtime() - recordingStartedAtMs
-                if (maxObservedLevelThisSession >= SILENCE_LEVEL_THRESHOLD) {
-                    voiceLinkWarning?.visibility = View.GONE
-                } else if (elapsedMs > SILENCE_CHECK_DELAY_MS) {
-                    // This only runs once an actual recording session is
-                    // underway, so it can't overlap with the "backend not
-                    // ready" case in toggleDictation() (that one returns
-                    // before a session ever starts) — but set this widget's
-                    // own text explicitly anyway rather than trusting
-                    // whatever the other case last left it as.
+                if (maxObservedLevelThisSession >= SILENCE_LEVEL_THRESHOLD) voiceLinkWarning?.visibility = View.GONE
+                else if (elapsedMs > SILENCE_CHECK_DELAY_MS) {
                     voiceLinkWarning?.text = ui("检测到麦克风无声音，点击重启应用", "No mic audio detected — tap to restart the app")
                     voiceLinkWarning?.visibility = View.VISIBLE
                 }
                 setState("speaking", "再次点击结束 · 下划取消")
             }
-            "transcribing" -> {
-                // Guarded by the same "was still recording" check as
-                // "polishing" below, since either one can be the first to
-                // fire after recording actually stops — only whichever
-                // gets there first should vibrate.
+            ImeVoiceFrameAction.PROCESSING -> {
                 if (recording) performKeyHaptic()
+                imeCaptureEnded = true
                 recording = false
                 processing = true
                 setState("thinking", "正在思考")
             }
-            "polishing" -> {
-                if (recording) performKeyHaptic()
+            ImeVoiceFrameAction.WAIT_RESULT -> {
+                imeCaptureEnded = true
                 recording = false
                 processing = true
-                setState("thinking", "正在思考")
+                setState("thinking", ui("正在完成听写", "Finishing dictation"))
             }
-            "done" -> {
+            ImeVoiceFrameAction.EXTERNALLY_COMPLETED -> {
+                imeFrameGate.finish(activeImeOwner)
+                activeImeOwner = null
+                typingVoiceOwner = null
                 recording = false
                 processing = false
-                setState("done", message.orDefault("已完成"))
-                performKeyHaptic()
+                imeCaptureEnded = true
+                // A global stop does not emit this client's completed/text
+                // callback. Never fabricate receipt or write an unknown result.
+                setState("error", ui("听写已由其他入口结束，本输入法未收到文字；请检查历史或重试", "Dictation ended elsewhere; this keyboard received no text. Check history or retry"))
             }
-            "cancelled" -> {
+            ImeVoiceFrameAction.CANCELLED -> {
+                imeFrameGate.finish(activeImeOwner)
+                activeImeOwner = null
+                typingVoiceOwner = null
                 recording = false
                 processing = false
-                setState("idle", message.orDefault("已取消"))
+                setState("cancelled", message.orDefault("已取消"))
             }
-            "error" -> {
+            ImeVoiceFrameAction.ERROR -> {
                 recording = false
-                processing = false
-                setState("error", message.orDefault("识别失败"))
-            }
-            "idle" -> if (!recording) {
-                setState("idle", message.orDefault("点击开始说话"))
+                imeCaptureEnded = true
+                if (imeStopRequested) {
+                    // A terminal cue is not the scoped result. Keep the owner
+                    // until its completed/error callback prevents early restart.
+                    processing = true
+                    setState("thinking", message.orDefault("正在确认听写结果"))
+                } else {
+                    imeFrameGate.finish(activeImeOwner)
+                    activeImeOwner = null
+                    typingVoiceOwner = null
+                    processing = false
+                    setState("error", message.orDefault("识别失败"))
+                }
             }
         }
+        renderVoiceUi(pushAudio = true)
     }
 
     private fun invalidateSession(message: String) {
@@ -4003,21 +2541,47 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun updateStatus(message: String) {
         currentMessage = message
-        status?.text = displayStatus(message)
+        renderVoiceUi()
+    }
+
+    private fun renderVoiceUi(pushAudio: Boolean = false) {
+        val snapshot = voiceUiState()
+        val foreign = hasForeignVoiceActivity()
+        val capture = !foreign && snapshot.phase == ImeVoicePhase.RECORDING
+        val busy = foreign || snapshot.phase in listOf(ImeVoicePhase.STARTING, ImeVoicePhase.PROCESSING, ImeVoicePhase.SUBMITTING)
+        val caption = when {
+            foreign -> ui("听写服务正忙，请在发起听写的入口结束", "Dictation is busy; finish it in the entry that started it")
+            snapshot.phase == ImeVoicePhase.STARTING -> ui("正在准备录音", "Preparing recording")
+            !snapshot.canStart && !snapshot.editorLocked && isSensitiveField(currentInputEditorInfo) -> ui("敏感字段，已禁用听写", "Dictation disabled in this field")
+            !snapshot.canStart && !snapshot.editorLocked && !microphoneGranted -> ui("需要麦克风权限，请打开设置", "Microphone permission required; open settings")
+            else -> snapshot.message
+        }
+        status?.text = caption
         status?.setTextColor(recordingAccentColor())
         voiceRawHint?.text = rawModeHintText()
         voiceRawHint?.setTextColor(rawModeHintColor())
-        voiceRawHint?.visibility = if (rawModeHintVisible()) View.VISIBLE else View.GONE
-        voiceButton?.isRecording = recording
-        // The Cloud notes submit shows the same thinking dots as the step
-        // before it, even though `processing` itself is already false.
-        voiceButton?.isProcessing = processing || cloudNoteSubmitting
-        // Re-pushed here, not only from each field's own setter: a panel
-        // rebuild mid-dictation (a draft opening or closing, a mode switch)
-        // hands us a fresh VoiceButton that never saw those setters fire.
-        voiceButton?.rawModeActive = rawModeArmed
-        voiceButton?.quickNoteActive = quickNoteArmed
-        voiceButton?.cloudNoteActive = cloudNoteArmed || cloudNoteSubmitting
+        voiceRawHint?.visibility = if (!foreign && rawModeHintVisible()) View.VISIBLE else View.GONE
+        voiceButton?.isEnabled = snapshot.canStart || (ownsImeRequest() && recording)
+        voiceButton?.isRecording = capture
+        voiceButton?.isProcessing = busy
+        voiceButton?.rawModeActive = snapshot.mode == ImeVoiceMode.RAW
+        voiceButton?.quickNoteActive = snapshot.mode == ImeVoiceMode.QUICK_NOTE
+        voiceButton?.cloudNoteActive = snapshot.mode == ImeVoiceMode.CLOUD_NOTE
+        if (pushAudio) voiceButton?.audioLevel = snapshot.audioLevel
+        voicePanel?.renderAvailability(capture, busy, snapshot.canCancel, snapshot.canStart || (ownsImeRequest() && recording))
+        clipboardPanel?.setBlocked(snapshot.editorLocked)
+        strokeController.setInteractionBlocked(snapshot.editorLocked)
+        voiceButton?.contentDescription = when {
+            foreign -> ui("其他入口正在听写", "Another entry is dictating")
+            snapshot.phase == ImeVoicePhase.STARTING -> ui("正在准备录音，点击结束", "Preparing recording; tap to finish")
+            ownsImeRequest() && recording -> ui("结束听写", "Finish dictation")
+            snapshot.canStart -> ui("开始听写", "Start dictation")
+            else -> caption
+        }
+        typingPanel?.renderVoice(
+            caption, capture, busy, if (pushAudio) snapshot.audioLevel else null,
+            snapshot.canCancel && typingVoiceOwner?.matches(sessionEpoch, imeRequestId) == true,
+        )
         updateDictationResultControls()
         updateBackendLinkIndicator()
     }
@@ -4186,9 +2750,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var draftMessageIsError = false
     // Bumped whenever a draft opens or closes; a submit result only applies to the draft that sent it.
     private var draftToken = 0L
-    private var draftStatusView: TextView? = null
-    private var draftCancelButton: TextView? = null
-    private var draftConfirmButton: TextView? = null
 
     /**
      * Every key, candidate, backspace and dictation commit in this service
@@ -4211,6 +2772,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         clearEnglishAutoText()
         englishComposingWord.clear()
         englishCandidateQueryEpoch++
+        clearPinyinComposingInEditor()
         rimePinyinController.clear()
         rimePinyinController.resetAssociationContext()
         strokeController.resetForModeSwitch()
@@ -4439,9 +3001,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         draftSubmitting = false
         draftMessage = null
         draftMessageIsError = false
-        draftStatusView = null
-        draftCancelButton = null
-        draftConfirmButton = null
+        draftBar?.cancelInteractions()
+        draftBar = null
         resetEditingStateForTargetChange()
         refreshInputView()
     }
@@ -4453,105 +3014,31 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     private fun updateDraftControls() {
-        draftStatusView?.apply {
-            text = draftMessage ?: when (draftPurpose) {
-                DraftPurpose.CLOUD_NOTE -> ui("云笔记草稿", "Cloud note draft")
-                DraftPurpose.DICTATION_EDIT -> ui("编辑后替换原文", "Edit, then replace")
-            }
-            setTextColor(
-                if (draftMessage != null && draftMessageIsError) LINK_COLOR_CLOUD_NOTE
-                else tone(Color.rgb(190, 190, 190), Color.rgb(110, 110, 115)),
-            )
+        val message = draftMessage ?: when (draftPurpose) {
+            DraftPurpose.CLOUD_NOTE -> ui("云笔记草稿", "Cloud note draft")
+            DraftPurpose.DICTATION_EDIT -> ui("编辑后替换原文", "Edit, then replace")
         }
-        val enabled = !draftSubmitting
-        listOf(draftCancelButton, draftConfirmButton).forEach { button ->
-            button?.isEnabled = enabled
-            button?.alpha = if (enabled) 1f else 0.45f
-        }
+        draftBar?.render(
+            message, draftMessage != null && draftMessageIsError, draftSubmitting,
+            if (draftPurpose == DraftPurpose.CLOUD_NOTE) keyboardPalette().error else keyboardPalette().accent,
+        )
     }
 
-    /**
-     * Stacks the draft bar (draft box, then Cancel / status / Confirm) on top
-     * of the regular input view while a draft is open. The keyboard panel
-     * below keeps its own height, header and mode toggle, so every input
-     * mode stays fully usable for editing the draft; the IME just grows
-     * taller by the height of the bar.
-     */
-    private fun wrapWithDraftBar(keyboard: View): View {
-        val edit = draftEdit ?: return keyboard
-        (edit.parent as? ViewGroup)?.removeView(edit)
-        val panelColor = tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246))
-        edit.setTextColor(tone(Color.WHITE, Color.rgb(28, 28, 30)))
-        edit.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(10).toFloat()
-            setColor(tone(Color.rgb(34, 34, 34), Color.WHITE))
-            setStroke(dp(1), tone(Color.rgb(68, 68, 68), Color.rgb(215, 215, 218)))
+    private fun buildDraftBar(): ImeDraftBar? {
+        val edit = draftEdit ?: return null
+        return ImeDraftBar(
+            this, keyboardPalette(), edit,
+            onCancel = ::discardDraft,
+            onConfirm = ::confirmDraft,
+            onFeedback = ::performKeyHaptic,
+        ).also { bar ->
+            draftBar = bar
+            bar.cancel.text = ui("取消", "Cancel")
+            bar.cancel.contentDescription = ui("取消草稿", "Cancel draft")
+            bar.confirm.text = ui("确认", "Confirm")
+            bar.confirm.contentDescription = ui("确认草稿", "Confirm draft")
+            updateDraftControls()
         }
-        edit.setPadding(dp(12), dp(8), dp(12), dp(8))
-
-        fun barButton(label: String, fill: Int, textColor: Int, action: () -> Unit) = TextView(this).apply {
-            text = label
-            textSize = 15f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(textColor)
-            setTypeface(typeface, Typeface.BOLD)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(18).toFloat()
-                setColor(fill)
-            }
-            isClickable = true
-            setOnClickListener {
-                performKeyHaptic()
-                action()
-            }
-        }
-        val cancel = barButton(
-            ui("取消", "Cancel"),
-            tone(Color.rgb(60, 60, 60), Color.rgb(225, 225, 228)),
-            tone(Color.WHITE, Color.rgb(40, 40, 44)),
-        ) { discardDraft() }
-        val confirmFill = if (draftPurpose == DraftPurpose.CLOUD_NOTE) LINK_COLOR_CLOUD_NOTE else strokeEncodeAccentColor
-        val confirm = barButton(ui("确认", "Confirm"), confirmFill, Color.WHITE) { confirmDraft() }
-        val statusView = TextView(this).apply {
-            textSize = 13f
-            gravity = android.view.Gravity.CENTER
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        draftCancelButton = cancel
-        draftConfirmButton = confirm
-        draftStatusView = statusView
-        updateDraftControls()
-
-        val buttons = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        buttons.addView(cancel, LinearLayout.LayoutParams(dp(84), dp(36)))
-        buttons.addView(statusView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            marginStart = dp(8)
-            marginEnd = dp(8)
-        })
-        buttons.addView(confirm, LinearLayout.LayoutParams(dp(84), dp(36)))
-
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(8))
-            setBackgroundColor(panelColor)
-            // Swallow stray touches in the bar's padding so they can't reach the app underneath.
-            isClickable = true
-        }
-        bar.addView(edit, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        bar.addView(buttons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(8)
-        })
-
-        val host = DraftHost(this, keyboard).apply { orientation = LinearLayout.VERTICAL }
-        host.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        host.addView(buildDivider(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
-        host.addView(keyboard)
-        // View focus (not window focus) is what makes the caret draw and follow the text.
-        edit.post { edit.requestFocus() }
-        return host
     }
 
     private fun commitImeText(text: String) {
@@ -4574,21 +3061,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         lastDictationEpoch = sessionEpoch
         dictationTextUndone = false
         setState("done", "已上屏")
-    }
-
-    private fun flatCircleButton(icon: String, sizeDp: Int, description: String, action: () -> Unit): TextView {
-        return TextView(this).apply {
-            text = icon
-            textSize = sizeDp * 0.45f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(tone(Color.WHITE, Color.rgb(40, 40, 44)))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(tone(Color.rgb(60, 60, 60), Color.rgb(225, 225, 228)))
-            }
-            contentDescription = description
-            setOnClickListener { action() }
-        }
     }
 
     /** Shows/hides and relabels the undo↔redo toggle and edit button for the last dictation result. */
@@ -4711,6 +3183,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
     private fun setState(nextState: String, message: String, revertDelayMs: Long = DONE_TO_IDLE_DELAY_MS) {
         state = nextState
+        if (nextState != "done") ++statusRevertToken
         // The submit only ever shows as "thinking"; any other state means
         // it finished, failed, or a new dictation took over.
         if (nextState != "thinking") cloudNoteSubmitting = false
@@ -4723,7 +3196,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // away — see scheduleRevertToIdle(). revertDelayMs only ever
         // differs from the default for quickNoteDictation()'s own shorter
         // "笔记已记录" confirmation (QUICK_NOTE_CONFIRMATION_DELAY_MS).
-        if (nextState == "done") scheduleRevertToIdle(revertDelayMs)
+        if (nextState == "done" || nextState == "cancelled") scheduleRevertToIdle(revertDelayMs)
     }
 
     /**
@@ -4744,7 +3217,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         val epoch = sessionEpoch
         val token = ++statusRevertToken
         android.os.Handler(Looper.getMainLooper()).postDelayed({
-            if (sessionEpoch == epoch && statusRevertToken == token) {
+            if (sessionEpoch == epoch && statusRevertToken == token && !dictationEditingLocked()) {
                 setState("idle", ui("点击开始说话", "Tap to speak"))
             }
         }, delayMs)
@@ -4781,82 +3254,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     internal fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-    /**
-     * Purely visual 0.98x press-scale via StateListAnimator, which reacts to
-     * the view's own pressed drawable-state — it doesn't add or replace any
-     * click/touch listener, so a key's existing action/repeat wiring is
-     * untouched.
-     */
-    private fun attachPressScale(view: View) {
-        val down = android.animation.ObjectAnimator.ofPropertyValuesHolder(
-            view,
-            android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, 0.98f),
-            android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.98f),
-        ).setDuration(100)
-        val up = android.animation.ObjectAnimator.ofPropertyValuesHolder(
-            view,
-            android.animation.PropertyValuesHolder.ofFloat(View.SCALE_X, 1f),
-            android.animation.PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f),
-        ).setDuration(100)
-        view.stateListAnimator = android.animation.StateListAnimator().apply {
-            addState(intArrayOf(android.R.attr.state_pressed), down)
-            addState(intArrayOf(), up)
-        }
-    }
-
-    internal fun roundedButton(color: Int, radius: Int): android.graphics.drawable.Drawable {
-        val lowerEdge = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = radius.toFloat()
-            setColor(mixColor(color, Color.BLACK, 0.72f))
-        }
-        val face = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = radius.toFloat()
-            orientation = GradientDrawable.Orientation.TOP_BOTTOM
-            colors = intArrayOf(
-                mixColor(color, Color.WHITE, 0.09f),
-                color,
-                mixColor(color, Color.BLACK, 0.18f),
-            )
-            setStroke(dp(1), mixColor(color, Color.BLACK, 0.55f))
-        }
-        return android.graphics.drawable.LayerDrawable(arrayOf(lowerEdge, face)).apply {
-            // The exposed lower layer forms the reference keyboard's dark keycap step.
-            setLayerInset(0, 0, dp(2), 0, 0)
-            setLayerInset(1, 0, 0, 0, dp(3))
-        }
-    }
-
-    // Flat (no keycap relief) background for the encode+candidate strip: a
-    // rounded rect a touch lighter than the panel, plus a hairline divider
-    // baked in at the fixed 24dp encode/candidate boundary. Since `top`'s
-    // height is always exactly dp(60), this offset never drifts.
-    internal fun buildEncodeAreaBackground(): android.graphics.drawable.Drawable {
-        val panel = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(6).toFloat()
-            setColor(tone(Color.rgb(58, 58, 58), Color.rgb(228, 228, 232)))
-        }
-        val divider = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            setColor(tone(Color.rgb(82, 82, 82), Color.rgb(205, 205, 210)))
-        }
-        val dividerBottomInset = (dp(60) - dp(24) - dp(1)).coerceAtLeast(0)
-        return android.graphics.drawable.LayerDrawable(arrayOf(panel, divider)).apply {
-            setLayerInset(1, dp(8), dp(24), dp(8), dividerBottomInset)
-        }
-    }
-
-    private fun mixColor(first: Int, second: Int, amount: Float): Int {
-        val ratio = amount.coerceIn(0f, 1f)
-        return Color.rgb(
-            (Color.red(first) + (Color.red(second) - Color.red(first)) * ratio).toInt(),
-            (Color.green(first) + (Color.green(second) - Color.green(first)) * ratio).toInt(),
-            (Color.blue(first) + (Color.blue(second) - Color.blue(first)) * ratio).toInt(),
-        )
-    }
 
     private fun startRuntimeService() {
         try {
@@ -4924,68 +3321,8 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /**
-     * A vertical stack of keys that also recognizes a whole-column swipe:
-     * once a drag exceeds touch slop, this claims the gesture from whichever
-     * child key the drag started on (via onInterceptTouchEvent) so a single
-     * swipe anywhere in the column advances exactly one group, rather than
-     * being absorbed as a press/drag on one key.
-     */
-    internal class SwipeRail(
-        context: android.content.Context,
-        private val onSwipe: (Int) -> Unit,
-    ) : LinearLayout(context) {
-        private var startY = 0f
-        private var intercepting = false
-        private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
-
-        init {
-            excludeFromSystemGestures(this)
-        }
-
-        override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
-            when (ev.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    startY = ev.y
-                    intercepting = false
-                }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    if (!intercepting && kotlin.math.abs(ev.y - startY) > touchSlop) {
-                        intercepting = true
-                        // Stop the outer SwipeModeContainer (or any other
-                        // ancestor) from also trying to claim this gesture
-                        // once we've committed to handling it as a vertical
-                        // drag — otherwise a still-moving finger can flip
-                        // back and forth between the two interceptors.
-                        parent?.requestDisallowInterceptTouchEvent(true)
-                    }
-                }
-            }
-            return intercepting
-        }
-
-        override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-            if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
-                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
-            ) {
-                val dy = startY - event.y
-                // Swiping up (finger moves toward the top, dy > 0) advances to
-                // the next group; swiping down goes back to the previous one.
-                // Posted rather than called inline: onSwipe rebuilds the whole
-                // input view, and doing that synchronously while this touch
-                // gesture is still unwinding through the view we're about to
-                // replace is what caused the panel to visibly flicker
-                // closed/open under the finger.
-                if (kotlin.math.abs(dy) > touchSlop) post { onSwipe(if (dy > 0) 1 else -1) }
-                intercepting = false
-            }
-            return true
-        }
-    }
-
-    /**
      * Outer IME host for stretch+raise: key panel on top + empty lift strip
-     * below. Forces EXACT total height the same way [SwipeModeContainer]
-     * forces the key-panel height (setInputView discards LayoutParams).
+     * below. Owns exact total height because setInputView replaces LayoutParams.
      * Re-reads prefs on every measure so a settings change applies on the
      * next layout even before a full view rebuild.
      */
@@ -4993,14 +3330,20 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         context: android.content.Context,
     ) : LinearLayout(context) {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val panel = panelHeightPx(context)
-            val raise = raiseHeightPx(context)
+            val preferredPanel = panelHeightPx(context)
+            val preferredRaise = raiseHeightPx(context)
+            val bound = if (View.MeasureSpec.getMode(heightMeasureSpec) == View.MeasureSpec.UNSPECIFIED) {
+                preferredPanel + preferredRaise
+            } else View.MeasureSpec.getSize(heightMeasureSpec).coerceAtLeast(0)
+            val panel = minOf(preferredPanel, bound)
+            val raise = minOf(preferredRaise, (bound - panel).coerceAtLeast(0))
             if (childCount >= 1) {
-                getChildAt(0).layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, panel)
+                val keys = getChildAt(0)
+                if (keys.layoutParams.height != panel) keys.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, panel)
             }
             if (childCount >= 2) {
                 val spacer = getChildAt(1)
-                spacer.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, raise)
+                if (spacer.layoutParams.height != raise) spacer.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, raise)
                 spacer.visibility = if (raise > 0) View.VISIBLE else View.GONE
             }
             val exactHeightSpec = android.view.View.MeasureSpec.makeMeasureSpec(
@@ -5010,12 +3353,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             super.onMeasure(widthMeasureSpec, exactHeightSpec)
         }
     }
-
-    /** Input view while a draft is open: the draft bar stacked above the regular [keyboard] view. */
-    private class DraftHost(
-        context: android.content.Context,
-        val keyboard: View,
-    ) : LinearLayout(context)
 
     /**
      * The draft box's own InputConnection, with key events turned into text
@@ -5057,1352 +3394,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
 
         // A multi-line draft has no editor action; the action key is a line break.
         override fun performEditorAction(actionCode: Int): Boolean = commitText("\n", 1)
-    }
-
-    /**
-     * Horizontal swipe-to-switch-mode, applied to every panel's root
-     * container: a left/right drag anywhere that isn't already claimed by a
-     * vertical gesture (like SwipeRail) steps the input mode toward
-     * Voice/English, matching the toggle switch's order. A downward drag
-     * anywhere on the panel dismisses the keyboard entirely, same as any
-     * other IME's own hide gesture.
-     */
-    internal class SwipeModeContainer(
-        context: android.content.Context,
-        // Fraction of the container's width, measured from the left edge,
-        // where a downward drag never triggers dismiss — the stroke panel's
-        // punctuation rail lives there and owns vertical drags itself
-        // (cycling punctuation groups). Without this, a clean vertical drag
-        // starting on the rail was won by this container's own intercept
-        // check on the very same touch-move event, before the rail (a
-        // descendant, checked only after this ancestor) ever got a chance
-        // to call requestDisallowInterceptTouchEvent — so its own "stop the
-        // outer container" call never ran in time. Excluding the zone by
-        // touch-down position sidesteps that dispatch-order race entirely.
-        private val verticalDismissExclusionRatio: Float = 0f,
-        // Off for the clipboard history sub-panel: its rows use left/right
-        // swipes themselves (favorite / add correction rule), and trying to
-        // exclude just their region would hit the exact same dispatch-order
-        // race noted above for the punctuation rail — simplest to just not
-        // compete for horizontal drags at all inside that sub-panel.
-        private val horizontalSwipeEnabled: Boolean = true,
-        // Checked once, at the moment a drag first looks vertical enough to
-        // possibly claim (see onInterceptTouchEvent's ACTION_MOVE branch) —
-        // returning false there lets the gesture fall through to a nested
-        // scrollable child instead (e.g. the clipboard history list), so a
-        // downward drag only dismisses the keyboard once that child is
-        // already scrolled to its own top, the same "pull past the top to
-        // dismiss" convention most scrollable sheets use. Defaults to
-        // "always allowed" for every panel that has no such nested scroll.
-        private val verticalDismissAllowed: () -> Boolean = { true },
-        private val onSwipe: (Int) -> Unit,
-    ) : LinearLayout(context) {
-        private var startX = 0f
-        private var startY = 0f
-        private var interceptingHorizontal = false
-        private var interceptingVertical = false
-        private var verticalDismissBlockedForGesture = false
-        private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
-        private val dismissThreshold = (120 * resources.displayMetrics.density).toInt()
-        // Committing an actual mode switch needs a much bigger, deliberate
-        // drag than the touchSlop-based early claim above (which only
-        // exists so a vertical scroll elsewhere doesn't get mistaken for a
-        // mode swipe partway through) — a fraction of the panel's own width
-        // rather than a fixed dp figure, so the required drag scales with
-        // the device instead of feeling different on a small vs. large
-        // screen. Computed against `width` at commit time (onTouchEvent),
-        // not here at construction, since the view isn't laid out yet.
-        private val commitThresholdFraction = 1f / 3f
-
-        init {
-            excludeFromSystemGestures(this)
-        }
-
-        // InputMethodService.setInputView() re-wraps whatever view we return
-        // in its OWN FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
-        // discarding the fixed-height LayoutParams every panel builder sets
-        // on its root — confirmed via a live device: the attached root's
-        // own layoutParams.height read back as WRAP_CONTENT (-2), not the
-        // configured height we set. Under a generous (near-fullscreen)
-        // WRAP_CONTENT/AT_MOST measure spec from the system, any 0dp/weight=1
-        // flexible child (the spacer used by several panels) happily expands
-        // to fill that huge bound instead of the real configured height.
-        // Forcing an EXACTLY height spec here — regardless of what the parent
-        // asks for — makes every panel's height genuinely fixed instead of
-        // accidental.
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val fixedHeight = panelHeightPx(context)
-            val exactHeightSpec = android.view.View.MeasureSpec.makeMeasureSpec(fixedHeight, android.view.View.MeasureSpec.EXACTLY)
-            super.onMeasure(widthMeasureSpec, exactHeightSpec)
-        }
-
-        override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
-            when (ev.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    startX = ev.x
-                    startY = ev.y
-                    interceptingHorizontal = false
-                    interceptingVertical = false
-                    verticalDismissBlockedForGesture = verticalDismissExclusionRatio > 0f &&
-                        ev.x < width * verticalDismissExclusionRatio
-                }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    val dx = ev.x - startX
-                    val dy = ev.y - startY
-                    // Require a clearly horizontal drag so this never steals a
-                    // vertical gesture meant for a nested SwipeRail.
-                    if (horizontalSwipeEnabled && !interceptingHorizontal && !interceptingVertical &&
-                        kotlin.math.abs(dx) > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f
-                    ) {
-                        interceptingHorizontal = true
-                        parent?.requestDisallowInterceptTouchEvent(true)
-                    }
-                    // A downward drag anywhere not already claimed by a
-                    // nested vertical gesture (the candidate scroll) or
-                    // excluded by touch-down position (the punctuation rail)
-                    // dismisses the keyboard — unless verticalDismissAllowed()
-                    // says a nested scrollable child still has room to
-                    // scroll up first (the clipboard history list).
-                    if (!interceptingHorizontal && !interceptingVertical && !verticalDismissBlockedForGesture &&
-                        dy > touchSlop && dy > kotlin.math.abs(dx) * 1.5f && verticalDismissAllowed()
-                    ) {
-                        interceptingVertical = true
-                        parent?.requestDisallowInterceptTouchEvent(true)
-                    }
-                }
-            }
-            return interceptingHorizontal || interceptingVertical
-        }
-
-        override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-            if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
-                event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
-            ) {
-                val dx = event.x - startX
-                val dy = event.y - startY
-                if (interceptingVertical && dy > dismissThreshold) {
-                    post { (context as? OpenLessImeService)?.hideKeyboardPanel() }
-                } else if (kotlin.math.abs(dx) > width * commitThresholdFraction) {
-                    // Swiping left (finger moves toward the start, dx < 0)
-                    // steps toward Voice; swiping right steps toward
-                    // English. (This is inverted from the raw dx sign — on-
-                    // device testing showed dx < 0 landing on English, so
-                    // the mapping below matches what actually happens rather
-                    // than the "obvious" sign.)
-                    // Posted for the same reason as SwipeRail: avoid
-                    // rebuilding the input view synchronously mid-gesture.
-                    post { onSwipe(if (dx < 0) 1 else -1) }
-                }
-                interceptingHorizontal = false
-                interceptingVertical = false
-            }
-            return true
-        }
-    }
-
-    private class ModeToggle(
-        context: android.content.Context,
-        private val selectedMode: InputMode,
-        private val darkTheme: Boolean,
-        private val onModeSelected: (InputMode) -> Unit,
-    ) : View(context) {
-        // Instance properties, not companion constants — this view is
-        // rebuilt on every panel refresh, so a live theme switch just means
-        // a fresh instance with the other branch's colors.
-        private val trackColor = if (darkTheme) Color.rgb(28, 28, 28) else Color.rgb(222, 222, 226)
-        // Weakened from a fully-opaque line to a near-invisible one — the
-        // floating selected pill below is meant to be the only thing the
-        // user reads as "current mode", not these dividers, but the layout
-        // math that positions the four icons/labels still uses the same
-        // segmentWidth split, so the dividers stay (very faintly) for
-        // continuity rather than being deleted outright.
-        private val dividerColor = run {
-            val base = if (darkTheme) Color.rgb(58, 58, 58) else Color.rgb(200, 200, 204)
-            Color.argb(28, Color.red(base), Color.green(base), Color.blue(base))
-        }
-        // Same surface color as every ordinary key's own background
-        // (roundedButton(tone(Color.rgb(52, 52, 54), Color.WHITE), ...) —
-        // see buildEnglishCharKey()/keyboardKey()) — reusing it here ties
-        // the selected pill into the keyboard's existing "raised key"
-        // visual language instead of introducing a new floating-pill color.
-        private val selectedPillColor = if (darkTheme) Color.rgb(52, 52, 54) else Color.WHITE
-        private val iconColor = if (darkTheme) Color.rgb(240, 240, 240) else Color.rgb(50, 50, 54)
-        // Unselected icons/labels dim slightly (not a color or hue change)
-        // so the fully-opaque selected one reads as the one thing actively
-        // "on" — a light touch, not the kind of visible recolor the spec
-        // asks not to introduce.
-        private val dimmedIconColor = Color.argb(178, Color.red(iconColor), Color.green(iconColor), Color.blue(iconColor))
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-        }
-        // Labels are drawn at a size derived from the view height, not the
-        // system text size, so they never shift with font scale or UI language.
-        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iconColor
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
-        }
-        private val textBounds = android.graphics.Rect()
-        private val chevronPath = Path()
-
-        // Continuous [0, modes.size - 1] position of the selected pill, in
-        // segment units — settles on the selected index, but slides through
-        // fractional values mid-animation. This view is a fresh instance on
-        // every panel rebuild (see the class doc above), so a real mode
-        // switch is detected by comparing against lastRenderedMode (a
-        // companion field, surviving across those rebuilds) rather than any
-        // state this instance could hold itself; an unrelated rebuild that
-        // leaves the mode unchanged just settles here with no animation.
-        private var indicatorPosition: Float
-        private var indicatorAnimator: android.animation.ValueAnimator? = null
-
-        init {
-            val modes = InputMode.entries
-            val targetIndex = modes.indexOf(selectedMode).coerceAtLeast(0).toFloat()
-            val previousMode = lastRenderedMode
-            if (previousMode != null && previousMode != selectedMode) {
-                val startIndex = modes.indexOf(previousMode).coerceAtLeast(0).toFloat()
-                indicatorPosition = startIndex
-                indicatorAnimator = android.animation.ValueAnimator.ofFloat(startIndex, targetIndex).apply {
-                    duration = 180L
-                    interpolator = android.view.animation.DecelerateInterpolator()
-                    addUpdateListener {
-                        indicatorPosition = it.animatedValue as Float
-                        invalidate()
-                    }
-                    start()
-                }
-            } else {
-                indicatorPosition = targetIndex
-            }
-            lastRenderedMode = selectedMode
-        }
-
-        override fun onDetachedFromWindow() {
-            indicatorAnimator?.cancel()
-            super.onDetachedFromWindow()
-        }
-
-        // Every proportion below is measured off the reference toggle design
-        // and expressed in units of the pill height `h`.
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val modes = InputMode.entries
-            val h = height.toFloat()
-            val w = width.toFloat()
-            val segmentWidth = w / modes.size
-            val centerY = h / 2f
-
-            paint.style = Paint.Style.FILL
-            paint.color = trackColor
-            canvas.drawRoundRect(0f, 0f, w, h, h / 2f, h / 2f, paint)
-
-            paint.color = dividerColor
-            paint.strokeWidth = h * 0.012f
-            for (i in 1 until modes.size) {
-                val x = segmentWidth * i
-                canvas.drawLine(x, h * 0.2f, x, h * 0.8f, paint)
-            }
-
-            // Floating rounded pill instead of the old sharp, edge-to-edge
-            // highlight: inset on every side so it reads as its own raised
-            // surface hovering over the track rather than a panel-colored
-            // cutout flush with the track's shape. Insets alone keep it
-            // well inside the track's rounded corners even at the first/
-            // last segment, so no extra clip path is needed the way the
-            // sharp-cornered version required one.
-            // Proportional again, not fixed dp — carries forward the exact
-            // ratio the last explicit dp spec settled on (5dp inset / 38dp
-            // track height, 53dp pill / 60dp segment width at the 240dp
-            // outer track width in use then), so the pill keeps this same
-            // look if the outer track's own width/height are ever tuned
-            // again, instead of needing a matching manual dp recompute.
-            val pillInsetV = h * (5f / 38f)
-            val pillWidth = segmentWidth * (53f / 60f)
-            val pillCenterX = segmentWidth * (indicatorPosition + 0.5f)
-            val pillLeft = pillCenterX - pillWidth / 2f
-            val pillRight = pillCenterX + pillWidth / 2f
-            val pillTop = pillInsetV
-            val pillBottom = h - pillInsetV
-            paint.color = selectedPillColor
-            canvas.drawRoundRect(pillLeft, pillTop, pillRight, pillBottom, (pillBottom - pillTop) / 2f, (pillBottom - pillTop) / 2f, paint)
-
-            val selectedIndex = modes.indexOf(selectedMode).coerceAtLeast(0)
-            fun colorFor(index: Int) = if (index == selectedIndex) iconColor else dimmedIconColor
-
-            paint.color = colorFor(0)
-            drawWaveform(canvas, segmentWidth * 0.5f, centerY, h)
-            textPaint.color = colorFor(1)
-            drawLabel(canvas, "笔画", segmentWidth * 1.5f, centerY, h * 0.38f, extraBold = true)
-            paint.color = colorFor(2)
-            drawCursorBrackets(canvas, segmentWidth * 2.5f, centerY, h)
-            textPaint.color = colorFor(3)
-            drawLabel(canvas, "EN", segmentWidth * 3.5f, centerY, h * 0.28f)
-        }
-
-        /** Five bars — short, mid, tall, mid, short. */
-        private fun drawWaveform(canvas: Canvas, centerX: Float, centerY: Float, h: Float) {
-            paint.strokeWidth = h * 0.033f
-            val spacing = h * 0.11f
-            floatArrayOf(0.078f, 0.153f, 0.225f, 0.153f, 0.078f).forEachIndexed { index, half ->
-                val x = centerX + (index - 2) * spacing
-                canvas.drawLine(x, centerY - h * half, x, centerY + h * half, paint)
-            }
-        }
-
-        /** "<I>": a bold capital-I beam (with top/bottom serifs) flanked by chevrons nearly as tall as it. */
-        private fun drawCursorBrackets(canvas: Canvas, centerX: Float, centerY: Float, h: Float) {
-            // Overall extent (openX/tipX/halfH below) is unchanged from the
-            // plain-bar version, so the icon's total width/height stays put
-            // even though the center beam is now a thicker "I" with serifs.
-            val barHalfH = h * 0.16f
-            val serifHalfW = h * 0.05f
-            paint.strokeWidth = h * 0.045f
-            canvas.drawLine(centerX, centerY - barHalfH, centerX, centerY + barHalfH, paint)
-            canvas.drawLine(centerX - serifHalfW, centerY - barHalfH, centerX + serifHalfW, centerY - barHalfH, paint)
-            canvas.drawLine(centerX - serifHalfW, centerY + barHalfH, centerX + serifHalfW, centerY + barHalfH, paint)
-
-            paint.strokeWidth = h * 0.03f
-            val openX = h * 0.14f
-            val tipX = h * 0.289f
-            val halfH = h * 0.143f
-            paint.style = Paint.Style.STROKE
-            chevronPath.reset()
-            chevronPath.moveTo(centerX - openX, centerY - halfH)
-            chevronPath.lineTo(centerX - tipX, centerY)
-            chevronPath.lineTo(centerX - openX, centerY + halfH)
-            chevronPath.moveTo(centerX + openX, centerY - halfH)
-            chevronPath.lineTo(centerX + tipX, centerY)
-            chevronPath.lineTo(centerX + openX, centerY + halfH)
-            canvas.drawPath(chevronPath, paint)
-            paint.style = Paint.Style.FILL
-        }
-
-        /** Bold label scaled so its actual ink height (not the font's line height) equals [inkHeight]. */
-        private fun drawLabel(canvas: Canvas, label: String, centerX: Float, centerY: Float, inkHeight: Float, extraBold: Boolean = false) {
-            textPaint.isFakeBoldText = extraBold
-            textPaint.textSize = 100f
-            textPaint.getTextBounds(label, 0, label.length, textBounds)
-            textPaint.textSize = 100f * inkHeight / textBounds.height().coerceAtLeast(1)
-            textPaint.getTextBounds(label, 0, label.length, textBounds)
-            canvas.drawText(label, centerX - textBounds.exactCenterX(), centerY - textBounds.exactCenterY(), textPaint)
-        }
-
-        override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-            if (event.action == android.view.MotionEvent.ACTION_UP) {
-                val modes = InputMode.entries
-                val index = (event.x / (width / modes.size.toFloat())).toInt().coerceIn(0, modes.lastIndex)
-                onModeSelected(modes[index])
-            }
-            return true
-        }
-
-        private companion object {
-            // Survives across this view's per-rebuild instances (see the
-            // class doc above) so a fresh instance can tell "the mode
-            // actually changed since last drawn" from "this rebuild is for
-            // some unrelated reason" and only animate the former.
-            @Volatile
-            private var lastRenderedMode: InputMode? = null
-        }
-    }
-
-    /** Central stroke keys use a canvas glyph so their proportions do not depend on a font. */
-    private class StrokeGlyphView(
-        context: android.content.Context,
-        private val glyphCode: String,
-        darkTheme: Boolean,
-    ) : TextView(context) {
-        private val iconColor = if (darkTheme) Color.rgb(232, 232, 232) else Color.rgb(40, 40, 44)
-        private val mutedColor = if (darkTheme) Color.rgb(155, 155, 155) else Color.rgb(130, 130, 135)
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iconColor
-            textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val unit = minOf(width, height).coerceAtLeast(1) / 100f
-            val x = width / 2f
-            paint.style = Paint.Style.FILL
-            paint.textSize = 19f * unit
-            val text = when (glyphCode) {
-                "*" -> "通配"
-                " " -> "分词"
-                ":" -> ":"
-                ";" -> ";"
-                "symbols" -> "符号"
-                "script" -> "繁"
-                else -> glyphCode
-            }
-            val top = when (glyphCode) {
-                "*" -> "6"
-                " " -> "7"
-                ":" -> "8"
-                ";" -> "9"
-                else -> ""
-            }
-            if (top.isNotEmpty()) {
-                paint.color = mutedColor
-                paint.textSize = 20f * unit
-                // Matches the "0" key's TextView-rendered top-gravity number, which
-                // sits lower than this baseline-based canvas position implied.
-                canvas.drawText(top, x, 32f * unit, paint)
-                paint.color = iconColor
-            }
-            paint.textSize = if (text in listOf("符号", "通配", "分词", "繁")) 33f * unit else 27f * unit
-            canvas.drawText(text, x, if (top.isEmpty()) 61f * unit else 76f * unit, paint)
-        }
-    }
-
-    /**
-     * Red actions are also custom-drawn to keep the reference glyph geometry
-     * stable. Takes an explicit icon color rather than a theme flag: this
-     * view is reused both on the always-dark-red action keys (icon always
-     * white, in both themes) and, undecorated, on the clipboard panel's
-     * normal/highlighted keys (icon needs to flip with the theme there).
-     */
-    internal class StrokeActionView(
-        context: android.content.Context,
-        private val actionCode: String,
-        private val iconRotation: Float = 0f,
-        private val iconColor: Int = Color.WHITE,
-    ) : TextView(context) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iconColor
-            style = Paint.Style.STROKE
-            strokeWidth = 5.2f
-            strokeCap = Paint.Cap.SQUARE
-            strokeJoin = Paint.Join.MITER
-        }
-        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iconColor
-            textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-        }
-        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = iconColor
-            style = Paint.Style.FILL
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val u = minOf(width, height).coerceAtLeast(1) / 100f
-            val cx = width / 2f
-            val cy = height / 2f
-            paint.strokeWidth = 5.2f * u
-            when (actionCode) {
-                "triangle-down" -> {
-                    // Fixed absolute size, independent of this button's own
-                    // (roughly 28x36dp, non-square) cell — about the same
-                    // visual footprint as a single candidate glyph
-                    // (candidateItemView's 20sp text), not scaled to the
-                    // fixed-100-unit icon canvas the other cases share.
-                    val triangleSize = 16f * resources.displayMetrics.density
-                    val topY = cy - triangleSize / 2f
-                    val path = Path().apply {
-                        moveTo(cx - triangleSize / 2f, topY)
-                        lineTo(cx + triangleSize / 2f, topY)
-                        lineTo(cx, topY + triangleSize)
-                        close()
-                    }
-                    canvas.drawPath(path, fillPaint)
-                }
-                "←" -> {
-                    canvas.drawLine(cx - 23f * u, cy, cx + 23f * u, cy, paint)
-                    canvas.drawLine(cx - 23f * u, cy, cx - 8f * u, cy - 12f * u, paint)
-                    canvas.drawLine(cx - 23f * u, cy, cx - 8f * u, cy + 12f * u, paint)
-                }
-                "↵" -> {
-                    val path = Path().apply {
-                        moveTo(cx + 23f * u, cy - 14f * u)
-                        lineTo(cx + 23f * u, cy + 5f * u)
-                        quadTo(cx + 23f * u, cy + 15f * u, cx + 13f * u, cy + 15f * u)
-                        lineTo(cx - 22f * u, cy + 15f * u)
-                    }
-                    canvas.drawPath(path, paint)
-                    canvas.drawLine(cx - 22f * u, cy + 15f * u, cx - 10f * u, cy + 5f * u, paint)
-                    canvas.drawLine(cx - 22f * u, cy + 15f * u, cx - 10f * u, cy + 25f * u, paint)
-                }
-                "dir-up", "backspace-icon" -> {
-                    // Fixed 32dp icon canvas (not scaled to the button's own,
-                    // possibly larger, size) so all four rotated direction
-                    // keys and the backspace key render at one identical
-                    // visual size no matter how the grid divides the row.
-                    // Rotating the canvas (not the whole View) keeps the
-                    // button's own rectangular background undistorted even
-                    // when the cell itself isn't perfectly square.
-                    val iconUnit = (32 * resources.displayMetrics.density) / 100f
-                    paint.strokeWidth = 9f * iconUnit
-                    paint.strokeCap = Paint.Cap.ROUND
-                    paint.strokeJoin = Paint.Join.ROUND
-                    canvas.save()
-                    if (iconRotation != 0f) canvas.rotate(iconRotation, cx, cy)
-                    if (actionCode == "dir-up") {
-                        val chevron = Path().apply {
-                            moveTo(cx - 22f * iconUnit, cy + 12f * iconUnit)
-                            lineTo(cx, cy - 12f * iconUnit)
-                            lineTo(cx + 22f * iconUnit, cy + 12f * iconUnit)
-                        }
-                        canvas.drawPath(chevron, paint)
-                    } else {
-                        // Classic backspace silhouette: a left-pointing tag
-                        // outline with an "X" inside, same line weight as the
-                        // direction arrows.
-                        val outline = Path().apply {
-                            moveTo(cx - 26f * iconUnit, cy)
-                            lineTo(cx - 8f * iconUnit, cy - 22f * iconUnit)
-                            lineTo(cx + 26f * iconUnit, cy - 22f * iconUnit)
-                            lineTo(cx + 26f * iconUnit, cy + 22f * iconUnit)
-                            lineTo(cx - 8f * iconUnit, cy + 22f * iconUnit)
-                            close()
-                        }
-                        canvas.drawPath(outline, paint)
-                        canvas.drawLine(cx - 2f * iconUnit, cy - 10f * iconUnit, cx + 16f * iconUnit, cy + 10f * iconUnit, paint)
-                        canvas.drawLine(cx + 16f * iconUnit, cy - 10f * iconUnit, cx - 2f * iconUnit, cy + 10f * iconUnit, paint)
-                    }
-                    canvas.restore()
-                }
-                else -> {
-                    textPaint.textSize = if (actionCode == "清除") 32f * u else 30f * u
-                    canvas.drawText(actionCode, cx, cy - (textPaint.ascent() + textPaint.descent()) / 2f, textPaint)
-                }
-            }
-        }
-    }
-
-    private class StrokeKeyView(
-        context: android.content.Context,
-        private val strokeCode: String,
-        darkTheme: Boolean,
-    ) : TextView(context) {
-        private val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (darkTheme) Color.rgb(155, 155, 155) else Color.rgb(130, 130, 135)
-            textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-        }
-        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (darkTheme) Color.rgb(232, 232, 232) else Color.rgb(40, 40, 44)
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val unit = minOf(width, height).coerceAtLeast(1) / 100f
-            val centerX = width / 2f
-            val topNumber = when (strokeCode) {
-                "h" -> "1"
-                "s" -> "2"
-                "p" -> "3"
-                "n" -> "4"
-                else -> "5"
-            }
-            numberPaint.textSize = 20f * unit
-            // Matches the "0" key's TextView-rendered top-gravity number, which
-            // sits lower than this baseline-based canvas position implied.
-            canvas.drawText(topNumber, centerX, 32f * unit, numberPaint)
-
-            strokePaint.strokeWidth = 3.2f * unit
-            val stroke = Path()
-            when (strokeCode) {
-                "h" -> {
-                    stroke.moveTo(centerX - 20f * unit, 62f * unit)
-                    stroke.lineTo(centerX + 20f * unit, 62f * unit)
-                }
-                "s" -> {
-                    // Top trimmed by 1/6 of the original 42–79 length (bottom
-                    // unchanged) at the user's request: 42 + (79-42)/6 ≈ 48.17.
-                    stroke.moveTo(centerX, 48.17f * unit)
-                    stroke.lineTo(centerX, 79f * unit)
-                }
-                "p" -> {
-                    // Traced from the reference glyph: straight down for most
-                    // of the stroke, hooking left only at the very end — a "J"
-                    // shape, not a curve along its whole length. Top trimmed
-                    // by 1/6 of the original 38–77 length (bottom/control
-                    // points unchanged): 38 + (77-38)/6 = 44.5.
-                    stroke.moveTo(centerX - 2f * unit, 44.5f * unit)
-                    stroke.cubicTo(
-                        centerX - 2f * unit, 55f * unit,
-                        centerX - 5f * unit, 68f * unit,
-                        centerX - 16f * unit, 77f * unit,
-                    )
-                }
-                "n" -> {
-                    // Traced from the reference glyph: a short, straight tick,
-                    // not a long curve — 丶 is a dot/dian, not a swooping line.
-                    stroke.moveTo(centerX - 7f * unit, 50f * unit)
-                    stroke.lineTo(centerX + 6f * unit, 67f * unit)
-                }
-                else -> {
-                    // Traced from the reference glyph: a diagonal down-left to
-                    // a corner, then a horizontal finish to the right (乙/横折).
-                    // Top trimmed by 1/6 of the original 42–71 diagonal length
-                    // (bottom unchanged): 42 + (71-42)/6 ≈ 46.83.
-                    stroke.moveTo(centerX + 1f * unit, 46.83f * unit)
-                    stroke.lineTo(centerX - 13f * unit, 71f * unit)
-                    stroke.lineTo(centerX + 15f * unit, 71f * unit)
-                }
-            }
-            canvas.drawPath(stroke, strokePaint)
-        }
-    }
-
-    /**
-     * Two-line label (via a plain "\n") with a thin horizontal divider
-     * drawn between the lines — the divider just needs the vertical
-     * midpoint of the view, which lands between the two centered lines of
-     * text closely enough without measuring actual text layout bounds.
-     */
-    /**
-     * The one key-press preview bubble shared by every keyboard (English
-     * and stroke) — a short, wide "floating keycap": a rounded rect with a
-     * short stubby arrow, soft light-gray body and near-black text, no
-     * accent color. Always sized/positioned by its owner (KeyPreviewOverlay)
-     * rather than by itself; this class only draws. Plain Canvas drawing,
-     * matching every other custom key glyph in this file (ShiftKeyView,
-     * ActionSymbolView, etc.) — no new dependency.
-     */
-    private class KeyPreviewBubbleView(
-        context: android.content.Context,
-        darkTheme: Boolean,
-    ) : View(context) {
-        var label: String = ""
-            set(value) {
-                field = value
-                invalidate()
-            }
-        // Non-null (the stroke keyboard's swipe-up digit preview) matches
-        // the actual pressed key's own font size (TextView.getTextSize(),
-        // already resolved to raw pixels, so no sp->px conversion is
-        // needed here) instead of the default size derived from the
-        // bubble's own height, which the English tap preview still relies on.
-        var fixedTextSizePx: Float? = null
-            set(value) {
-                field = value
-                invalidate()
-            }
-        private val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            // Lighter than the stroke encode/candidate row's own card
-            // background in both themes (buildEncodeAreaBackground():
-            // 58,58,58 dark / 228,228,232 light) rather than darker — a
-            // darker-than-the-card bubble read as low-contrast/blended-in;
-            // sitting a step lighter than that card makes the bubble read
-            // as its own raised surface instead.
-            color = if (darkTheme) Color.rgb(96, 96, 100) else Color.rgb(246, 246, 249)
-        }
-        private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2f
-            // Dark theme: a lighter outline than the body for definition
-            // against a similarly-dark panel. Light theme: a slightly
-            // darker outline than the now near-white body, since a lighter
-            // outline there would have no contrast against anything.
-            color = if (darkTheme) Color.rgb(128, 128, 133) else Color.rgb(210, 210, 215)
-        }
-        // Same red as the right-hand action rail's ←/↵/清除/123 keys and
-        // the stroke candidate row's own selected/first candidate
-        // (candidateItemView()), brightened for dark theme by the same
-        // amount as candidateItemView()'s own dark-theme branch — the two
-        // stay in sync since they're tuned together.
-        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (darkTheme) Color.rgb(190, 45, 60) else Color.rgb(153, 26, 40)
-            textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            // FILL_AND_STROKE over DEFAULT_BOLD's own fill adds a touch more
-            // weight than the typeface alone — there's no heavier built-in
-            // weight to switch to without bundling a custom font.
-            style = Paint.Style.FILL_AND_STROKE
-            strokeWidth = 1.4f
-        }
-        private val outline = Path()
-
-        private fun dp(value: Int): Float = value * resources.displayMetrics.density
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val w = width.toFloat()
-            val h = height.toFloat()
-            if (w <= 0f || h <= 0f) return
-            val arrowHeight = dp(ARROW_HEIGHT_DP)
-            val arrowHalfWidth = dp(ARROW_WIDTH_DP) / 2f
-            val bodyBottom = h - arrowHeight
-            // Also capped by the flat run left on either side of the arrow
-            // notch (w/2 - arrowHalfWidth) — at the narrowest bubble widths
-            // this is tighter than bodyBottom/2, and skipping it would let
-            // the bottom-corner arcs overrun the notch and self-intersect.
-            val radius = dp(CORNER_RADIUS_DP)
-                .coerceAtMost(bodyBottom / 2f)
-                .coerceAtMost((w / 2f - arrowHalfWidth).coerceAtLeast(0f))
-            val cx = w / 2f
-            // One continuous outline (all four corners rounded to the same
-            // radius, short triangular notch at the bottom center) so a
-            // stroked border never shows a seam where the arrow meets the
-            // body.
-            outline.reset()
-            outline.moveTo(radius, 0f)
-            outline.lineTo(w - radius, 0f)
-            outline.arcTo(android.graphics.RectF(w - 2f * radius, 0f, w, 2f * radius), -90f, 90f)
-            outline.lineTo(w, bodyBottom - radius)
-            outline.arcTo(android.graphics.RectF(w - 2f * radius, bodyBottom - 2f * radius, w, bodyBottom), 0f, 90f)
-            outline.lineTo(cx + arrowHalfWidth, bodyBottom)
-            outline.lineTo(cx, h)
-            outline.lineTo(cx - arrowHalfWidth, bodyBottom)
-            outline.lineTo(radius, bodyBottom)
-            outline.arcTo(android.graphics.RectF(0f, bodyBottom - 2f * radius, 2f * radius, bodyBottom), 90f, 90f)
-            outline.lineTo(0f, radius)
-            outline.arcTo(android.graphics.RectF(0f, 0f, 2f * radius, 2f * radius), 180f, 90f)
-            outline.close()
-            canvas.drawPath(outline, bodyPaint)
-            canvas.drawPath(outline, borderPaint)
-            textPaint.textSize = fixedTextSizePx ?: (bodyBottom * 0.5f)
-            val metrics = textPaint.fontMetrics
-            val textY = bodyBottom / 2f - (metrics.ascent + metrics.descent) / 2f
-            canvas.drawText(label, cx, textY, textPaint)
-        }
-
-        companion object {
-            const val ARROW_HEIGHT_DP = 12
-            const val ARROW_WIDTH_DP = 22
-            const val CORNER_RADIUS_DP = 4
-            const val BODY_HEIGHT_DP = 48
-            const val TOTAL_HEIGHT_DP = BODY_HEIGHT_DP + ARROW_HEIGHT_DP
-        }
-    }
-
-    /**
-     * Single top-level overlay hosting the one KeyPreviewBubbleView shared
-     * by every key in a panel (see wrapWithKeyPreviewOverlay()). Added as
-     * the last (topmost-drawn) child of the FrameLayout that wraps a
-     * panel's own root, so the bubble renders above the whole keyboard —
-     * unaffected by the panel's own clipChildren/candidate-row/mode-toggle
-     * bounds — without taking part in that panel's layout: it never
-     * changes size, position, or measurement of anything else, and it
-     * never intercepts touch (dispatchTouchEvent always returns false, so
-     * every gesture falls straight through to whatever key is underneath).
-     */
-    private class KeyPreviewOverlay(
-        context: android.content.Context,
-        darkTheme: Boolean,
-    ) : FrameLayout(context) {
-        private val bubble = KeyPreviewBubbleView(context, darkTheme).apply {
-            alpha = 0f
-            visibility = View.GONE
-        }
-
-        init {
-            isClickable = false
-            isFocusable = false
-            clipChildren = false
-            clipToPadding = false
-            addView(bubble, LayoutParams(0, 0))
-        }
-
-        // A pure visual layer: never claims a touch sequence, regardless of
-        // where the bubble is currently drawn, so a stroke swipe or an
-        // English drag-retarget already in progress is never disturbed by
-        // the preview appearing on top of it.
-        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = false
-        override fun dispatchTouchEvent(ev: MotionEvent): Boolean = false
-
-        private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-        private fun relativeLocation(target: View): IntArray {
-            val targetLoc = IntArray(2)
-            target.getLocationOnScreen(targetLoc)
-            val selfLoc = IntArray(2)
-            getLocationOnScreen(selfLoc)
-            return intArrayOf(targetLoc[0] - selfLoc[0], targetLoc[1] - selfLoc[1])
-        }
-
-        private fun placeBubble(centerX: Int, top: Int, bubbleWidth: Int, bubbleHeight: Int) {
-            val maxLeft = (width - bubbleWidth - dp(4)).coerceAtLeast(dp(4))
-            val left = (centerX - bubbleWidth / 2).coerceIn(dp(4), maxLeft)
-            val clampedTop = top.coerceAtLeast(dp(2))
-            val params = bubble.layoutParams as LayoutParams
-            params.width = bubbleWidth
-            params.height = bubbleHeight
-            params.leftMargin = left
-            params.topMargin = clampedTop
-            bubble.layoutParams = params
-        }
-
-        /**
-         * TAP preview (English/number/symbol keys): centered directly above
-         * the anchor key, sized relative to it, with the default
-         * proportional-to-body text size (fixedTextSizePx left null).
-         */
-        fun showTapPreview(text: String, anchor: View) {
-            val loc = relativeLocation(anchor)
-            val bubbleWidth = (anchor.width * BUBBLE_WIDTH_RATIO).toInt().coerceAtLeast(dp(40))
-            val bubbleHeight = dp(KeyPreviewBubbleView.TOTAL_HEIGHT_DP)
-            bubble.fixedTextSizePx = null
-            bubble.label = text
-            val centerX = loc[0] + anchor.width / 2
-            val top = loc[1] - bubbleHeight - dp(TAP_GAP_DP)
-            placeBubble(centerX, top, bubbleWidth, bubbleHeight)
-            show()
-        }
-
-        /**
-         * SWIPE preview (stroke digit swipe-up): pinned to the actual
-         * anchor key's own on-screen position, same as showTapPreview —
-         * not to the finger's current height. It used to float a fixed
-         * distance above the raw touch point instead, which looked right
-         * for a straight vertical swipe on one key but drifted away from
-         * the real key as soon as a drag retargeted sideways or across
-         * rows (the bubble's X snapped to the new key while its Y stayed
-         * tied to wherever the finger happened to be).
-         *
-         * Text size is a fixed constant here, not the tracked key's own
-         * face text size — the "0" digit's key is the microphone icon key,
-         * whose own face text is much smaller than every other digit key's
-         * (10sp vs 17sp, since it's mostly an icon), so sizing off the key
-         * made "0"'s bubble read noticeably smaller than the other nine.
-         */
-        fun showSwipePreview(text: String, anchor: View) {
-            val loc = relativeLocation(anchor)
-            val bubbleWidth = (anchor.width * BUBBLE_WIDTH_RATIO).toInt().coerceAtLeast(dp(40))
-            val bubbleHeight = dp(KeyPreviewBubbleView.TOTAL_HEIGHT_DP)
-            bubble.fixedTextSizePx = dp(SWIPE_TEXT_SIZE_DP).toFloat()
-            bubble.label = text
-            val centerX = loc[0] + anchor.width / 2
-            // 20dp further above the key than the tap preview's own gap —
-            // a separate constant so this doesn't also shift
-            // showTapPreview's gap for the English/number keys.
-            val top = loc[1] - bubbleHeight - dp(SWIPE_GAP_DP)
-            placeBubble(centerX, top, bubbleWidth, bubbleHeight)
-            show()
-        }
-
-        // No fade animation: a fast tap's down-to-up gap is often shorter
-        // than any fade would take, so an animated show/hide left the
-        // bubble stuck mid-fade — either never reaching full opacity
-        // (looked "too transparent to read") or reversing before it ever
-        // became visible at all. Popping straight to alpha=1 (matching the
-        // pre-refactor PopupWindow, which never animated either)
-        // guarantees the bubble is fully opaque the instant it shows,
-        // regardless of tap speed.
-        private fun show() {
-            bubble.animate().cancel()
-            bubble.alpha = 1f
-            bubble.scaleX = 1f
-            bubble.scaleY = 1f
-            bubble.visibility = View.VISIBLE
-        }
-
-        fun hide() {
-            bubble.animate().cancel()
-            bubble.visibility = View.GONE
-        }
-
-        private companion object {
-            const val BUBBLE_WIDTH_RATIO = 1.2f
-            const val TAP_GAP_DP = 3
-            const val SWIPE_GAP_DP = TAP_GAP_DP + 20
-            // Bigger than the default proportional size the tap preview
-            // falls back to (bodyBottom * 0.5, ~24dp-equivalent here) and,
-            // being a flat constant rather than derived from any one key's
-            // own face size, the same for every digit including "0".
-            const val SWIPE_TEXT_SIZE_DP = 22
-        }
-    }
-
-    private class MidDividerTextView(
-        context: android.content.Context,
-        private val dividerColor: Int,
-    ) : TextView(context) {
-        private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1.5f }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            dividerPaint.color = dividerColor
-            val marginX = width * 0.22f
-            canvas.drawLine(marginX, height / 2f, width - marginX, height / 2f, dividerPaint)
-        }
-    }
-
-    private class ActionSymbolView(
-        context: android.content.Context,
-        private val symbol: String,
-        darkTheme: Boolean,
-    ) : TextView(context) {
-        private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (darkTheme) Color.WHITE else Color.rgb(30, 30, 34)
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.SQUARE
-            strokeJoin = Paint.Join.ROUND
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val unit = minOf(width, height).coerceAtLeast(1) / 100f
-            val centerX = width / 2f
-            val centerY = height / 2f
-            symbolPaint.strokeWidth = 5.5f * unit
-            if (symbol == "←") {
-                val left = centerX - 27f * unit
-                val right = centerX + 27f * unit
-                canvas.drawLine(left + 13f * unit, centerY, right, centerY, symbolPaint)
-                val arrow = Path().apply {
-                    moveTo(left + 13f * unit, centerY)
-                    lineTo(left + 27f * unit, centerY - 12f * unit)
-                    moveTo(left + 13f * unit, centerY)
-                    lineTo(left + 27f * unit, centerY + 12f * unit)
-                }
-                canvas.drawPath(arrow, symbolPaint)
-            } else {
-                val path = Path().apply {
-                    moveTo(centerX + 29f * unit, centerY - 14f * unit)
-                    lineTo(centerX + 29f * unit, centerY + 8f * unit)
-                    lineTo(centerX + 21f * unit, centerY + 18f * unit)
-                    lineTo(centerX + 7f * unit, centerY + 18f * unit)
-                    lineTo(centerX - 25f * unit, centerY + 18f * unit)
-                }
-                canvas.drawPath(path, symbolPaint)
-                val arrow = Path().apply {
-                    moveTo(centerX - 25f * unit, centerY + 18f * unit)
-                    lineTo(centerX - 12f * unit, centerY + 8f * unit)
-                    moveTo(centerX - 25f * unit, centerY + 18f * unit)
-                    lineTo(centerX - 12f * unit, centerY + 28f * unit)
-                }
-                canvas.drawPath(arrow, symbolPaint)
-            }
-        }
-    }
-
-    /**
-     * The English keyboard's shift key draws one of three distinct icons so
-     * its state is visible at a glance: a hollow arrow (lowercase), a solid
-     * arrow (capitalize the next letter only), or a solid arrow with an
-     * underline bar (caps lock — every letter is capitalized until toggled
-     * off again).
-     */
-    private class ShiftKeyView(
-        context: android.content.Context,
-        initialState: ShiftState,
-        private val darkTheme: Boolean,
-    ) : TextView(context) {
-        var state: ShiftState = initialState
-            set(value) {
-                if (field == value) return
-                field = value
-                invalidate()
-            }
-        private val mutedColor = if (darkTheme) Color.rgb(190, 190, 190) else Color.rgb(120, 120, 125)
-        private val activeColor = if (darkTheme) Color.rgb(245, 245, 245) else Color.rgb(30, 30, 34)
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            strokeJoin = Paint.Join.ROUND
-            strokeCap = Paint.Cap.ROUND
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val unit = minOf(width, height).coerceAtLeast(1) / 100f
-            val cx = width / 2f
-            val cy = height / 2f - 6f * unit
-            val arrow = Path().apply {
-                moveTo(cx, cy - 20f * unit)
-                lineTo(cx + 17f * unit, cy - 2f * unit)
-                lineTo(cx + 8f * unit, cy - 2f * unit)
-                lineTo(cx + 8f * unit, cy + 15f * unit)
-                lineTo(cx - 8f * unit, cy + 15f * unit)
-                lineTo(cx - 8f * unit, cy - 2f * unit)
-                lineTo(cx - 17f * unit, cy - 2f * unit)
-                close()
-            }
-            when (state) {
-                ShiftState.OFF -> {
-                    paint.style = Paint.Style.STROKE
-                    paint.strokeWidth = 3f * unit
-                    paint.color = mutedColor
-                }
-                ShiftState.SHIFT_ONCE, ShiftState.CAPS_LOCK -> {
-                    paint.style = Paint.Style.FILL
-                    paint.color = activeColor
-                }
-            }
-            canvas.drawPath(arrow, paint)
-            if (state == ShiftState.CAPS_LOCK) {
-                paint.style = Paint.Style.FILL
-                paint.color = activeColor
-                canvas.drawRoundRect(
-                    cx - 17f * unit, cy + 22f * unit, cx + 17f * unit, cy + 28f * unit,
-                    3f * unit, 3f * unit, paint,
-                )
-            }
-        }
-    }
-
-    private class MicrophoneKeyView(context: android.content.Context, darkTheme: Boolean) : TextView(context) {
-        private val microphonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (darkTheme) Color.rgb(190, 190, 190) else Color.rgb(110, 110, 115)
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            style = Paint.Style.FILL
-        }
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            // Keep the same proportions as VoiceButton, but leave room for the small 0 label.
-            val unit = minOf(width, height).coerceAtLeast(1) / 160f
-            val centerX = width / 2f
-            val centerY = height * 0.56f
-            val bodyWidth = 11.5f * unit
-            val bodyTop = centerY - 24f * unit
-            val bodyBottom = centerY + 20f * unit
-            canvas.drawRoundRect(
-                centerX - bodyWidth,
-                bodyTop,
-                centerX + bodyWidth,
-                bodyBottom,
-                bodyWidth,
-                bodyWidth,
-                microphonePaint,
-            )
-            microphonePaint.style = Paint.Style.STROKE
-            microphonePaint.strokeWidth = 4.5f * unit
-            val arc = Path().apply {
-                moveTo(centerX - 19f * unit, centerY + 8f * unit)
-                cubicTo(
-                    centerX - 18f * unit, centerY + 25f * unit,
-                    centerX - 9f * unit, centerY + 30f * unit,
-                    centerX, centerY + 30f * unit,
-                )
-                cubicTo(
-                    centerX + 9f * unit, centerY + 30f * unit,
-                    centerX + 18f * unit, centerY + 25f * unit,
-                    centerX + 19f * unit, centerY + 8f * unit,
-                )
-            }
-            canvas.drawPath(arc, microphonePaint)
-            canvas.drawLine(
-                centerX,
-                centerY + 30f * unit,
-                centerX,
-                centerY + 39f * unit,
-                microphonePaint,
-            )
-            microphonePaint.style = Paint.Style.FILL
-        }
-    }
-
-    private class VoiceButton(context: android.content.Context, private val darkTheme: Boolean) : View(context) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        // Panel's own dark-theme background is rgb(48,48,48); this reads
-        // 12/255 lighter (tried 6 — too subtle to tell apart from the panel
-        // — then 24, which read as too strong; 12 is the settled value).
-        private val idlePillColor = if (darkTheme) Color.rgb(60, 60, 60) else Color.rgb(225, 225, 228)
-        private val idleIconColor = if (darkTheme) Color.WHITE else Color.rgb(60, 60, 64)
-        // Match the raw-mode recording indicator exactly, so the swipe-up
-        // preview and the resulting raw recording state use one consistent
-        // orange-yellow accent.
-        private val swipeArmedPillColor = LINK_COLOR_RECORDING_RAW
-        // Same idea, for the swipe-left-to-Note gesture's own idle-pill
-        // preview — see armedForQuickNote/pillArmedAmountGreen below.
-        private val quickNoteArmedPillColor = LINK_COLOR_QUICK_NOTE
-        // Same idea again, for the swipe-right-to-Cloud-notes gesture's own
-        // idle-pill preview — see armedForCloudNote/pillArmedAmountRed below.
-        private val cloudNoteArmedPillColor = LINK_COLOR_CLOUD_NOTE
-        // Light red, blended into the waveform bars while a swipe-down-to-
-        // cancel gesture is past its commit threshold — same value in both
-        // themes, mirroring swipeArmedPillColor's own choice.
-        private val cancelArmedWaveformColor = Color.rgb(255, 150, 150)
-        private val waveformColor = if (darkTheme) Color.rgb(222, 222, 222) else Color.rgb(70, 70, 74)
-        private val processingDotColors = if (darkTheme) {
-            intArrayOf(
-                Color.rgb(245, 245, 245), Color.rgb(205, 205, 205),
-                Color.rgb(170, 170, 170), Color.rgb(235, 235, 235),
-                Color.rgb(190, 190, 190), Color.rgb(220, 220, 220),
-            )
-        } else {
-            intArrayOf(
-                Color.rgb(40, 40, 40), Color.rgb(90, 90, 90),
-                Color.rgb(130, 130, 130), Color.rgb(55, 55, 55),
-                Color.rgb(100, 100, 100), Color.rgb(70, 70, 70),
-            )
-        }
-        // Per-dot alpha for the thinking ring when an armed mode tints it
-        // (see armedModeColor()) — the same strong/soft rhythm around the
-        // ring as processingDotColors' own grays, in one hue.
-        private val processingDotAlphas = intArrayOf(255, 205, 160, 240, 185, 220)
-        var isRecording: Boolean = false
-            set(value) {
-                field = value
-                invalidate()
-            }
-        var isProcessing: Boolean = false
-            set(value) {
-                field = value
-                invalidate()
-            }
-
-        var rawModeActive: Boolean = false
-            set(value) {
-                field = value
-                invalidate()
-            }
-
-        var quickNoteActive: Boolean = false
-            set(value) {
-                field = value
-                invalidate()
-            }
-
-        var cloudNoteActive: Boolean = false
-            set(value) {
-                field = value
-                invalidate()
-            }
-
-        var audioLevel: Float = 0f
-            set(value) {
-                field = value
-                invalidate()
-            }
-
-        // Live "would releasing now enter raw mode?" indicator — the
-        // setter only starts an ease toward the target (see
-        // pillArmedAmount below); it doesn't jump straight there, so
-        // rapid on/off toggling right at the dp(30) threshold doesn't
-        // flicker instantly between the two colors.
-        var armedForRawSwipe: Boolean = false
-            set(value) {
-                if (field == value) return
-                field = value
-                pillArmedAnimator?.cancel()
-                pillArmedAnimator = android.animation.ValueAnimator.ofFloat(pillArmedAmount, if (value) 1f else 0f).apply {
-                    duration = 120L
-                    addUpdateListener { pillArmedAmount = it.animatedValue as Float }
-                    start()
-                }
-            }
-        private var pillArmedAmount: Float = 0f
-            set(value) {
-                field = value
-                invalidate()
-            }
-        private var pillArmedAnimator: android.animation.ValueAnimator? = null
-
-        // Same pattern as armedForRawSwipe/pillArmedAmount above, for the
-        // swipe-left-to-Note idle-pill preview.
-        var armedForQuickNote: Boolean = false
-            set(value) {
-                if (field == value) return
-                field = value
-                pillArmedAnimatorGreen?.cancel()
-                pillArmedAnimatorGreen = android.animation.ValueAnimator.ofFloat(pillArmedAmountGreen, if (value) 1f else 0f).apply {
-                    duration = 120L
-                    addUpdateListener { pillArmedAmountGreen = it.animatedValue as Float }
-                    start()
-                }
-            }
-        private var pillArmedAmountGreen: Float = 0f
-            set(value) {
-                field = value
-                invalidate()
-            }
-        private var pillArmedAnimatorGreen: android.animation.ValueAnimator? = null
-
-        // Same pattern again, for the swipe-right-to-Cloud-notes idle-pill
-        // preview.
-        var armedForCloudNote: Boolean = false
-            set(value) {
-                if (field == value) return
-                field = value
-                pillArmedAnimatorRed?.cancel()
-                pillArmedAnimatorRed = android.animation.ValueAnimator.ofFloat(pillArmedAmountRed, if (value) 1f else 0f).apply {
-                    duration = 120L
-                    addUpdateListener { pillArmedAmountRed = it.animatedValue as Float }
-                    start()
-                }
-            }
-        private var pillArmedAmountRed: Float = 0f
-            set(value) {
-                field = value
-                invalidate()
-            }
-        private var pillArmedAnimatorRed: android.animation.ValueAnimator? = null
-
-        // Same pattern as armedForRawSwipe/pillArmedAmount above, applied
-        // to the recording waveform instead of the idle capsule — swipe
-        // DOWN past the threshold while recording tints the waveform bars
-        // light red instead of the capsule turning green.
-        var armedForCancel: Boolean = false
-            set(value) {
-                if (field == value) return
-                field = value
-                waveformCancelAnimator?.cancel()
-                waveformCancelAnimator = android.animation.ValueAnimator.ofFloat(waveformCancelAmount, if (value) 1f else 0f).apply {
-                    duration = 120L
-                    addUpdateListener { waveformCancelAmount = it.animatedValue as Float }
-                    start()
-                }
-            }
-        private var waveformCancelAmount: Float = 0f
-            set(value) {
-                field = value
-                invalidate()
-            }
-        private var waveformCancelAnimator: android.animation.ValueAnimator? = null
-
-        private fun lerpColor(from: Int, to: Int, amount: Float): Int {
-            val t = amount.coerceIn(0f, 1f)
-            return Color.rgb(
-                (Color.red(from) + (Color.red(to) - Color.red(from)) * t).toInt(),
-                (Color.green(from) + (Color.green(to) - Color.green(from)) * t).toInt(),
-                (Color.blue(from) + (Color.blue(to) - Color.blue(from)) * t).toInt(),
-            )
-        }
-
-        /** Accent of the armed gesture mode, shared by the recording waveform and the thinking dots so the two never disagree — null for an ordinary dictation. */
-        private fun armedModeColor(): Int? = when {
-            rawModeActive -> LINK_COLOR_RECORDING_RAW
-            quickNoteActive -> LINK_COLOR_QUICK_NOTE
-            cloudNoteActive -> LINK_COLOR_CLOUD_NOTE
-            else -> null
-        }
-
-        private var phase = 0f
-        private val animator = object : Runnable {
-            override fun run() {
-                phase += 0.18f
-                invalidate()
-                postDelayed(this, 50L)
-            }
-        }
-
-        override fun onAttachedToWindow() {
-            super.onAttachedToWindow()
-            post(animator)
-        }
-
-        override fun onDetachedFromWindow() {
-            removeCallbacks(animator)
-            pillArmedAnimator?.cancel()
-            pillArmedAnimatorGreen?.cancel()
-            pillArmedAnimatorRed?.cancel()
-            waveformCancelAnimator?.cancel()
-            super.onDetachedFromWindow()
-        }
-
-        private fun dp(value: Int): Int =
-            (value * resources.displayMetrics.density).toInt()
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            val centerX = width / 2f
-            val centerY = height / 2f
-            val scale = if (isRecording) {
-                1f + 0.04f + audioLevel * 0.20f
-            } else {
-                1f
-            }
-            val pillWidth = width * 0.86f
-            val pillHeight = minOf(pillWidth * 192f / 470f, height * 0.90f)
-            val left = centerX - pillWidth / 2f
-            val top = centerY - pillHeight * scale / 2f
-            val right = centerX + pillWidth / 2f
-            val bottom = centerY + pillHeight * scale / 2f
-            val radius = pillHeight * 0.5f
-            // Recording/thinking states show only the animation with the capsule background
-            // fully removed; the idle state keeps the mic button.
-            if (!isRecording && !isProcessing) {
-                val pillColor = lerpColor(
-                    lerpColor(
-                        lerpColor(idlePillColor, swipeArmedPillColor, pillArmedAmount),
-                        quickNoteArmedPillColor,
-                        pillArmedAmountGreen,
-                    ),
-                    cloudNoteArmedPillColor,
-                    pillArmedAmountRed,
-                )
-                paint.color = pillColor
-                canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint)
-            }
-
-            paint.color = idleIconColor
-            paint.strokeWidth = width * 0.025f
-            paint.strokeCap = Paint.Cap.ROUND
-            if (!isRecording && !isProcessing) {
-                // Reference crop: capsule (393,380)-(863,572), 470 x 192.
-                // All geometry uses that ONE coordinate system and uniform scaling.
-                canvas.save()
-                val unit = pillHeight / 192f
-                canvas.translate(centerX - 235f * unit, centerY - 96f * unit)
-                canvas.scale(unit, unit)
-                paint.style = Paint.Style.FILL
-                canvas.drawRoundRect(213f, 40f, 259f, 113f, 23f, 23f, paint)
-                paint.style = Paint.Style.STROKE
-                paint.strokeWidth = 11f
-                val arc = Path().apply {
-                    moveTo(196f, 96f)
-                    cubicTo(198f, 118f, 215f, 130f, 236f, 130f)
-                    cubicTo(257f, 130f, 274f, 118f, 275f, 96f)
-                }
-                canvas.drawPath(arc, paint)
-                canvas.drawLine(236f, 130f, 236f, 146f, paint)
-                paint.style = Paint.Style.FILL
-                canvas.restore()
-                return
-            }
-            if (isRecording) {
-                // The normal waveform is monochrome; RAW recording uses the
-                // same orange-yellow accent as the RAW indicator and the
-                // swipe-up preview. Quiet input stays compact while speech
-                // expands the bars clearly with the live microphone level.
-                // Longer bar group (17 vs the original 9) with a genuine
-                // left-flowing traveling wave — as `phase` advances, the sine
-                // term's peak visibly drifts from higher to lower bar
-                // indices, i.e. right to left — layered on top of the same
-                // bell-shaped envelope (tallest in the middle) as before.
-                // Gap is derived from bar count so the group always spans the
-                // same ~86% of the view width regardless of how many bars.
-                val live = (audioLevel * 1.15f).coerceIn(0f, 1f)
-                val barCount = 17
-                val envelopeCenter = (barCount - 1) / 2f
-                val gap = width * 0.86f / (barCount - 1)
-                val startX = centerX - gap * (barCount - 1) / 2f
-                val rawWaveformColor = armedModeColor() ?: waveformColor
-                val currentWaveformColor = lerpColor(rawWaveformColor, cancelArmedWaveformColor, waveformCancelAmount)
-                for (index in 0 until barCount) {
-                    val x = startX + index * gap
-                    val distanceFromCenter = kotlin.math.abs(index - envelopeCenter) / envelopeCenter
-                    val envelope = 1f - distanceFromCenter * distanceFromCenter * 0.75f
-                    val flow = 0.55f + 0.45f * kotlin.math.sin(
-                        (phase * 2.2f + index * 0.9f).toDouble(),
-                    ).toFloat()
-                    val halfHeight = minOf(height * 0.95f, dp(66).toFloat()) *
-                        (0.035f + live * 0.965f) * envelope * flow
-                    paint.color = currentWaveformColor
-                    paint.strokeWidth = dp(3).toFloat()
-                    canvas.drawLine(x, centerY - halfHeight, x, centerY + halfHeight, paint)
-                }
-            } else if (isProcessing) {
-                // Analysis state uses the same restrained monochrome palette
-                // for an ordinary dictation, and the armed mode's own accent
-                // (the color its recording waveform just had) otherwise;
-                // the ring of dots keeps rotating exactly as before, and on
-                // top of that the whole ring's radius now breathes — growing
-                // then shrinking together as one — rather than each dot
-                // sizing itself independently off its own angle.
-                val accent = armedModeColor()
-                val colors = processingDotColors
-                val baseOrbit = minOf(width * 0.28f, height * 0.52f)
-                val baseDotRadius = minOf(width * 0.055f, height * 0.15f)
-                val breathe = 0.6f + 0.4f * ((1f + kotlin.math.sin((phase * 0.5f).toDouble()).toFloat()) / 2f)
-                val orbit = baseOrbit * breathe
-                val dotRadius = baseDotRadius * breathe
-                colors.forEachIndexed { index, color ->
-                    val angle = phase * 0.65f + index * (Math.PI.toFloat() / 3f)
-                    val x = centerX + kotlin.math.cos(angle.toDouble()).toFloat() * orbit
-                    val y = centerY + kotlin.math.sin(angle.toDouble()).toFloat() * orbit
-                    paint.color = if (accent == null) {
-                        color
-                    } else {
-                        Color.argb(processingDotAlphas[index], Color.red(accent), Color.green(accent), Color.blue(accent))
-                    }
-                    canvas.drawCircle(x, y, dotRadius, paint)
-                }
-            }
-        }
     }
 
     companion object {
@@ -6454,30 +3445,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         // scrolling actually reveals more real options.
         private const val ENGLISH_CANDIDATE_QUERY_LIMIT = 10
         private const val DOUBLE_SPACE_WINDOW_MS = 500L
-        // buildClipboardView()'s "recent clips" strip. Originally 92dp for
-        // 4 equal-weight rows + 5 divider lines (dp(1) each), raised ~1.2x
-        // to 109dp per user request: (92-5)/4=21.75dp/row * 1.2 = 26.1,
-        // 26.1*4+5=109.4 -> 109. Then reduced from 4 rows to 3 (also per
-        // user request) WITHOUT changing this total — 3 rows only need 4
-        // dividers, not 5, so the freed divider's dp plus the freed row's
-        // own share both land back on the remaining 3: (109-4)/3=35dp/row,
-        // up from 26dp. The button grid below needs no matching change —
-        // it's already LinearLayout.LayoutParams(.., 0, 1f), i.e. "whatever
-        // space is left after this strip's fixed height," so it grows or
-        // shrinks on its own the moment this constant or the row count
-        // changes.
-        private const val RECENT_CLIPS_COLUMN_HEIGHT_DP = 109
-        // Swipe-up symbol hint, any LETTERS-layer row (buildEnglishCharKey())
-        // — its own independent TextView pinned to the key's top edge, so
-        // these are absolute sizes, not a ratio of the 22sp letter below
-        // it. Small and close to the top by design; tune these two numbers
-        // directly. Shared by row1's digits and row2/row3's punctuation so
-        // all three rows read as one consistent hint style.
-        private const val SWIPE_SYMBOL_HINT_TEXT_SIZE_SP = 11f
-        private const val SWIPE_SYMBOL_HINT_TOP_PADDING_DP = 2
-        // Pure render-time offset (View.translationY), not part of the
-        // letter TextView's own measured layout — see buildEnglishCharKey().
-        private const val LETTER_VERTICAL_NUDGE_DP = 2
         // Same hue family as OpenLessOverlayService's OverlayVisualState
         // (recording/processing), plus a light-green "ready" and an amber
         // "link issue" that overlay doesn't have.

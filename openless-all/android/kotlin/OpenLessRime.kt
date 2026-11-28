@@ -6,6 +6,10 @@ import java.io.File
 
 internal object OpenLessRime {
     init { System.loadLibrary("openless_rime") }
+    @Volatile var isReady = false
+        private set
+    @Volatile var lastInitError: String? = null
+        private set
     private var initialized = false
     private val dictionaryWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var nextDictionaryCheck = 0L
@@ -13,6 +17,20 @@ internal object OpenLessRime {
     @Volatile var sessionGeneration = 0L
         private set
     external fun nativeRequest(operation: String, session: String, argument: String): String
+
+    /** Pre-warms Rime off the main thread so the first Chinese keystroke does not stall. */
+    fun preloadAsync(context: Context) {
+        if (isReady) return
+        val appContext = context.applicationContext
+        RimeTaskQueue.executor.execute {
+            runCatching { initialize(appContext) }
+                .onFailure { error ->
+                    lastInitError = error.message ?: error.javaClass.simpleName
+                    android.util.Log.e("OpenLessRime", "preload failed: ${error.message}", error)
+                }
+        }
+    }
+
     @Synchronized fun initialize(context: Context) {
         if (initialized) { refreshPublicDictionary(context); return }
         // Rime replaced LitePinyin; its stores are no longer read or backed up.
@@ -20,6 +38,7 @@ internal object OpenLessRime {
         val shared = File(context.filesDir, "rime-shared-1.17.0-ice-da1fbe60-v1").apply { mkdirs() }
         val files = context.assets.list("rime") ?: error("Rime assets unavailable")
         require(files.isNotEmpty())
+        var maxSourceMtime = 0L
         for (name in files) {
             require(!name.contains('/') && !name.contains(".."))
             val target = File(shared, name)
@@ -28,26 +47,74 @@ internal object OpenLessRime {
                 context.assets.open("rime/$name").use { input -> temporary.outputStream().use { input.copyTo(it) } }
                 check(temporary.renameTo(target))
             }
+            if (target.lastModified() > maxSourceMtime) maxSourceMtime = target.lastModified()
         }
         var selected = runCatching { JSONObject(OpenLessNative.nativePublicDictionary(shared.absolutePath, "select")).optString("data_path", shared.absolutePath) }
             .getOrDefault(shared.absolutePath)
-        val profile = File(context.filesDir, "rime-user").absolutePath
+        val profileDir = File(context.filesDir, "rime-user").apply { mkdirs() }
+        val profile = profileDir.absolutePath
+        seedPrebuiltArtifacts(context, profileDir, selected == shared.absolutePath, maxSourceMtime)
         var ready = false
-        repeat(3) {
-            if (!ready) {
-                if (selected != shared.absolutePath && !selected.startsWith(shared.absolutePath + "/public-updates-v1/")) selected = shared.absolutePath
-                try { request("initialize", selected, profile); ready = true }
-                catch (error: Exception) {
-                    if (selected == shared.absolutePath) throw error
-                    selected = if (it == 1) shared.absolutePath else runCatching {
-                        JSONObject(OpenLessNative.nativePublicDictionary(shared.absolutePath, "reject")).optString("data_path", shared.absolutePath)
-                    }.getOrDefault(shared.absolutePath)
+        try {
+            repeat(3) {
+                if (!ready) {
+                    if (selected != shared.absolutePath && !selected.startsWith(shared.absolutePath + "/public-updates-v1/")) selected = shared.absolutePath
+                    try { request("initialize", selected, profile); ready = true }
+                    catch (error: Exception) {
+                        if (selected == shared.absolutePath) throw error
+                        selected = if (it == 1) shared.absolutePath else runCatching {
+                            JSONObject(OpenLessNative.nativePublicDictionary(shared.absolutePath, "reject")).optString("data_path", shared.absolutePath)
+                        }.getOrDefault(shared.absolutePath)
+                    }
                 }
             }
+            check(ready)
+            initialized = true
+            isReady = true
+            lastInitError = null
+        } catch (error: Throwable) {
+            lastInitError = error.message ?: error.javaClass.simpleName
+            throw error
         }
-        check(ready)
-        initialized = true
         refreshPublicDictionary(context)
+    }
+
+    /**
+     * Copies host-precompiled Rime binary tables into rime-user/build on first install
+     * (or data-version change) so librime skips 30–90s of on-device YAML compilation.
+     */
+    private fun seedPrebuiltArtifacts(
+        context: Context,
+        profileDir: File,
+        usingBundledData: Boolean,
+        maxSourceMtime: Long,
+    ) {
+        if (!usingBundledData) return
+        val prebuilt = runCatching { context.assets.list("rime-prebuilt") }.getOrNull()
+        if (prebuilt.isNullOrEmpty()) return
+        val buildDir = File(profileDir, "build").apply { mkdirs() }
+        val stamp = File(buildDir, ".openless-prebuilt-stamp")
+        val version = "rime-1.17.0-ice-da1fbe60-v1"
+        if (stamp.exists() && runCatching { stamp.readText().trim() }.getOrNull() == version) return
+        val hasCustomPatch = File(profileDir, "openless_pinyin_learning.custom.yaml").exists() ||
+            File(profileDir, "openless_pinyin_private.custom.yaml").exists()
+        val freshMtime = maxOf(System.currentTimeMillis(), maxSourceMtime + 2000L)
+        runCatching {
+            for (name in prebuilt) {
+                if (name.contains('/') || name.contains("..")) continue
+                if (hasCustomPatch && name.endsWith(".schema.yaml")) continue
+                val target = File(buildDir, name)
+                val temporary = File(buildDir, "$name.tmp")
+                context.assets.open("rime-prebuilt/$name").use { input ->
+                    temporary.outputStream().use { input.copyTo(it) }
+                }
+                check(temporary.renameTo(target))
+                target.setLastModified(freshMtime)
+            }
+            stamp.writeText(version)
+        }.onFailure { error ->
+            android.util.Log.w("OpenLessRime", "prebuilt seed skipped: ${error.message}")
+        }
     }
     private fun refreshPublicDictionary(context: Context) {
         if (!context.getSharedPreferences("openless_ime_ui", Context.MODE_PRIVATE).getBoolean("public_dictionary_updates", true)) return

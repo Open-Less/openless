@@ -1054,36 +1054,7 @@ class OpenLessKeyboardSettingsActivity : Activity() {
             setTextColor(tone(Color.rgb(160, 160, 160), Color.rgb(100, 100, 105)))
             setPadding(0, dp(6), 0, dp(4))
         }
-        val keysBlock = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(tone(Color.rgb(48, 48, 48), Color.rgb(242, 242, 246)))
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            // Three fake key rows so stretch is visually obvious.
-            repeat(3) { rowIndex ->
-                val row = LinearLayout(this@OpenLessKeyboardSettingsActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER
-                }
-                repeat(10) {
-                    row.addView(
-                        View(this@OpenLessKeyboardSettingsActivity).apply {
-                            setBackgroundColor(tone(Color.rgb(70, 70, 70), Color.rgb(255, 255, 255)))
-                        },
-                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                            marginStart = dp(2)
-                            marginEnd = dp(2)
-                        },
-                    )
-                }
-                addView(
-                    row,
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
-                        if (rowIndex > 0) topMargin = dp(6)
-                    },
-                )
-            }
-        }
+        val keysBlock = ImeKeyboardPreview(this, ImePalette.resolve(isDarkTheme), englishUi)
         val raiseBlock = FrameLayout(this).apply {
             setBackgroundColor(tone(Color.rgb(36, 36, 36), Color.rgb(220, 220, 224)))
             addView(
