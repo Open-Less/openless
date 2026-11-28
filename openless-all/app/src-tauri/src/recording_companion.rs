@@ -101,6 +101,9 @@ impl ChordState {
 }
 // Keep this in sync with the frontend's version-flavor check.
 pub(crate) fn ask_anything_available() -> bool {
+    if crate::build_identity::DEV {
+        return true;
+    }
     ask_anything_available_for_version(
         env!("CARGO_PKG_VERSION_PRE"),
         env!("CARGO_PKG_VERSION")
