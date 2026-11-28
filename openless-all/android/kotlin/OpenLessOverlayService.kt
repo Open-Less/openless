@@ -26,6 +26,51 @@ import kotlin.math.abs
 internal fun shouldIgnoreOverlayRecordingFrame(processing: Boolean, message: String?): Boolean =
     processing && message.isNullOrBlank()
 
+/** 悬浮球收到全局录音帧时允许执行的自动动作。 */
+internal enum class OverlayRecordingFrameAction {
+    /** 排队中的电平帧，忽略。 */
+    IGNORE,
+
+    /** 非本入口发起的录音：只镜像显示，绝不做麦克风 FGS 提升/失败自动取消/生命周期清理。 */
+    MIRROR_ONLY,
+
+    /** 本入口发起的录音：保留原有 FGS 提升与失败取消行为。 */
+    PROMOTE_AND_SHOW,
+}
+
+internal fun overlayRecordingFrameAction(
+    ownsSession: Boolean,
+    processing: Boolean,
+    message: String?,
+): OverlayRecordingFrameAction = when {
+    shouldIgnoreOverlayRecordingFrame(processing, message) -> OverlayRecordingFrameAction.IGNORE
+    !ownsSession -> OverlayRecordingFrameAction.MIRROR_ONLY
+    else -> OverlayRecordingFrameAction.PROMOTE_AND_SHOW
+}
+
+/**
+ * 只有本入口发起的录音，自动失败清理才可以取消会话；外部（IME/热键）发起的会话
+ * 必须交由对应入口处理，避免悬浮球自动清理误取消别人的听写。
+ *
+ * 注意：这是"启动意图"级别的守卫，不是强 session 归属绑定——NativeStart 是异步的，
+ * 且桥接回调不带 sessionId，无法在本层验证被抓的到底是不是本次 start 的会话。
+ */
+internal fun shouldAutoCancelOwnedSession(ownsSession: Boolean): Boolean = ownsSession
+
+/** 悬浮球自身"已发起录音"的启动意图状态；终态/取消/失败/手动手势都释放。 */
+internal class OverlaySessionOwnership {
+    var owned: Boolean = false
+        private set
+
+    fun markStarted() {
+        owned = true
+    }
+
+    fun release() {
+        owned = false
+    }
+}
+
 /** Foreground service + TYPE_APPLICATION_OVERLAY floating dictation control. */
 class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateListener {
 
@@ -62,6 +107,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var longPressRecording = false
     private var pendingSwipe: SwipeDirection? = null
     private var swipeConsumed = false
+    private val sessionOwnership = OverlaySessionOwnership()
 
     private lateinit var iconContainer: FrameLayout
     private lateinit var iconButton: ImageView
@@ -117,6 +163,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 beginDictationFromOverlay()
             }
             ACTION_HIDE -> {
+                sessionOwnership.release()
                 hideOverlay()
                 demoteFromRecordingForeground()
                 stopSelf(startId)
@@ -136,6 +183,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     override fun onDestroy() {
+        sessionOwnership.release()
         if (OpenLessOverlayBridge.listener === this) {
             OpenLessOverlayBridge.listener = null
         }
@@ -159,32 +207,49 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     override fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
         when (state) {
             "recording" -> {
-                // Queued meter frames must not undo a stop/handoff gesture.
-                if (shouldIgnoreOverlayRecordingFrame(processing, message)) return
-                recording = true
-                processing = false
-                if (!tryPromoteRecordingForeground()) {
-                    try {
-                        OpenLessNative.nativeCancelDictation()
-                    } catch (error: Throwable) {
-                        Log.w(TAG, "cancel dictation bridge unavailable", error)
+                when (overlayRecordingFrameAction(sessionOwnership.owned, processing, message)) {
+                    OverlayRecordingFrameAction.IGNORE -> return
+                    OverlayRecordingFrameAction.MIRROR_ONLY -> {
+                        // 外部入口（IME/热键）发起的录音：只镜像显示。
+                        // 不做麦克风 FGS 提升，也不在失败时取消别人的会话。
+                        recording = true
+                        processing = false
+                        applyVisualState(OverlayVisualState.Recording)
+                        return
                     }
-                    return
+                    OverlayRecordingFrameAction.PROMOTE_AND_SHOW -> {
+                        recording = true
+                        processing = false
+                        if (!tryPromoteRecordingForeground()) {
+                            if (shouldAutoCancelOwnedSession(sessionOwnership.owned)) {
+                                try {
+                                    OpenLessNative.nativeCancelDictation()
+                                } catch (error: Throwable) {
+                                    Log.w(TAG, "cancel dictation bridge unavailable", error)
+                                }
+                            }
+                            sessionOwnership.release()
+                            return
+                        }
+                        applyVisualState(OverlayVisualState.Recording)
+                    }
                 }
-                applyVisualState(OverlayVisualState.Recording)
             }
             "transcribing",
             "polishing" -> {
+                sessionOwnership.release()
                 recording = false
                 processing = true
                 applyVisualState(OverlayVisualState.Processing)
             }
             "done" -> {
+                sessionOwnership.release()
                 recording = false
                 processing = false
                 setArmed(false)
             }
             "error" -> {
+                sessionOwnership.release()
                 recording = false
                 processing = false
                 setArmed(false)
@@ -193,6 +258,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             }
             "cancelled",
             "idle" -> {
+                sessionOwnership.release()
                 recording = false
                 processing = false
                 setArmed(false)
@@ -683,6 +749,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         if (!recording || gestureAction(direction) != "cancel") {
             return
         }
+        sessionOwnership.release()
         try {
             OpenLessNative.nativeCancelDictation()
             recording = false
@@ -711,6 +778,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun finalizeVoiceEditFromOverlay() {
         if (!recording) return
+        sessionOwnership.release()
         try {
             OpenLessNative.nativeFinalizeVoiceEditFromOverlay()
             recording = false
@@ -726,12 +794,16 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun abortRecordingStart(startId: Int) {
+        val owned = sessionOwnership.owned
+        sessionOwnership.release()
         recording = false
         processing = false
-        try {
-            OpenLessNative.nativeCancelDictation()
-        } catch (error: Throwable) {
-            Log.w(TAG, "cancel dictation after foreground failure", error)
+        if (shouldAutoCancelOwnedSession(owned)) {
+            try {
+                OpenLessNative.nativeCancelDictation()
+            } catch (error: Throwable) {
+                Log.w(TAG, "cancel dictation after foreground failure", error)
+            }
         }
         stopSelf(startId)
     }
@@ -743,11 +815,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             } else {
                 OpenLessNative.nativeStartDictation()
             }
+            sessionOwnership.markStarted()
             recording = true
             processing = false
             setArmed(false)
             applyVisualState(OverlayVisualState.Recording)
         } catch (error: Throwable) {
+            sessionOwnership.release()
             Log.w(TAG, "start dictation bridge unavailable", error)
             // recording was never set true on this path (the native start
             // call itself threw), so the `recording` setter's own
@@ -775,6 +849,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun stopRecordingFromOverlay(translation: Boolean = false) {
+        sessionOwnership.release()
         try {
             recording = false
             processing = true
@@ -803,6 +878,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun stopQuickNoteFromOverlay() {
+        sessionOwnership.release()
         try {
             recording = false
             processing = true

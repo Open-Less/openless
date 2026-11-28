@@ -498,12 +498,13 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
         );
         // #endregion
         if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::notify_overlay_bridge(
+            crate::android::jni::android::notify_overlay_bridge_with_session(
                 env,
                 context,
                 state,
                 message,
                 payload.level,
+                payload.session_id.as_deref(),
             )
         }) {
             log::warn!("[android-native] notify overlay bridge failed: {error}");

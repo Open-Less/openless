@@ -135,6 +135,11 @@ class ImeAutoTextIntegrationTest {
                         deleted.countDown()
                         return result
                     }
+                    override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                        val result = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+                        deleted.countDown()
+                        return result
+                    }
                 })
                 call(service, "englishDeleteBackward")
             }

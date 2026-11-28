@@ -2,36 +2,64 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const source = readFileSync(
-  new URL('../../android/kotlin/OpenLessImeService.kt', import.meta.url),
+const readAndroid = (name) =>
+  readFileSync(new URL(`../../android/kotlin/${name}`, import.meta.url), 'utf8');
+const source = readAndroid('OpenLessImeService.kt');
+const scaffolding = readFileSync(
+  new URL('../../android/scripts/copy-android-scaffolding.mjs', import.meta.url),
   'utf8',
 );
-const keyboardKey = source.slice(
-  source.indexOf('internal fun keyboardKey('),
-  source.indexOf('private fun keyRepeatIntervalMs('),
-);
 
-test('a fresh key press clears click suppression left by an out-of-bounds swipe', () => {
-  const down = keyboardKey.match(
-    /MotionEvent\.ACTION_DOWN -> \{([\s\S]*?)MotionEvent\.ACTION_MOVE/,
-  );
-  assert.ok(down, 'keyboardKey must handle ACTION_DOWN');
-  assert.match(
-    down[1],
-    /suppressNextClick = false/,
-    'an out-of-bounds swipe has no native click to clear suppression before the next tap',
-  );
+// Source-only architecture/wiring guards. Touch behavior is exercised by the
+// Android View tests, not by matching fragments of a retired key implementation.
+test('the host delegates key presentation instead of retaining legacy touch widgets', () => {
+  assert.doesNotMatch(source, /internal fun keyboardKey\(/);
+  assert.doesNotMatch(source, /class (?:KeyPreviewOverlay|SwipeModeContainer|StrokeKeyView)\b/);
+  assert.match(source, /ImeTypingPanel\(/);
+  assert.match(source, /ImeClipboardPanel\(/);
+  assert.match(readAndroid('StrokeInputController.kt'), /ImeStrokePanel\(/);
+  for (const name of [
+    'ImeActionButton.kt',
+    'ImeCandidateStrip.kt',
+    'ImeTypingPanel.kt',
+    'ImeVoicePanel.kt',
+    'ImeClipboardPanel.kt',
+    'ImeStrokePanel.kt',
+    'ImeDraftBar.kt',
+    'ImeSurfaceHost.kt',
+    'ImeKeyboardPreview.kt',
+  ]) {
+    const view = readAndroid(name);
+    assert.doesNotMatch(
+      view,
+      /OpenLessNative\.|currentInputConnection|getSharedPreferences\(/,
+      `${name} must not own backend calls, editor connections, or preferences`,
+    );
+    assert.ok(scaffolding.includes(`'${name}'`), `${name} must reach the Android build`);
+  }
 });
 
-test('a swipe still suppresses the click from the same touch sequence', () => {
-  assert.match(
-    keyboardKey,
-    /if \(event\.actionMasked == MotionEvent\.ACTION_UP && swipePreviewShown\) \{\s*swipeSpecOf\(trackedView\)\?\.first\?\.invoke\(\)\s*suppressNextClick = true/,
+test('normal presentation refreshes retain the system input-view root', () => {
+  assert.match(source, /new ImeSurfaceHost|ImeSurfaceHost\(this\)/);
+  assert.match(source, /surfaceHost\?\.render\(keyboard, draft, draftEdit\)/);
+  assert.equal((source.match(/setInputView\(onCreateInputView\(\)\)/g) ?? []).length, 1);
+  const refresh = source.slice(
+    source.indexOf('internal fun refreshInputView()'),
+    source.indexOf('private fun refreshInputView(slideDirection:'),
   );
-  assert.match(
-    keyboardKey,
-    /setOnClickListener \{\s*if \(suppressNextClick\) \{\s*suppressNextClick = false\s*\} else \{\s*action\(\)/,
-  );
+  assert.match(refresh, /replaceSurfaceContent\(\)/);
+  assert.doesNotMatch(refresh, /setInputView\(/);
+});
+
+test('key and candidate behavior fixtures reach the Android instrumentation source set', () => {
+  for (const name of [
+    'ImeTypingPanelInstrumentedTest.kt',
+    'ImeVoicePanelInstrumentedTest.kt',
+    'ImeRemainingPanelsInstrumentedTest.kt',
+  ]) {
+    assert.ok(scaffolding.includes(`'${name}'`), `${name} must be staged`);
+    assert.match(readAndroid(`androidTest/${name}`), /@RunWith\(AndroidJUnit4::class\)/);
+  }
 });
 
 test('a reused English letter panel synchronizes Shift even when its state does not change', () => {

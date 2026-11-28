@@ -2,6 +2,7 @@
 """Build the same pinned librime for OHOS and Android, outside the checkout."""
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -232,7 +233,11 @@ def main():
     print('Rime prefix: ' + str(prefix), flush=True)
     print('Rime data: ' + str(data), flush=True)
     if opts.platform == 'android':
-        bridge = root / 'build-bridge'
+        # The bridge source lives in this checkout, unlike shared dependency
+        # sources. A CMake binary directory cannot be reused by another clone;
+        # namespace it without deleting other checkouts' build caches.
+        checkout_key = hashlib.sha256(str(APP).encode('utf-8')).hexdigest()[:12]
+        bridge = root / ('build-bridge-' + checkout_key)
         run(cmake, '-S', APP / 'mobile-ime', '-B', bridge, *common,
             '-DOPENLESS_RIME_PREFIX=' + str(prefix))
         run(cmake, '--build', bridge, '--parallel', opts.jobs)
@@ -251,6 +256,23 @@ def main():
             raise RuntimeError('Android libc++_shared.so missing')
         shutil.copy2(stl[0], libraries)
         shutil.copytree(data, destination / 'assets/rime', dirs_exist_ok=True)
+        deployer = shutil.which('rime_deployer')
+        if deployer:
+            pre_user = root / 'prebuilt-user'
+            if pre_user.exists():
+                shutil.rmtree(pre_user)
+            pre_user.mkdir(parents=True, exist_ok=True)
+            (pre_user / 'default.custom.yaml').write_text(
+                'patch:\n  schema_list:\n    - schema: openless_pinyin_learning\n'
+                '    - schema: openless_pinyin_private\n    - schema: pinyin_simp\n'
+                '  menu/page_size: 8\n',
+                encoding='utf-8',
+            )
+            run(deployer, '--build', pre_user, data)
+            prebuilt_dest = destination / 'assets/rime-prebuilt'
+            if prebuilt_dest.exists():
+                shutil.rmtree(prebuilt_dest)
+            shutil.copytree(pre_user / 'build', prebuilt_dest)
 
 if __name__ == '__main__':
     main()

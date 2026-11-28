@@ -15,14 +15,26 @@ object OpenLessOverlayBridge {
 
     interface OverlayStateListener {
         fun onCapsuleStateChanged(state: String, message: String?, level: Float)
+
+        /** Legacy observers can keep implementing only the original callback. */
+        fun onCapsuleStateChangedWithSession(state: String, message: String?, level: Float, sessionId: String?) {
+            onCapsuleStateChanged(state, message, level)
+        }
     }
 
     @Keep
     @JvmStatic
     fun onCapsuleStateChanged(state: String, message: String?, level: Float) {
+        onCapsuleStateChangedWithSession(state, message, level, null)
+    }
+
+    @Keep
+    @JvmStatic
+    fun onCapsuleStateChangedWithSession(state: String, message: String?, level: Float, sessionId: String?) {
+        val identity = sessionId?.takeUnless { it.isBlank() }
         mainHandler.post {
-            listener?.onCapsuleStateChanged(state, message, level)
-            imeListener?.onCapsuleStateChanged(state, message, level)
+            listener?.onCapsuleStateChangedWithSession(state, message, level, identity)
+            imeListener?.onCapsuleStateChangedWithSession(state, message, level, identity)
         }
     }
 
