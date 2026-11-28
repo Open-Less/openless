@@ -1169,8 +1169,12 @@ pub(crate) fn legacy_structured_prompt() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_style_pack_runtime_diagnostics, StylePack};
+    use super::{
+        build_style_pack_runtime_diagnostics, default_selection_polish_style_prompt_for_mode,
+        style_pack_prompt, StylePack, StylePackKind, StylePromptKind,
+    };
     use crate::shared_types::UserPreferences;
+    use crate::types::PolishMode;
 
     #[test]
     fn runtime_diagnostics_use_the_core_prompt_composer() {
