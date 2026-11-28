@@ -116,7 +116,7 @@ pub struct StylePack {
     pub version: String,
     pub kind: StylePackKind,
     pub base_mode: PolishMode,
-    /// Separate selection prompt. Legacy imported packs fall back to their authored prompt.
+    /// Separate selection prompt. Legacy/custom packs fall back to their authored prompt.
     pub selection_prompt: String,
     /// Selection voice editing EditPlan system prompt. Empty = fall back to user prefs / built-in default (issue #1076).
     #[serde(default)]
@@ -154,7 +154,7 @@ pub fn style_pack_prompt(pack: &StylePack, kind: StylePromptKind) -> String {
         StylePromptKind::DictationAsr => pack.prompt.clone(),
         StylePromptKind::Selection => {
             if pack.selection_prompt.trim().is_empty() {
-                if pack.kind == StylePackKind::Imported && !pack.prompt.trim().is_empty() {
+                if !pack.prompt.trim().is_empty() {
                     pack.prompt.clone()
                 } else {
                     default_selection_polish_style_prompt_for_mode(pack.base_mode)
@@ -1218,7 +1218,6 @@ mod tests {
             default_selection_polish_style_prompt_for_mode(PolishMode::Light));
         pack.kind = StylePackKind::Builtin;
         pack.prompt = "DICTATION ONLY".into();
-        assert_eq!(style_pack_prompt(&pack, StylePromptKind::Selection),
-            default_selection_polish_style_prompt_for_mode(PolishMode::Light));
+        assert_eq!(style_pack_prompt(&pack, StylePromptKind::Selection), "DICTATION ONLY");
     }
 }

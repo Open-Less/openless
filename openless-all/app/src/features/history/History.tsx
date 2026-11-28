@@ -140,7 +140,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
     notify,
   );
   const item = filtered.find((entry) => entry.id === selectedId) ?? filtered[0];
-  const styleLabel = (entry: DictationSession) => styleLabelFor(entry, allPacks, modeLabel);
+  const styleLabel = (entry: DictationSession) => styleLabelFor(entry, allPacks, modeLabel, t);
   const clearableCount = items.filter((entry) => entry.source !== 'quick_note').length;
   const binding = quickNotesOnly ? prefs?.quickNoteHotkey : prefs?.dictationHotkey;
 

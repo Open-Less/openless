@@ -26,6 +26,7 @@ struct RecordingSelectionRuntime {
     capture: SelectionCapture,
     protected: Arc<Mutex<Vec<String>>>,
     protection_error: Option<BackendError>,
+    protection_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     history_path: Arc<Mutex<Option<std::path::PathBuf>>>,
     applied: Arc<Mutex<Vec<(SessionId, String, String)>>>,
     apply_outcome: InsertOutcome,
@@ -41,6 +42,7 @@ impl RecordingSelectionRuntime {
         Self {
             protected: Arc::new(Mutex::new(Vec::new())),
             protection_error: None,
+            protection_gate: None,
             history_path: Arc::new(Mutex::new(None)),
             capture: SelectionCapture {
                 text: source_text.to_string(),
@@ -92,6 +94,7 @@ impl SelectionRuntimeAdapter for RecordingSelectionRuntime {
         let protected = self.protected.clone();
         let error = self.protection_error.clone();
         let path = self.history_path.lock().unwrap().clone().unwrap();
+        let gate = self.protection_gate.clone();
         Box::pin(async move {
             let history = openless_core::HistoryStore::at_path(path).list()?;
             assert!(
@@ -102,6 +105,10 @@ impl SelectionRuntimeAdapter for RecordingSelectionRuntime {
                 return Err(error);
             }
             protected.lock().unwrap().push(text);
+            if let Some((entered, release)) = gate {
+                entered.notify_one();
+                release.notified().await;
+            }
             Ok(Some(1))
         })
     }
@@ -254,6 +261,7 @@ async fn completed_selection_history_survives_a_concurrent_new_capture() {
     let (backend, data_dir) = backend_with_selection(runtime);
     let mut preferences = backend.get_preferences();
     preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+    preferences.selection_polish_style_pack_id = "builtin.light".into();
     write_preferences(&backend, preferences);
     let selection = Arc::clone(&backend.services().selection);
     let first = selection
@@ -378,6 +386,9 @@ fn backend_with_selection_parts_and_host(
     dependencies.host_actions = host_actions;
     dependencies.dictation_engine = Arc::new(
         openless_core::testing::FixtureDictationEngine::successful("dictation", "dictation output"),
+    );
+    dependencies.text_inserter = Arc::new(
+        openless_core::testing::FixtureTextInserter::with_outcome(InsertOutcome::Inserted),
     );
     let backend = OpenLessBackend::new(
         BackendConfig {
@@ -1363,6 +1374,9 @@ async fn selection_freezes_the_active_llm_channel_model_and_capture_context() {
     let (backend, data_dir) =
         backend_with_selection_parts(runtime, Arc::new(polisher.clone()), credentials);
     backend.start().await.expect("backend should start");
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_style_pack_id = "builtin.formal".into();
+    write_preferences(&backend, preferences);
     let channel_id = backend
         .create_channel(
             ChannelKind::Llm,
@@ -1492,6 +1506,123 @@ async fn empty_selection_fails_before_protection_provider_or_history() {
     assert!(backend.list_history().unwrap().is_empty());
     backend.shutdown().await.unwrap();
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn selection_history_freezes_style_before_protection_and_keeps_it_for_all_outcomes() {
+    for outcome in ["inserted", "copied", "cancelled", "provider_failed", "write_unknown"] {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut runtime = RecordingSelectionRuntime::new(" \tcomplete original😀\n ");
+        runtime.protection_gate = Some((entered.clone(), release.clone()));
+        if outcome == "copied" { runtime.apply_outcome = InsertOutcome::CopiedFallback; }
+        if outcome == "write_unknown" {
+            runtime = runtime.with_apply_error(BackendError::new(
+                BackendErrorCode::OutcomeUnknown, "selectionPolishWriteUnconfirmed",
+            ));
+        }
+        let polisher = RecordingContextPolisher::default();
+        let worker: Arc<dyn TextPolisher> = if outcome == "provider_failed" {
+            Arc::new(openless_core::testing::FixtureTextPolisher::failing(BackendError::new(
+                BackendErrorCode::Provider, "fixture provider failure",
+            )))
+        } else { Arc::new(polisher.clone()) };
+        let (backend, directory) = backend_with_selection_parts(
+            runtime.clone(), worker, Arc::new(UnsupportedCredentialStore),
+        );
+        let mut pack = backend.create_style_pack(openless_core::StylePack {
+            name: "Frozen authored style".into(), prompt: "ORIGINAL AUTHORED STYLE".into(),
+            base_mode: PolishMode::Formal, ..Default::default()
+        }).unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.selection_polish_style_pack_id = pack.id.clone();
+        preferences.selection_polish_output_mode = if outcome == "cancelled" {
+            SelectionPolishOutputMode::PreviewConfirm
+        } else { SelectionPolishOutputMode::DirectReplace };
+        write_preferences(&backend, preferences);
+        backend.start().await.unwrap();
+        let operation = tokio::spawn({
+            let selection = backend.services().selection.clone();
+            async move { selection.begin_polish(SelectionPolishRequest {
+                selected_text: None, mode: PolishMode::Raw, instruction: None,
+            }).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified()).await.unwrap();
+        let provisional = backend.list_history().unwrap().remove(0);
+        assert_eq!(provisional.raw_transcript, runtime.capture.text);
+        assert_eq!(provisional.mode, PolishMode::Formal);
+        assert_eq!(provisional.style_pack_id.as_deref(), Some(pack.id.as_str()));
+        assert_eq!(provisional.error_code.as_deref(), Some("selectionProcessing"));
+        assert!(provisional.final_text.is_empty());
+        assert!(polisher.contexts().is_empty(), "style metadata is durable before provider dispatch");
+        let mut changed = backend.get_preferences();
+        changed.selection_polish_style_pack_id = "builtin.raw".into();
+        write_preferences(&backend, changed);
+        pack.prompt = "EDITED AFTER PROTECTION".into();
+        pack.base_mode = PolishMode::Light;
+        backend.update_style_pack(pack.clone()).unwrap();
+        release.notify_one();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), operation).await.unwrap().unwrap();
+        match outcome {
+            "provider_failed" => assert_eq!(result.unwrap_err().code, BackendErrorCode::Provider),
+            "write_unknown" => assert_eq!(result.unwrap_err().code, BackendErrorCode::OutcomeUnknown),
+            "cancelled" => backend.services().selection.cancel(Some(result.unwrap())).await.unwrap(),
+            _ => { result.unwrap(); }
+        }
+        for context in polisher.contexts() {
+            assert_eq!(context.polish.mode, PolishMode::Formal);
+            assert_eq!(context.polish.style_pack_id, pack.id);
+            assert_eq!(context.polish.style_system_prompt, "ORIGINAL AUTHORED STYLE");
+        }
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        let row = &history[0];
+        assert_eq!(row.id, provisional.id);
+        assert_eq!(row.source, openless_core::HistorySource::SelectionPolish);
+        assert_eq!(row.raw_transcript, runtime.capture.text);
+        assert_eq!(row.mode, PolishMode::Formal);
+        assert_eq!(row.style_pack_id.as_deref(), Some(pack.id.as_str()));
+        assert_eq!(runtime.protected.lock().unwrap().len(), 1);
+        assert_eq!(row.final_text, if outcome == "provider_failed" { "" } else { "context output" });
+        let expected_error = match outcome {
+            "provider_failed" => Some("selectionFailed"),
+            "write_unknown" => Some("selectionPolishWriteUnconfirmed"),
+            "cancelled" => Some("selectionCancelled"),
+            _ => None,
+        };
+        assert_eq!(row.error_code.as_deref(), expected_error);
+        backend.shutdown().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn builtin_selection_styles_use_their_authored_selection_slot_and_history_mode() {
+    for pack_id in ["builtin.light", "builtin.structured", "builtin.formal", openless_core::BUILTIN_INTENT_ID] {
+        let runtime = RecordingSelectionRuntime::new("builtin selection");
+        let polisher = RecordingContextPolisher::default();
+        let (backend, directory) = backend_with_selection_parts(
+            runtime, Arc::new(polisher.clone()), Arc::new(UnsupportedCredentialStore),
+        );
+        let pack = backend.get_style_pack(pack_id).unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.selection_polish_style_pack_id = pack.id.clone();
+        write_preferences(&backend, preferences);
+        backend.start().await.unwrap();
+        backend.services().selection.begin_polish(SelectionPolishRequest {
+            selected_text: None, mode: PolishMode::Raw, instruction: None,
+        }).await.unwrap();
+        let contexts = polisher.contexts();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].polish.style_pack_id, pack.id);
+        assert_eq!(contexts[0].polish.style_system_prompt, pack.selection_prompt);
+        assert_eq!(contexts[0].polish.mode, pack.base_mode);
+        let row = backend.list_history().unwrap().remove(0);
+        assert_eq!(row.style_pack_id.as_deref(), Some(pack_id));
+        assert_eq!(row.mode, pack.base_mode);
+        backend.shutdown().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 #[tokio::test]

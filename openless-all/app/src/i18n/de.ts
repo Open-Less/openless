@@ -802,6 +802,10 @@ export const de: typeof zhCN = {
     },
   },
   history: {
+    selectionPolish: 'Auswahl überarbeiten',
+    selectionPolishStyle: 'Auswahl überarbeiten: {{style}}',
+    selectionVoiceEdit: 'Auswahl per Sprache bearbeiten',
+    voiceEdit: 'Sprachbearbeitung',
     exportError: 'Die Aufnahme konnte nicht exportiert werden. Versuche es erneut.',
     kicker: 'VERLAUF',
     title: 'Verlauf',

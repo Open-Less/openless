@@ -809,6 +809,10 @@ export const fr: typeof zhCN = {
     },
   },
   history: {
+    selectionPolish: 'Reformulation de la sélection',
+    selectionPolishStyle: 'Reformulation de la sélection : {{style}}',
+    selectionVoiceEdit: 'Édition vocale de la sélection',
+    voiceEdit: 'Édition vocale',
     exportError: 'Impossible d’exporter l’enregistrement. Réessayez.',
     kicker: 'HISTORIQUE',
     title: 'Historique',

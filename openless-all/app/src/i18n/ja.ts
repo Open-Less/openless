@@ -776,6 +776,10 @@ export const ja: typeof zhCN = {
     },
   },
   history: {
+    selectionPolish: '選択範囲の推敲',
+    selectionPolishStyle: '選択範囲の推敲：{{style}}',
+    selectionVoiceEdit: '選択範囲の音声編集',
+    voiceEdit: '音声編集',
     exportError: '録音のエクスポートに失敗しました。もう一度お試しください。',
     kicker: '履歴',
     title: '履歴',

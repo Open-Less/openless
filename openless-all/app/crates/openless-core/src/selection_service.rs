@@ -17,7 +17,7 @@ use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::ports::{HostAction, HostActions, TextPolisher, TextStreamChunk, TextStreamSink};
 use crate::shared_types::{PipelineMode, SelectionPolishOutputMode};
-use crate::style_packs::{style_pack_prompt, StylePromptKind};
+use crate::style_packs::{style_pack_prompt, StylePack, StylePromptKind};
 use crate::types::{
     DictationSession, HistoryChange, HistoryInsertStatus, HistorySource, SessionId,
     VocabularyChange,
@@ -214,16 +214,17 @@ impl SelectionServiceInner {
         &self,
         id: SessionId,
         capture: &SelectionCapture,
-        mode: crate::types::PolishMode,
+        style_pack: &StylePack,
     ) -> Result<(), BackendError> {
         let prefs = self.preferences.get();
-        let record = original_record(
+        let mut record = original_record(
             id,
             capture,
-            mode,
+            style_pack.base_mode,
             HistorySource::SelectionPolish,
             self.clock.now_utc().to_rfc3339(),
         );
+        record.style_pack_id = Some(style_pack.id.clone());
         self.history.upsert_with_retention(
             record,
             prefs.history_retention_days,
@@ -237,7 +238,7 @@ impl SelectionServiceInner {
         &self,
         session_id: SessionId,
         capture: &SelectionCapture,
-        mode: crate::types::PolishMode,
+        style_pack: &StylePack,
     ) -> Result<(), BackendError> {
         if capture.text.trim().is_empty() {
             return Err(BackendError::new(
@@ -249,7 +250,7 @@ impl SelectionServiceInner {
         Self::ensure_active(&state, session_id)?;
         // Cancellation must settle an existing original, rather than race a
         // late insert that would leave a permanent selectionProcessing row.
-        self.persist_original(session_id, capture, mode)?;
+        self.persist_original(session_id, capture, style_pack)?;
         state.snapshot.source_text = Some(capture.text.clone());
         state.source_app = capture.source_app.clone();
         Ok(())
@@ -259,18 +260,15 @@ impl SelectionServiceInner {
         &self,
         request: &SelectionPolishRequest,
         source_app: Option<String>,
+        style_pack: &StylePack,
     ) -> Result<(DictationContext, SelectionPolishOutputMode, bool), BackendError> {
         let preferences = self.preferences.get();
-        let style_pack = self
-            .style_packs
-            .get_or_default_active(&preferences.selection_polish_style_pack_id)?;
-        let mut selection_prompt = style_pack_prompt(&style_pack, StylePromptKind::Selection);
+        let mut selection_prompt = style_pack_prompt(style_pack, StylePromptKind::Selection);
         log::info!(
             "[selection-polish] style pack={} slot={} chars={}",
             style_pack.id,
             if !style_pack.selection_prompt.trim().is_empty() { "selectionPrompt" }
-            else if style_pack.kind == crate::style_packs::StylePackKind::Imported
-                && !style_pack.prompt.trim().is_empty() { "prompt (legacy imported)" }
+            else if !style_pack.prompt.trim().is_empty() { "prompt (legacy fallback)" }
             else { "builtin selection default" },
             selection_prompt.chars().count(),
         );
@@ -279,7 +277,7 @@ impl SelectionServiceInner {
             .as_deref()
             .map(str::trim)
             .filter(|instruction| !instruction.is_empty());
-        let uses_llm = request.mode != crate::types::PolishMode::Raw
+        let uses_llm = style_pack.base_mode != crate::types::PolishMode::Raw
             || selection_prompt
                 != crate::style_packs::default_selection_polish_style_prompt_for_mode(
                     crate::types::PolishMode::Raw,
@@ -317,7 +315,7 @@ impl SelectionServiceInner {
         };
         let mut context = DictationContext::capture(
             &preferences,
-            &style_pack,
+            style_pack,
             DictationProviderInvocations::new(
                 ProviderInvocation::for_provider(preferences.active_asr_provider.clone()),
                 llm,
@@ -331,7 +329,7 @@ impl SelectionServiceInner {
             },
         );
         context.asr.prompt = None;
-        context.polish.mode = request.mode;
+        context.polish.mode = style_pack.base_mode;
         context.polish.style_system_prompt = selection_prompt;
         context.polish.translation_active = false;
         context.polish.cursor_context = None;
@@ -793,17 +791,23 @@ impl SelectionApi for SelectionService {
             let _runtime = inner.begin_runtime_work()?;
             let (session_id, authorization) = inner.begin(&request)?;
             let result = async {
+                // The original row and every later outcome must identify the
+                // same authored style, even if preferences or the catalog change
+                // during capture, clipboard protection or provider resolution.
+                let preferences = inner.preferences.get();
+                let style_pack = inner.style_packs
+                    .get_or_default_active(&preferences.selection_polish_style_pack_id)?;
                 let capture = inner
                     .runtime
                     .capture_authorized(session_id, request.selected_text.clone(), authorization)
                     .await?;
-                inner.set_capture(session_id, &capture, request.mode)?;
+                inner.set_capture(session_id, &capture, &style_pack)?;
                 inner
                     .runtime
                     .protect_original(session_id, capture.text.clone())
                     .await?;
                 let (mut context, output_mode, uses_llm) = inner
-                    .polish_context(&request, inner.source_app(session_id)?)
+                    .polish_context(&request, inner.source_app(session_id)?, &style_pack)
                     .await?;
                 context.polish.selection_input = true;
                 let context = Arc::new(context);
