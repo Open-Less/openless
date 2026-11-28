@@ -453,7 +453,7 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                 let message = match error.message.as_str() {
                     "selectionPolishWriteUnconfirmed" => crate::selection::uncertain_write_message(&locale),
                     "selectionPolishNoSelection" | "selected text must not be empty" => {
-                        "未选中内容"
+                        crate::selection::no_selection_message(&locale)
                     }
                     "selectionPolishSelectionTooLong" => {
                         "无法完整读取选区，未替换"

@@ -1068,6 +1068,8 @@ jobs:
           cargo test --locked -p openless-core --target-dir src-tauri/target --test settings_field_updates
           cargo test --locked -p openless-core --target-dir src-tauri/target --lib long_recording
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test clipboard_delivery
+          cargo test --locked -p openless-core --target-dir src-tauri/target --lib selection_prompt_preserves_explicit_and_legacy_imported_authorship
+          cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test selection_bound_native --test selection_direct_delivery --test selection_recovery_notice --test selection_value_outcome
 
       - name: Compile Rust backend unit tests (Windows)
         # A Windows runner can link the lib test binary, but on a clean image lacking an optional

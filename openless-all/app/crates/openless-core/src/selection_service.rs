@@ -265,6 +265,15 @@ impl SelectionServiceInner {
             .style_packs
             .get_or_default_active(&preferences.selection_polish_style_pack_id)?;
         let mut selection_prompt = style_pack_prompt(&style_pack, StylePromptKind::Selection);
+        log::info!(
+            "[selection-polish] style pack={} slot={} chars={}",
+            style_pack.id,
+            if !style_pack.selection_prompt.trim().is_empty() { "selectionPrompt" }
+            else if style_pack.kind == crate::style_packs::StylePackKind::Imported
+                && !style_pack.prompt.trim().is_empty() { "prompt (legacy imported)" }
+            else { "builtin selection default" },
+            selection_prompt.chars().count(),
+        );
         let instruction = request
             .instruction
             .as_deref()
@@ -615,17 +624,19 @@ impl SelectionServiceInner {
                 SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
             )
         {
-            if let Err(error) = update_original_record(
-                &self.history,
-                session_id,
-                state.snapshot.preview_text.as_deref(),
-                if matches!(cause.message.as_str(), "selectionInputTooLarge" | "selectionPolishWriteUnconfirmed") {
-                    cause.message.as_str()
-                } else {
-                    "selectionFailed"
-                },
-            ) {
-                log::warn!("failed to settle selection history: {error}");
+            if state.snapshot.source_text.is_some() {
+                if let Err(error) = update_original_record(
+                    &self.history,
+                    session_id,
+                    state.snapshot.preview_text.as_deref(),
+                    if matches!(cause.message.as_str(), "selectionInputTooLarge" | "selectionPolishWriteUnconfirmed") {
+                        cause.message.as_str()
+                    } else {
+                        "selectionFailed"
+                    },
+                ) {
+                    log::warn!("failed to settle selection history: {error}");
+                }
             }
             state.revoke_capture_authorization();
             state.snapshot.phase = SelectionPhase::Failed;

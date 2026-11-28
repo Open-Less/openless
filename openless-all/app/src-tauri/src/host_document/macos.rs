@@ -639,8 +639,32 @@ impl crate::selection::bound_native::Native for FrozenSelectionNative<'_, '_> {
         use crate::selection::bound_native::Failure;
         let end = range.start.checked_add(range.length).ok_or(Failure::Unavailable)?;
         isize::try_from(end).map_err(|_| Failure::Unavailable)?;
-        unsafe { copy_string_for_range((*control).cast(), range.start as usize, range.length as usize) }
-            .ok_or(Failure::Unavailable)
+        unsafe {
+            let element = (*control).cast();
+            copy_string_for_range(element, range.start as usize, range.length as usize)
+                .or_else(|| {
+                    // Electron editors may expose AXSelectedText but not the
+                    // parameterized AXStringForRange attribute. Read only this
+                    // bound control's exact selected range in that case.
+                    let selected = copy_selected_range(element)?;
+                    if selected.location as u64 != range.start || selected.length as u64 != range.length {
+                        return None;
+                    }
+                    copy_string_attr(element, b"AXSelectedText\0")
+                        .filter(|text| text.encode_utf16().count() as u64 == range.length)
+                })
+                .or_else(|| {
+                    // Receipt after paste: the selected range is now a caret.
+                    // Preserve the document reader's bound on whole AXValue reads.
+                    let total = copy_index_attr(element, b"AXNumberOfCharacters\0")?;
+                    if total > FULL_TEXT_MAX_UTF16 { return None; }
+                    let value = copy_string_attr(element, b"AXValue\0")?;
+                    let utf16: Vec<_> = value.encode_utf16().collect();
+                    if utf16.len() != total { return None; }
+                    String::from_utf16(utf16.get(range.start as usize..end as usize)?).ok()
+                })
+                .ok_or(Failure::Unavailable)
+        }
     }
 
     fn writable(&self, control: &Self::Control) -> Result<(), crate::selection::bound_native::Failure> {
@@ -686,6 +710,37 @@ pub(super) fn replace_selection_direct(
         bound_native::replace(&FrozenSelectionNative { lease }, &binding, original, replacement)
             .map_err(|error| error.message().to_string())
     })
+}
+
+/// Paste recovery uses the frozen objects, permissions, full source and range
+/// checks without requiring AXSelectedText to be settable.
+pub(crate) fn selection_paste_is_safe(
+    target: &crate::selection::SelectionInsertionTarget,
+    original: &str,
+) -> bool {
+    use crate::selection::bound_native::{self, Binding, TextRange};
+    crate::selection::borrow_frozen_macos_target(target, |lease| {
+        let (control, window) = unsafe { lease.ax_objects() };
+        let (start, length) = lease.range().filter(|(_, length)| *length > 0)
+            .ok_or("selectionPolishTargetUnavailable")?;
+        let binding = Binding { control, window, range: TextRange { start, length } };
+        bound_native::verify(&FrozenSelectionNative { lease }, &binding, original)
+            .map_err(|error| error.message().to_string())
+    }).is_ok()
+}
+
+pub(crate) fn selection_replacement_confirmed(
+    target: &crate::selection::SelectionInsertionTarget,
+    replacement: &str,
+) -> bool {
+    use crate::selection::bound_native::{self, Binding, TextRange};
+    crate::selection::borrow_frozen_macos_target(target, |lease| {
+        let (control, window) = unsafe { lease.ax_objects() };
+        let (start, length) = lease.range().ok_or("selectionPolishTargetUnavailable")?;
+        let binding = Binding { control, window, range: TextRange { start, length } };
+        bound_native::confirm_replacement(&FrozenSelectionNative { lease }, &binding, replacement)
+            .map_err(|error| error.message().to_string())
+    }).is_ok()
 }
 
 /// Confirms all posted keyboard input against the original text control's caret.

@@ -43,7 +43,7 @@ pub(crate) trait Native {
     fn submit(&self, control: &Self::Control, replacement: &str) -> Result<(), Failure>;
 }
 
-fn verify<N: Native>(
+pub(crate) fn verify<N: Native>(
     native: &N,
     binding: &Binding<N::Control, N::Window>,
     original: &str,
@@ -66,13 +66,7 @@ pub(crate) fn replace<N: Native>(
     if original.is_empty() || binding.range.length == 0 {
         return Err(Failure::Unavailable);
     }
-    let length =
-        u64::try_from(replacement.encode_utf16().count()).map_err(|_| Failure::Unavailable)?;
-    let caret = binding
-        .range
-        .start
-        .checked_add(length)
-        .ok_or(Failure::Unavailable)?;
+    replacement_range(binding.range, replacement).ok_or(Failure::Unavailable)?;
     verify(native, binding, original)?;
     native.writable(&binding.control)?;
     verify(native, binding, original)?;
@@ -81,10 +75,26 @@ pub(crate) fn replace<N: Native>(
     native
         .submit(&binding.control, replacement)
         .map_err(|_| Failure::WriteUnconfirmed)?;
-    let inserted = TextRange {
-        start: binding.range.start,
-        length,
-    };
+    confirm_replacement(native, binding, replacement)
+}
+
+fn replacement_range(original: TextRange, replacement: &str) -> Option<(TextRange, u64)> {
+    let length = u64::try_from(replacement.encode_utf16().count()).ok()?;
+    let caret = original.start.checked_add(length)?;
+    Some((TextRange { start: original.start, length }, caret))
+}
+
+/// A second receipt can resolve an AX setter whose first readback was delayed.
+/// It never submits or reads from the newly focused object.
+pub(crate) fn confirm_replacement<N: Native>(
+    native: &N,
+    binding: &Binding<N::Control, N::Window>,
+    replacement: &str,
+) -> Result<(), Failure> {
+    native.guard(&binding.control, &binding.window)
+        .map_err(|_| Failure::WriteUnconfirmed)?;
+    let (inserted, caret) = replacement_range(binding.range, replacement)
+        .ok_or(Failure::WriteUnconfirmed)?;
     let observed = native
         .text(&binding.control, inserted)
         .map_err(|_| Failure::WriteUnconfirmed)?;

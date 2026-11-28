@@ -35,6 +35,19 @@ pub(crate) fn uncertain_write_message(locale: &str) -> &'static str {
     }
 }
 
+pub(crate) fn no_selection_message(locale: &str) -> &'static str {
+    match locale {
+        "zh-CN" => "未读取到选区，请选择文字后重试",
+        "zh-TW" => "未讀取到選取範圍，請選取文字後重試",
+        "ja" => "選択範囲を読み取れませんでした。文字を選択して再試行してください。",
+        "ko" => "선택 영역을 읽지 못했습니다. 텍스트를 선택한 후 다시 시도하세요.",
+        "es" => "No se pudo leer la selección. Selecciona texto y vuelve a intentarlo.",
+        "fr" => "Impossible de lire la sélection. Sélectionnez du texte et réessayez.",
+        "de" => "Die Auswahl konnte nicht gelesen werden. Text auswählen und erneut versuchen.",
+        _ => "Could not read a selection. Select text and try again.",
+    }
+}
+
 fn localized_message(locale: &str) -> &'static str {
     match locale {
         "zh-CN" => "如果有掉词，可前往 App 的历史记录获取原文。",

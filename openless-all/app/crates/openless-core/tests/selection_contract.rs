@@ -376,6 +376,9 @@ fn backend_with_selection_parts_and_host(
     dependencies.selection_polisher = Some(polisher);
     dependencies.credential_store = credential_store;
     dependencies.host_actions = host_actions;
+    dependencies.dictation_engine = Arc::new(
+        openless_core::testing::FixtureDictationEngine::successful("dictation", "dictation output"),
+    );
     let backend = OpenLessBackend::new(
         BackendConfig {
             data_dir: data_dir.clone(),
@@ -1412,6 +1415,83 @@ async fn selection_freezes_the_active_llm_channel_model_and_capture_context() {
 
     backend.shutdown().await.expect("backend should stop");
     let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn selection_uses_its_imported_style_despite_live_dictation_style_switches() {
+    use openless_core::{DictationStartOptions, DictationStyleSelection, StylePack};
+    use openless_core::app_style_routing::AppStyleAssignment;
+    for selection_prompt in ["", "SELECTION SLOT"] {
+        let mut runtime = RecordingSelectionRuntime::new("selection source");
+        runtime.capture.source_app = Some("VS Code".into());
+        let polisher = RecordingContextPolisher::default();
+        let (backend, directory) = backend_with_selection_parts(
+            runtime.clone(), Arc::new(polisher.clone()), Arc::new(UnsupportedCredentialStore),
+        );
+        let pack = backend.create_style_pack(StylePack {
+            name: "User imported style".into(), prompt: "IMPORTED STYLE".into(),
+            selection_prompt: selection_prompt.into(), ..Default::default()
+        }).unwrap();
+        backend.activate_style_pack("builtin.formal").unwrap();
+        backend.set_app_style_assignment(AppStyleAssignment::Category {
+            category: "coding".into(), style_pack_id: Some("builtin.structured".into()),
+        }).unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.selection_polish_style_pack_id = pack.id.clone();
+        preferences.selection_polish_output_mode = SelectionPolishOutputMode::DirectReplace;
+        write_preferences(&backend, preferences);
+        backend.start().await.unwrap();
+        let recording = backend.start_dictation_with_options(DictationStartOptions {
+            style_pack_id: Some("builtin.structured".into()), ..Default::default()
+        }).await.unwrap();
+        for choice in [DictationStyleSelection::SkipAuto, DictationStyleSelection::StylePack {
+            style_pack_id: "builtin.raw".into(),
+        }] {
+            backend.update_dictation_style(recording, choice).unwrap();
+            backend.services().selection.begin_polish(SelectionPolishRequest {
+                selected_text: None, mode: PolishMode::Raw, instruction: None,
+            }).await.unwrap();
+        }
+        let expected = if selection_prompt.is_empty() { "IMPORTED STYLE" } else { selection_prompt };
+        let contexts = polisher.contexts();
+        assert_eq!(contexts.len(), 2, "legacy imported prompt must invoke the LLM even with the Raw hotkey request");
+        for context in contexts {
+            assert_eq!(context.polish.style_pack_id, pack.id);
+            assert_eq!(context.polish.style_system_prompt, expected);
+            assert!(context.polish.selection_input);
+            assert!(!context.polish.translation_active);
+        }
+        assert_eq!(runtime.protected.lock().unwrap().len(), 2);
+        assert_eq!(runtime.applied().len(), 2);
+        for row in backend.list_history().unwrap() {
+            assert_eq!(row.style_pack_id.as_deref(), Some(pack.id.as_str()));
+        }
+        backend.cancel_dictation(Some(recording)).await.unwrap();
+        backend.shutdown().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn empty_selection_fails_before_protection_provider_or_history() {
+    let runtime = RecordingSelectionRuntime::new(" \n\t");
+    let polisher = RecordingContextPolisher::default();
+    let (backend, directory) = backend_with_selection_parts(
+        runtime.clone(), Arc::new(polisher.clone()), Arc::new(UnsupportedCredentialStore),
+    );
+    backend.start().await.unwrap();
+    let error = backend.services().selection.begin_polish(SelectionPolishRequest {
+        selected_text: None, mode: PolishMode::Raw, instruction: None,
+    }).await.unwrap_err();
+    assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+    assert_eq!(error.message, "selected text must not be empty");
+    assert_eq!(backend.services().selection.snapshot().await.unwrap().phase, SelectionPhase::Failed);
+    assert!(runtime.protected.lock().unwrap().is_empty());
+    assert!(runtime.applied().is_empty());
+    assert!(polisher.contexts().is_empty());
+    assert!(backend.list_history().unwrap().is_empty());
+    backend.shutdown().await.unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[tokio::test]
