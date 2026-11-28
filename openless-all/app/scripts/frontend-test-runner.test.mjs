@@ -15,6 +15,11 @@ for (const expected of [
   'scripts/windows-ui-config.test.mjs',
   'src/lib/hotkeySideModifiers.test.ts',
   'src/lib/windowHotkeyFallback.test.ts',
+  'src/features/capsule/referenceBadgeView.test.ts',
+  'src/features/settings/sections/dictationReferenceKey.test.ts',
+  'src/features/settings/shell/navigation.test.ts',
+  'src/lib/ipc/mock-data.test.ts',
+  'scripts/dictation-references-contract.test.mjs',
 ]) {
   assert(discovered.includes(expected), `aggregate discovery omitted ${expected}`);
 }
@@ -25,9 +30,9 @@ assert.equal(
 );
 
 const invocations = [];
-const statuses = [0, 7, 0];
+const statuses = [0, 7, 3, 0];
 const exitCode = runTestFiles(
-  ['src/lib/passes.test.ts', 'scripts/fails.test.mjs', 'scripts/must-not-run.test.mjs'],
+  ['src/lib/passes.test.ts', 'scripts/fails.test.mjs', 'scripts/also-fails.test.mjs', 'scripts/still-runs.test.mjs'],
   {
     appRoot: '/app',
     log: () => {},
@@ -39,8 +44,8 @@ const exitCode = runTestFiles(
   },
 );
 
-assert.equal(exitCode, 7, 'the aggregate runner must propagate a failing child status');
-assert.equal(invocations.length, 2, 'the aggregate runner must stop after the first failure');
+assert.equal(exitCode, 7, 'the aggregate runner must preserve the first failing child status');
+assert.equal(invocations.length, 4, 'the aggregate runner must execute every test despite failures');
 assert.deepEqual(invocations[0].args, [
   '--import',
   'file:///tools/tsx-loader.mjs',
@@ -51,6 +56,16 @@ assert.equal(invocations[0].command, process.execPath);
 assert.equal(invocations[1].command, process.execPath);
 assert.equal(invocations[0].options.stdio, 'inherit');
 assert.equal(invocations[0].options.timeout, 120_000);
+
+for (const failure of [{ error: { code: 'ETIMEDOUT' } }, { error: new Error('spawn failed') }, { status: null }]) {
+  let calls = 0;
+  const result = runTestFiles(['scripts/fails.test.mjs', 'scripts/still-runs.test.mjs'], {
+    appRoot: '/app', log: () => {},
+    spawn: () => (++calls === 1 ? failure : { status: 0 }),
+  });
+  assert.equal(result, failure.error?.code === 'ETIMEDOUT' ? 124 : 1);
+  assert.equal(calls, 2, 'startup failures and timeouts must not hide later tests');
+}
 
 // Exercise a real child that never exits, including one that ignores SIGTERM.
 const scratch = mkdtempSync(resolve(tmpdir(), 'openless-test-timeout-'));

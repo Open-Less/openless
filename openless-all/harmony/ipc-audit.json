@@ -1,9 +1,16 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 195,
+  "total": 201,
   "wired": 108,
-  "missing": 87,
+  "missing": 93,
   "commands": [
+    {
+      "name": "accept_history_learning",
+      "calledFrom": [
+        "src/lib/ipc/historyLearning.ts"
+      ],
+      "implementation": "unimplemented"
+    },
     {
       "name": "accept_pending_correction",
       "calledFrom": [
@@ -61,11 +68,25 @@
       "implementation": "rust"
     },
     {
+      "name": "begin_history_learning",
+      "calledFrom": [
+        "src/lib/ipc/historyLearning.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "cancel_dictation",
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
       ],
       "implementation": "arkts"
+    },
+    {
+      "name": "cancel_history_learning",
+      "calledFrom": [
+        "src/lib/ipc/historyLearning.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "cancel_selection_voice_intent_prompt",
@@ -488,6 +509,13 @@
       "implementation": "rust"
     },
     {
+      "name": "get_dictation_references_status",
+      "calledFrom": [
+        "src/api/dictationReferences.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "get_dictation_style_target",
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
@@ -813,6 +841,13 @@
       "name": "open_android_local_migration",
       "calledFrom": [
         "src/lib/ipc/local-migration.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "open_dictation_references_permission_settings",
+      "calledFrom": [
+        "src/api/dictationReferences.ts"
       ],
       "implementation": "unimplemented"
     },
@@ -1297,6 +1332,13 @@
       "name": "stop_voice_edit_instruction",
       "calledFrom": [
         "src/lib/ipc/voice-edit-session.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "submit_history_learning",
+      "calledFrom": [
+        "src/lib/ipc/historyLearning.ts"
       ],
       "implementation": "unimplemented"
     },

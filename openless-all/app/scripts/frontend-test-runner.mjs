@@ -43,6 +43,7 @@ export function runTestFiles(
   } = {},
 ) {
   let resolvedTsxImport = tsxImport;
+  let exitCode = 0;
 
   for (const testFile of testFiles) {
     const absoluteTestFile = resolve(appRoot, testFile);
@@ -56,7 +57,8 @@ export function runTestFiles(
       args = [absoluteTestFile];
     } else {
       log(`[frontend-tests] unsupported test file: ${testFile}`);
-      return 1;
+      exitCode ||= 1;
+      continue;
     }
 
     log(`[frontend-tests] ${testFile}`);
@@ -75,21 +77,24 @@ export function runTestFiles(
       timeout,
       killSignal: 'SIGKILL',
     });
-    log(`[frontend-tests] ${testFile}: ${((performance.now() - started) / 1000).toFixed(1)}s`);
+    const passed = !result.error && result.status === 0;
+    log(`[frontend-tests] ${passed ? 'PASS' : 'FAIL'} ${testFile}: ${((performance.now() - started) / 1000).toFixed(1)}s`);
     if (result.error) {
       if (result.error.code === 'ETIMEDOUT') {
         log(`[frontend-tests] timed out after ${timeout}ms: ${testFile}`);
-        return 124;
+        exitCode ||= 124;
+        continue;
       }
       log(`[frontend-tests] failed to start ${testFile}: ${result.error.message}`);
-      return 1;
+      exitCode ||= 1;
+      continue;
     }
     if (result.status !== 0) {
-      return result.status ?? 1;
+      exitCode ||= result.status ?? 1;
     }
   }
 
-  return 0;
+  return exitCode;
 }
 
 /**

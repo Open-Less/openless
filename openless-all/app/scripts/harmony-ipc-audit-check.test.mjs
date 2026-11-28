@@ -14,6 +14,7 @@ try {
     'harmony/rust/src/lib.rs',
     'harmony/entry/src/main/ets/HarmonyApi.ets',
     'app/src/lib/ipc',
+    'app/src/api/dictationReferences.ts',
     'app/src/api/in-app-dictation.ts',
     'app/src/runtime/files.ts',
     'app/src/runtime/platform.ts',
