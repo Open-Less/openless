@@ -149,10 +149,10 @@ pub(crate) fn event(physical: &str, pressed: bool) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn ask_anything_release_variants_preserve_the_noask_gate() {
+    fn ask_anything_is_reopened_for_release_dev_and_legacy_metadata() {
         for (prerelease, build, available) in [
-            ("dev.noask.1", "", false),
-            ("Beta.2", "build.noask.20261123", false),
+            ("dev.noask.1", "", true),
+            ("Beta.2", "build.noask.20261123", true),
             ("", "", true),
             ("dev.1", "", true),
             ("Beta.2", "build.20261123", true),

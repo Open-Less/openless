@@ -13,7 +13,8 @@ pub(crate) const SIWC_SERVICE: &str = if DEV {
 };
 pub(crate) const UPDATES_ENABLED: bool = !DEV;
 
-// Both release and Dev installations honor the Cargo version's noask marker.
+// Ask is available in every channel, including versions carrying legacy noask metadata.
+// Native entry points retain their platform and user-preference checks.
 pub(crate) fn ask_anything_available() -> bool {
     ask_anything_available_for_version(
         env!("CARGO_PKG_VERSION_PRE"),
@@ -23,8 +24,8 @@ pub(crate) fn ask_anything_available() -> bool {
     )
 }
 
-pub(crate) fn ask_anything_available_for_version(prerelease: &str, build: &str) -> bool {
-    !prerelease.starts_with("dev.noask.") && !build.starts_with("build.noask.")
+pub(crate) fn ask_anything_available_for_version(_prerelease: &str, _build: &str) -> bool {
+    true
 }
 
 pub(crate) fn platform_capabilities() -> openless_core::PlatformCapabilities {

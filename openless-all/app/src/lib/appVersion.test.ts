@@ -19,11 +19,8 @@ assert(
 );
 assert(!isStableChannelSwitch('1.3.18', '1.3.19'), 'Stable → Stable should be a regular update');
 
-for (const version of ['2.0.3-dev.noask.1', '2.0.3-Beta.2+build.noask.20261123']) {
-  assert(!isAskAnythingAvailable(version), `${version} must keep Ask Anything disabled`);
-}
-for (const version of ['2.0.3', '2.0.3-dev.1', '2.0.3-Beta.2+build.20261123']) {
-  assert(isAskAnythingAvailable(version), `${version} must preserve the default Ask feature`);
+for (const version of ['2.0.3-dev.noask.1', '2.0.3-Beta.2+build.noask.20261123', '2.0.3', '2.0.3-Dev.1', '2.0.3-dev.1', '2.0.3-Beta.2+build.20261123']) {
+  assert(isAskAnythingAvailable(version), `${version} must expose the reopened Ask feature`);
 }
 
 for (const resources of [zhCN, zhTW, en, ja, ko]) {
