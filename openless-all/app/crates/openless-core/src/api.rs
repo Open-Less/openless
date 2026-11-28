@@ -22402,11 +22402,13 @@ mod tests {
             "请使用 codex 完成这个任务".into(), true, false).unwrap();
         let mut prefs = backend.get_preferences();
         prefs.vocabulary_learning_enabled = false;
-        backend.set_preferences(prefs.clone()).unwrap();
+        backend.update_settings(prefs.clone(), crate::SettingsUpdateOptions::STRICT,
+            &crate::NoopSettingsRuntime).unwrap();
         assert_eq!(backend.accept_history_learning(&source.token, &result.candidates[0].id)
             .err().unwrap().message, "learningPermissionOff");
         prefs.vocabulary_learning_enabled = true;
-        backend.set_preferences(prefs).unwrap();
+        backend.update_settings(prefs, crate::SettingsUpdateOptions::STRICT,
+            &crate::NoopSettingsRuntime).unwrap();
         assert!(backend.accept_history_learning(&source.token, &result.candidates[0].id).is_err());
         let punctuation = history_learning_fixture(&backend,
             "这是一个足够长的句子，里面还有另一个，分隔符");
