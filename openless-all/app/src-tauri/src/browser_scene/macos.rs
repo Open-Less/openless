@@ -135,20 +135,25 @@ fn text(element: *mut c_void, name: &str) -> Option<String> {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 struct SelectedRange { location: isize, length: isize }
 
-fn explicit_selection(element: *mut c_void) -> Option<String> {
-    let role = text(element, "AXRole")?;
-    if !matches!(role.as_str(), "AXStaticText" | "AXWebArea" | "AXTextField" | "AXTextArea" | "AXComboBox")
-        || text(element, "AXSubrole").as_deref() == Some("AXSecureTextField") { return None; }
+fn explicit_range(element: *mut c_void) -> Option<SelectedRange> {
     let value = attr(element, "AXSelectedTextRange")?;
     if unsafe { CFGetTypeID(value.as_CFTypeRef()) != AXValueGetTypeID() } { return None; }
     let mut range = SelectedRange::default();
     if unsafe { AXValueGetValue(value.as_CFTypeRef().cast(), 4, ptr::from_mut(&mut range).cast()) } == 0
         || range.location < 0 || range.length <= 0 || range.length > 8000 { return None; }
+    Some(range)
+}
+
+fn explicit_selection(element: *mut c_void) -> Option<String> {
+    let role = text(element, "AXRole")?;
+    if !matches!(role.as_str(), "AXStaticText" | "AXWebArea" | "AXTextField" | "AXTextArea" | "AXComboBox")
+        || text(element, "AXSubrole").as_deref() == Some("AXSecureTextField") { return None; }
+    let range = explicit_range(element)?;
     let text = text(element, "AXSelectedText")?;
-    (text.encode_utf16().count() == range.length as usize).then_some(text)
+    (text.encode_utf16().count() == range.length as usize && explicit_range(element) == Some(range)).then_some(text)
 }
 
 fn owned_element(element: *mut c_void, expected_pid: i32) -> bool {
@@ -175,6 +180,7 @@ fn raw_location(page: &CFType) -> Option<String> {
 pub(crate) struct Enrichment {
     pub(crate) selected_text: Option<String>,
     selected_owner: Option<CFType>,
+    selected_range: Option<SelectedRange>,
     pub(crate) input_kind: BrowserInputKind,
     pub(crate) location: Option<String>,
     page: Option<CFType>,
@@ -204,7 +210,8 @@ impl Enrichment {
                 })
             && self.selected_text.as_ref().is_none_or(|selected| {
                 self.selected_owner.as_ref().is_some_and(|owner|
-                    explicit_selection(owner.as_CFTypeRef().cast_mut()).as_ref() == Some(selected))
+                    explicit_range(owner.as_CFTypeRef().cast_mut()) == self.selected_range
+                        && explicit_selection(owner.as_CFTypeRef().cast_mut()).as_ref() == Some(selected))
             })
     }
     /// This is additional page validation, not a substitute for target/focus
@@ -213,6 +220,7 @@ impl Enrichment {
     pub(crate) fn page_is_current(&self, other: &Self) -> bool {
         self.input_kind == other.input_kind
             && self.selected_text == other.selected_text
+            && self.selected_range == other.selected_range
             && self.page == other.page
             && self.raw_location_digest == other.raw_location_digest
             && self.tab_group == other.tab_group
@@ -447,6 +455,7 @@ pub(crate) unsafe fn enrich(
     if !verify() { return None; }
     if input_kind == BrowserInputKind::WebSelection && selected_text.is_none() { return None; }
     Some(Enrichment {
+        selected_range: if selected_text.is_some() { Some(explicit_range(input)?) } else { None },
         selected_owner: selected_text.as_ref().map(|_| unsafe { CFType::wrap_under_get_rule(input.cast()) }),
         selected_text,
         input_kind,
