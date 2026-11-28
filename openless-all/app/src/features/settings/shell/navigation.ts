@@ -58,6 +58,11 @@ export const ADVANCED_PAGES = [
 export type AdvancedPage = (typeof ADVANCED_PAGES)[number];
 export type AdvancedPageId = AdvancedPage['id'];
 
+export function advancedPageDescriptionKey(page: AdvancedPageId): string | undefined {
+  if (page === 'dictationReferences') return undefined;
+  return page === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${page}`;
+}
+
 export const GENERAL_PAGES = [
   {
     id: 'recording',

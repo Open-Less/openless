@@ -80,7 +80,6 @@ export let mockSettings: UserPreferences = {
   translationTargetLanguage: '',
   qaCompanionKey: 'Space',
   dictationReferencesEnabled: false,
-  dictationReferenceKey: 'S',
   qaHotkey: null,
   quickNoteHotkey: null,
   selectionPolishStylePackId: 'builtin.light',

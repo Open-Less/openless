@@ -95,8 +95,6 @@ export function SettingsModal({
     openAdvancedPage,
     openLocalModels,
     platformCaps,
-    referenceScreenCapture,
-    onReferencePermissionSettingsUnavailable,
     query,
     requestedServiceView,
     results,
@@ -550,8 +548,6 @@ export function SettingsModal({
                               <AdvancedTab
                                 pages={advancedPages}
                                 page={advancedPage}
-                                referenceScreenCapture={referenceScreenCapture}
-                                onReferencePermissionSettingsUnavailable={onReferencePermissionSettingsUnavailable}
                                 onOpenPage={openAdvancedPage}
                                 experimentalAsr={experimentalAsr}
                                 onOpenAsr={openExperimentalAsrChannels}

@@ -354,7 +354,6 @@ export const fr: typeof zhCN = {
   capsule: {
     references: 'Pièces jointes : {{count}}',
     referenceNotice: {
-      screenPermission: 'Autoriser la capture d’écran',
       tooLarge: 'Élément trop volumineux',
       captureFailed: 'Élément non capturé',
     },
@@ -1315,12 +1314,7 @@ export const fr: typeof zhCN = {
     },
     dictationReferences: {
       enabledLabel: 'Joindre des éléments pendant la dictée',
-      enabledDesc: 'Les captures et les éléments copiés sont ajoutés à côté de la phrase dictée',
-      keyLabel: 'Touche de capture d’écran',
-      keyDesc: 'En dictant, appuyez sur la touche d’enregistrement et cette touche',
-      keyConflict: 'Cette touche est déjà utilisée',
-      permissionNote: 'Autoriser la capture d’écran',
-      openSettings: 'Ouvrir Réglages Système',
+      enabledDesc: 'Lit le presse-papiers système pendant l’enregistrement et insère les éléments nouvellement copiés à côté de la phrase dictée',
     },
     advancedPages: {
       polishStrategyTitle: 'Stratégie de reformulation',

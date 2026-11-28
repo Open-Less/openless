@@ -13,7 +13,7 @@ export interface ReferenceBadgeState {
 
 export function updateReferenceBadge(
   previous: ReferenceBadgeState | null,
-  payload: Pick<CapsulePayload, 'state' | 'sessionId' | 'referenceCount' | 'referenceNotice'>,
+  payload: Pick<CapsulePayload, 'state' | 'sessionId' | 'referenceCount'> & { referenceNotice?: string | null },
   now: number,
 ): ReferenceBadgeState | null {
   if (payload.state !== 'recording' && payload.state !== 'transcribing' && payload.state !== 'polishing') {
@@ -22,7 +22,10 @@ export function updateReferenceBadge(
 
   const sessionId = payload.sessionId ?? undefined;
   const current = previous?.sessionId === sessionId ? previous : null;
-  const incomingNotice = payload.referenceNotice ?? null;
+  const { referenceNotice } = payload;
+  const incomingNotice = referenceNotice === 'tooLarge' || referenceNotice === 'captureFailed'
+    ? referenceNotice
+    : null;
   const count = payload.referenceCount ?? 0;
   if (!current?.notice && !incomingNotice && count === 0) return null;
 

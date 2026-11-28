@@ -320,7 +320,6 @@ export const zhCN = {
   capsule: {
     references: '素材 {{count}}',
     referenceNotice: {
-      screenPermission: '需要屏幕录制权限',
       tooLarge: '素材过大',
       captureFailed: '素材未收集',
     },
@@ -1284,12 +1283,7 @@ export const zhCN = {
     },
     dictationReferences: {
       enabledLabel: '听写中插入素材',
-      enabledDesc: '录音时截图或复制，引用会放在对应句子旁',
-      keyLabel: '截图键',
-      keyDesc: '录音中，录音键加此键截图',
-      keyConflict: '该键已被占用',
-      permissionNote: '需要屏幕录制权限',
-      openSettings: '打开系统设置',
+      enabledDesc: '录音时读取系统剪贴板，新复制的内容会放在对应句子旁',
     },
     advancedPages: {
       polishStrategyTitle: '润色策略',

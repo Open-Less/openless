@@ -321,7 +321,6 @@ export const zhTW: typeof zhCN = {
   capsule: {
     references: '素材 {{count}}',
     referenceNotice: {
-      screenPermission: '需要螢幕錄製權限',
       tooLarge: '素材過大',
       captureFailed: '未收集素材',
     },
@@ -1231,12 +1230,7 @@ export const zhTW: typeof zhCN = {
     },
     dictationReferences: {
       enabledLabel: '聽寫時插入素材',
-      enabledDesc: '錄音時截圖或拷貝，引用會放在對應句子旁',
-      keyLabel: '截圖鍵',
-      keyDesc: '錄音時，按錄音鍵加此鍵截圖',
-      keyConflict: '此鍵已被佔用',
-      permissionNote: '需要螢幕錄製權限',
-      openSettings: '打開系統設定',
+      enabledDesc: '錄音時讀取系統剪貼簿，新複製的內容會放在對應句子旁',
     },
     advancedPages: {
       polishStrategyTitle: '潤飾策略',

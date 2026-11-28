@@ -351,7 +351,6 @@ export const de: typeof zhCN = {
   capsule: {
     references: '{{count}} angehängt',
     referenceNotice: {
-      screenPermission: 'Bildschirmaufnahme erlauben',
       tooLarge: 'Anhang zu groß',
       captureFailed: 'Anhang nicht erfasst',
     },
@@ -1305,12 +1304,7 @@ export const de: typeof zhCN = {
     },
     dictationReferences: {
       enabledLabel: 'Beim Diktieren Anhänge einfügen',
-      enabledDesc: 'Screenshots und kopierte Inhalte stehen neben dem jeweiligen Satz',
-      keyLabel: 'Screenshot-Taste',
-      keyDesc: 'Bei der Aufnahme die Aufnahmetaste und diese Taste drücken',
-      keyConflict: 'Diese Taste ist bereits belegt',
-      permissionNote: 'Bildschirmaufnahme erlauben',
-      openSettings: 'Systemeinstellungen öffnen',
+      enabledDesc: 'Liest während der Aufnahme die Systemzwischenablage und fügt neu kopierte Inhalte neben dem jeweiligen Satz ein',
     },
     advancedPages: {
       polishStrategyTitle: 'Überarbeitungsstrategie',

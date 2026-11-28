@@ -513,7 +513,6 @@ export interface UserPreferences {
   qaHotkey: QaHotkeyBinding | null;
   qaCompanionKey: string;
   dictationReferencesEnabled?: boolean;
-  dictationReferenceKey?: string;
   qaShortcutBehavior?: QaShortcutBehavior;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
@@ -885,7 +884,7 @@ export interface CapsulePayload {
   /** Session generation that owns this capsule frame. */
   sessionId?: string | null;
   referenceCount?: number;
-  referenceNotice?: 'screenPermission' | 'tooLarge' | 'captureFailed' | null;
+  referenceNotice?: 'tooLarge' | 'captureFailed' | null;
   state: CapsuleState;
   level: number; // 0..1 RMS
   elapsedMs: number;

@@ -338,7 +338,6 @@ export const ja: typeof zhCN = {
   capsule: {
     references: '添付 {{count}} 件',
     referenceNotice: {
-      screenPermission: '画面収録の許可が必要',
       tooLarge: '添付項目が大きすぎます',
       captureFailed: '添付項目を取得できませんでした',
     },
@@ -1267,12 +1266,7 @@ export const ja: typeof zhCN = {
     },
     dictationReferences: {
       enabledLabel: '音声入力中に添付',
-      enabledDesc: 'スクリーンショットやコピーした項目は、該当する文の横に追加されます',
-      keyLabel: 'スクリーンショットキー',
-      keyDesc: '録音中に録音キーとこのキーを押して撮影',
-      keyConflict: 'このキーはすでに使用されています',
-      permissionNote: '画面収録の許可が必要',
-      openSettings: 'システム設定を開く',
+      enabledDesc: '録音中にシステムのクリップボードを読み取り、新しくコピーした内容を該当する文の横に追加します',
     },
     advancedPages: {
       polishStrategyTitle: '推敲ルール',

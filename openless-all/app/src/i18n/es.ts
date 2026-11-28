@@ -349,7 +349,6 @@ export const es: typeof zhCN = {
   capsule: {
     references: 'Adjuntos: {{count}}',
     referenceNotice: {
-      screenPermission: 'Permiso de grabación de pantalla necesario',
       tooLarge: 'Elemento demasiado grande',
       captureFailed: 'No se capturó el elemento',
     },
@@ -1298,12 +1297,7 @@ export const es: typeof zhCN = {
     },
     dictationReferences: {
       enabledLabel: 'Insertar adjuntos al dictar',
-      enabledDesc: 'Las capturas y los elementos copiados se añaden junto a la frase dictada',
-      keyLabel: 'Tecla de captura de pantalla',
-      keyDesc: 'Al grabar, pulsa la tecla de grabación junto con esta tecla',
-      keyConflict: 'Esa tecla ya está en uso',
-      permissionNote: 'Permiso de grabación de pantalla necesario',
-      openSettings: 'Abrir Ajustes del Sistema',
+      enabledDesc: 'Durante la grabación, lee el portapapeles del sistema e inserta el contenido recién copiado junto a la frase dictada',
     },
     advancedPages: {
       polishStrategyTitle: 'Estrategia de mejora',
