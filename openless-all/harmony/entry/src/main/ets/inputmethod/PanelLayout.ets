@@ -29,7 +29,8 @@ class PanelLayout {
     try {
       this.settings = await preferences.getPreferences(context, { name: 'ime_panel_layout' });
       const saved = await this.settings.get('mode', 'standard');
-      this.mode = saved === 'split' || saved === 'floating' || saved === 'onehand' ? saved : 'standard';
+      this.mode = saved === 'split' || saved === 'floating' || saved === 'onehand' || saved === 'voice'
+        ? saved : 'standard';
       this.scale = this.clamp(Number(await this.settings.get('scale', 1)), 0.8, 1.2);
       this.x = this.clamp(Number(await this.settings.get('x', 0.5)), 0, 1);
       this.y = this.clamp(Number(await this.settings.get('y', 0.7)), 0, 1);
@@ -49,6 +50,22 @@ class PanelLayout {
     if (!panel) return;
     const screen = display.getDefaultDisplaySync();
     const density = screen.densityPixels;
+    // 悬浮语音：一块能拖动的小窗，只放麦克风与实时文字（参考小艺输入法的悬浮语音键盘）。
+    if (this.mode === 'voice') {
+      const capWidth = Math.round(Math.min(screen.width * 0.86, 360 * density));
+      const capHeight = Math.round(Math.min(148 * density, screen.height * 0.24));
+      this.width = capWidth;
+      this.height = capHeight;
+      if (this.flag !== inputMethodEngine.PanelFlag.FLG_FLOATING) {
+        panel.changeFlag(inputMethodEngine.PanelFlag.FLG_FLOATING);
+        this.flag = inputMethodEngine.PanelFlag.FLG_FLOATING;
+      }
+      await panel.resize(capWidth, capHeight);
+      await panel.moveTo(Math.round(this.x * (screen.width - capWidth)),
+        Math.round(this.y * (screen.height - capHeight)));
+      imeStorage.setOrCreate('keyboardLayout', 'voice');
+      return;
+    }
     const floating = this.mode === 'floating';
     const geometry = screen.width + ':' + screen.height + ':' + density + ':' + this.mode + ':' + this.scale;
     // A resize can itself emit display/keyboard notifications. Do not resize
@@ -96,7 +113,7 @@ class PanelLayout {
   }
 
   select(mode: string): void {
-    if (!['standard', 'split', 'floating', 'onehand'].includes(mode)) return;
+    if (!['standard', 'split', 'floating', 'onehand', 'voice'].includes(mode)) return;
     console.info('[OpenLess IME] layout requested=' + mode + ' panel=' + !!this.panel);
     this.queue = this.queue.then(async (): Promise<void> => {
       const previous = this.mode;

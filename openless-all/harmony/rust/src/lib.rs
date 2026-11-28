@@ -2,6 +2,7 @@ mod credentials;
 mod history;
 mod self_test;
 mod siwc;
+mod update;
 mod voice_configuration;
 use openless_core::{BackendConfig, BackendDependencies, OpenLessBackend};
 use serde_json::{json, Value};
@@ -479,7 +480,10 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
         "list_vocab" => json!(b.list_vocabulary().map_err(|e| e.to_string())?),
         "get_activity_stats" => json!(b.list_activity().map_err(|e| e.to_string())?),
         "get_activity_apps" => {
-            let year = args["year"].as_u64().and_then(|value| u32::try_from(value).ok()).ok_or("invalid activity year")?;
+            let year = args["year"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or("invalid activity year")?;
             json!(b.list_activity_apps(year).map_err(|e| e.to_string())?)
         }
         "list_correction_rules" => json!(b.list_correction_rules().map_err(|e| e.to_string())?),
@@ -867,6 +871,15 @@ fn dispatch(host: &Host, command: &str, args: Value) -> Result<Value, String> {
                 .map_err(|e| e.to_string())?;
             Value::Null
         }
+        // Non-sensitive read: provider ids with saved `omni.*` fields only.
+        "list_configured_omni_providers" => json!(host
+            .credentials
+            .configured_omni_providers()
+            .map_err(|e| e.to_string())?),
+        "get_update_channel" => update::get_channel(host),
+        "set_update_channel" => update::set_channel(host, &args)?,
+        "fetch_latest_beta_release" => update::fetch_latest_beta(host)?,
+        "app_check_update_with_channel" => update::check_update(host, &args)?,
         "set_active_asr_provider" | "set_active_llm_provider" | "set_active_omni_provider" => {
             let slot = match command {
                 "set_active_asr_provider" => openless_core::ProviderSlot::Asr,
@@ -978,7 +991,10 @@ mod web_search_config_tests {
             "account": openless_core::web_search::CONFIG_ACCOUNT
         }))
         .unwrap();
-        assert_eq!(key.namespace, openless_core::CredentialNamespace::Application);
+        assert_eq!(
+            key.namespace,
+            openless_core::CredentialNamespace::Application
+        );
         assert!(key.provider_id.is_none());
     }
 }

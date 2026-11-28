@@ -11,12 +11,12 @@
 | `app/crates/openless-core` | 框架无关的共享 Rust 核心（听写引擎、ASR / LLM / 多模态 / DeepSeek 大统一管线、风格包、词典、加密云同步与 `2.0.0` 后端契约）。 |
 | `app/crates/micyou-dsp`、`app/crates/micyou-infer` | 音频 DSP 前处理与推理支持库。 |
 | `app/crates/openless-capsule`、`app/native-capsule` | 原生语音胶囊状态与平台渲染支撑。 |
-| `app/src` | Tauri 桌面/Android 与 HarmonyOS ArkWeb 共用的 React + TypeScript 前端界面。 |
+| `app/src` | Tauri 桌面与 Android 共用的 React + TypeScript 前端界面。 |
 | `app/src-tauri` | macOS、Windows 与 Android 的 Tauri 宿主、原生适配层及内置 vendored 依赖（`src-tauri/vendor/`）。 |
 | `app/ask-window` | 桌面端独立「随便问」窗口界面与桥接代码。 |
 | `linux/egui` | Linux 原生宿主与 `egui` / `eframe` 界面（不依赖 Tauri 或 WebKitGTK）。 |
 | `android` | Android 宿主打包、清单合并与原生胶水代码。 |
-| `harmony` | HarmonyOS ArkTS + ArkWeb 宿主及 `harmony/rust` Node-API 桥接。 |
+| `harmony` | HarmonyOS 原生 ArkUI 宿主及 `harmony/rust` Node-API 桥接。 |
 | `app/mobile-ime` | Android 与 HarmonyOS 共享的移动端原生输入法核心。 |
 | `windows/ime` | Windows TSF / 输入法注册与测试脚本。 |
 | `windows/nsis`、`windows/wix`、`windows/scripts` | Windows 安装器资产与构建、验收工具。 |
@@ -137,17 +137,6 @@ powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-hotkey-inj
 ## Android 构建
 
 Android SDK/NDK 依赖、脚手架生成、多架构 APK（`arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86`）构建与真机验证见 [Android 构建指南](android/README.zh.md#构建与-ci)。
-
-## HarmonyOS 构建
-
-依赖环境：HarmonyOS Command Line Tools（可用 `../harmony/scripts/prepare-harmony-sdk.sh` 按固定 SHA-256 拉取）、Python 3、Node.js 22+ 以及 `rustup target add aarch64-unknown-linux-ohos`。
-
-```bash
-cd openless-all/app
-bash ../harmony/scripts/build-harmony-frontend.sh
-```
-
-未签名 HAP 输出到 `${OPENLESS_CACHE_ROOT:-/data-win/openless-cache}/harmony/openless-project/entry/build/default/outputs/default/`；打包脚本将交付文件暂存到 `app/target/harmony-packages/`。正式签名与 AppGallery 上传流程见 [`RELEASING.zh.md`](../RELEASING.zh.md)。
 
 ## iOS 构建
 

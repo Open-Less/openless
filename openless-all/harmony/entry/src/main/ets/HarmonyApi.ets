@@ -2,7 +2,6 @@ import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { common, abilityAccessCtrl } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
 import { fileIo as fs, picker } from '@kit.CoreFileKit';
-import { webview } from '@kit.ArkWeb';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
@@ -31,6 +30,16 @@ interface DeviceInfo { name: string; isDefault: boolean; }
 interface DictationEvent { phase: string; level: number; error: string; }
 interface VoiceCredentialStatus { pipelineMode: string; asrConfigured: boolean; omniConfigured: boolean; }
 interface VoiceCredentialReply { ok: boolean; value: VoiceCredentialStatus; }
+/**
+ * The native UI has no WebView to dispatch DOM events into, so the capability
+ * layer publishes into `AppStorage`: pages observe `dictPhase` / `dictLevel` /
+ * `dictError` / `backendRevision` / `micLevel` with `@StorageLink`.
+ */
+function publishBackendChanged(): void {
+  const current: number = AppStorage.get<number>('backendRevision') ?? 0;
+  AppStorage.setOrCreate<number>('backendRevision', current + 1);
+}
+
 class CommandArgs { channelId: string = ''; action: string = ''; registrationId: string = '';  deviceName: string = ''; pane: string = ''; account: string = ''; provider?: string; value: string = ''; fileName: string = ''; message: string = ''; url: string = ''; id: string = ''; zipPath: string = ''; targetPath: string = ''; text: string = ''; }
 
 export class HarmonyApi {
@@ -116,7 +125,7 @@ export class HarmonyApi {
     const snapshot: RevisionReply = JSON.parse(await nativeHost.invokeAsync('__revision_snapshot', '{}'));
     if (snapshot.ok) {
       if (this.revisions && JSON.stringify(this.revisions) !== JSON.stringify(snapshot.value)) {
-        this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-backend-change'))").catch(() => {});
+        publishBackendChanged();
       }
       this.revisions = snapshot.value;
     }
@@ -204,41 +213,26 @@ export class HarmonyApi {
     try { fs.writeSync(destination.fd, bytes.buffer); } finally { fs.closeSync(destination); }
   }
 
-  private sequence: number = 0;
-  private results: Map<string, string> = new Map();
-
-  request(command: string, args: string): string {
-    const id = String(++this.sequence);
-    this.invokeAsync(command, args).then((result: string) => { this.results.set(id, result); });
-    return id;
-  }
-
-  takeResult(id: string): string {
-    const result = this.results.get(id);
-    if (result === undefined) return '';
-    this.results.delete(id);
-    return result;
-  }
-
   private context?: common.UIAbilityContext;
-  private controller?: webview.WebviewController;
   private capturer?: audio.AudioCapturer;
   private lastLevelEvent: number = 0;
   private voice: VoiceClient = new VoiceClient();
   private voiceEpoch: number = 0;
+  private monitorEpoch: number = 0;
   private voicePhase: string = 'idle';
   private voiceLevelAt: number = 0;
 
   private publishVoice(phase: string, level: number = 0, error: string = ''): void {
     this.voicePhase = phase;
-    const state: DictationEvent = { phase: phase, level: level, error: error };
-    this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-dictation',{detail:" +
-      JSON.stringify(state) + '}))').catch(() => {});
+    AppStorage.setOrCreate<string>('dictPhase', phase);
+    AppStorage.setOrCreate<number>('dictLevel', level);
+    AppStorage.setOrCreate<string>('dictError', error);
   }
 
   private async startDictation(): Promise<void> {
     if (!this.context) throw new Error('应用上下文未就绪');
     if (this.voicePhase !== 'idle') throw new Error('请先结束当前录音');
+    if (AppStorage.get<boolean>('systemSpeechBusy') === true) throw new Error('请先结束端侧语音试用');
     const epoch = ++this.voiceEpoch;
     this.publishVoice('starting');
     try {
@@ -273,7 +267,7 @@ export class HarmonyApi {
       if (epoch !== this.voiceEpoch) throw new Error('录音已取消');
       this.voiceEpoch++;
       this.publishVoice('idle');
-      this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-backend-change'))").catch(() => {});
+      publishBackendChanged();
       return result;
     } catch (error) {
       if (epoch === this.voiceEpoch) { this.voiceEpoch++; this.publishVoice('idle', 0, String(error)); }
@@ -287,9 +281,8 @@ export class HarmonyApi {
     try { await this.voice.cancel(); } finally { if (epoch === this.voiceEpoch) this.publishVoice('idle'); }
   }
 
-  configure(context: common.UIAbilityContext, controller: webview.WebviewController): void {
+  configure(context: common.UIAbilityContext): void {
     this.context = context;
-    this.controller = controller;
   }
 
   private bytes(value: string): Uint8Array { return new util.TextEncoder().encodeInto(value); }
@@ -353,6 +346,8 @@ export class HarmonyApi {
   }
 
   private async stopMonitor(): Promise<void> {
+    this.monitorEpoch++;
+    AppStorage.setOrCreate<boolean>('microphoneMonitorBusy', false);
     const capturer = this.capturer;
     this.capturer = undefined;
     if (capturer) {
@@ -362,16 +357,27 @@ export class HarmonyApi {
 
   private async startMonitor(name: string): Promise<void> {
     if (this.voicePhase !== 'idle') throw new Error('请先结束当前录音');
+    if (AppStorage.get<boolean>('systemSpeechBusy') === true) throw new Error('请先结束端侧语音试用');
     await this.stopMonitor();
-    if (this.microphoneStatus() !== 'granted' && await this.requestMicrophone() !== 'granted') {
-      throw new Error('未获得麦克风权限，请在权限页面授权');
+    if (this.voicePhase !== 'idle' || AppStorage.get<boolean>('systemSpeechBusy') === true) {
+      throw new Error('麦克风正在使用中');
     }
-    const capturer = await audio.createAudioCapturer({
-      streamInfo: { samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000, channels: audio.AudioChannel.CHANNEL_1, sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE, encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW },
-      capturerInfo: { source: audio.SourceType.SOURCE_TYPE_MIC, capturerFlags: 0 }
-    });
-    this.capturer = capturer;
+    const epoch: number = ++this.monitorEpoch;
+    AppStorage.setOrCreate<boolean>('microphoneMonitorBusy', true);
     try {
+      if (this.microphoneStatus() !== 'granted' && await this.requestMicrophone() !== 'granted') {
+        throw new Error('未获得麦克风权限，请在权限页面授权');
+      }
+      if (epoch !== this.monitorEpoch) throw new Error('麦克风测试已取消');
+      const capturer = await audio.createAudioCapturer({
+        streamInfo: { samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000, channels: audio.AudioChannel.CHANNEL_1, sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE, encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW },
+        capturerInfo: { source: audio.SourceType.SOURCE_TYPE_MIC, capturerFlags: 0 }
+      });
+      if (epoch !== this.monitorEpoch) {
+        await capturer.release();
+        throw new Error('麦克风测试已取消');
+      }
+      this.capturer = capturer;
       if (name) {
         const selected = this.devices().filter((device: audio.AudioDeviceDescriptor) => this.deviceName(device) === name);
         if (selected.length === 0) throw new Error('选中的麦克风已断开');
@@ -379,6 +385,7 @@ export class HarmonyApi {
         if (!preferred.some((device: audio.AudioDeviceDescriptor) => device.id === selected[0].id)) throw new Error('当前系统使用其他输入设备，请在系统中切换麦克风或选择系统默认');
       }
       capturer.on('readData', (buffer: ArrayBuffer) => {
+        if (epoch !== this.monitorEpoch) return;
         const now = Date.now();
         if (now - this.lastLevelEvent < 100) return;
         this.lastLevelEvent = now;
@@ -386,12 +393,12 @@ export class HarmonyApi {
         let sum = 0;
         for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
         const level = pcm.length ? Math.min(1, Math.sqrt(sum / pcm.length) / 32768 * 4) : 0;
-        this.controller?.runJavaScript("window.dispatchEvent(new CustomEvent('openless:harmony-level',{detail:" + level + '}))').catch(() => {});
+        AppStorage.setOrCreate<number>('micLevel', level);
       });
       await capturer.start();
       console.info('[OpenLess Audio] microphone monitor started');
     } catch (error) {
-      await this.stopMonitor();
+      if (epoch === this.monitorEpoch) await this.stopMonitor();
       throw new Error(String(error));
     }
   }

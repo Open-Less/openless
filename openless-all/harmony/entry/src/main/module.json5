@@ -5,6 +5,11 @@
     "srcEntry": "./ets/entryability/EntryAbility.ets",
     "description": "$string:app_name",
     "mainElement": "EntryAbility",
+    // `2in1` must match the signing profile: AGC issues profiles per device type,
+    // and a HAP that declares a type its profile does not cover is rejected with
+    // "不支持 PC 和 2in1 设备" (and free-form windows never get created). The
+    // responsive layout already covers 2in1 - add the type here only together
+    // with a profile that lists it.
     "deviceTypes": [
       "phone",
       "tablet"
@@ -31,7 +36,16 @@
           }
         ],
         "startWindowIcon": "$media:openless_icon",
-        "startWindowBackground": "$color:start_window_background"
+        "startWindowBackground": "$color:start_window_background",
+        // One UI for phone, tablet and 2-in-1: the window may rotate, split and
+        // float, and every layout decision comes from the window size class.
+        "orientation": "auto_rotation",
+        // Free-form ("floating") windows are a 2-in-1 capability; split-screen is
+        // what a tablet may do with a phone/tablet profile.
+        "supportWindowMode": [
+          "fullscreen",
+          "split"
+        ]
       }
     ],
     "extensionAbilities": [

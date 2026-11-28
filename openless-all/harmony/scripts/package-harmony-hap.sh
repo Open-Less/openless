@@ -15,7 +15,10 @@
 #   SHA256SUMS
 set -euo pipefail
 
-APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../app" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HARMONY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ALL_ROOT="$(cd "$HARMONY_ROOT/.." && pwd)"
+APP_ROOT="$ALL_ROOT/app"
 TOOLCHAIN="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
 # Channels, matching how the artifacts are distributed:
 #   release  production build for HUAWEI AppGallery (signed with release.*)
@@ -58,9 +61,9 @@ if [ -n "$SIGN_PREFIX" ] && [ ! -d "$SIGNING_DIR" ]; then
   exit 1
 fi
 
-APP_JSON="$APP_ROOT/../harmony/AppScope/app.json5"
+APP_JSON="$HARMONY_ROOT/AppScope/app.json5"
 VERSION="${OPENLESS_HARMONY_VERSION:-$(node -p "require('$APP_ROOT/package.json').version" | sed 's/[-+].*//')}"
-VERSION_CODE="${OPENLESS_HARMONY_VERSION_CODE:-$(< "$APP_ROOT/../linux/egui/package-revision")}"
+VERSION_CODE="${OPENLESS_HARMONY_VERSION_CODE:-$(< "$ALL_ROOT/linux/egui/package-revision")}"
 [ -n "$VERSION" ] || {
   echo "cannot resolve the HarmonyOS versionName" >&2
   exit 1
@@ -91,9 +94,10 @@ text = re.sub(r'"versionName":\s*"[^"]*"', '"versionName": "' + version + '"', t
 open(path, 'w').write(text)
 PY
 
-# build-harmony-frontend.sh builds the Rust cdylib, the ArkWeb bundle, runs
-# hvigor and (when debug material is present) signs. We sign again below with the
-# release material so the artifact matches what AppGallery accepts.
+# build-harmony-app.sh is the single native build entry: Rust cdylib, ArkTS
+# staging, hvigor, and (when debug material is present) a debug signature. We
+# sign again below with the channel material so the artifact matches what
+# AppGallery accepts.
 # On a hosted runner there is no DevEco install, so `hvigorw` does not exist:
 # ../harmony/scripts/prepare-harmony-sdk.sh installs hvigor next to the SDK instead.
 HVIGOR_BIN=""
@@ -111,7 +115,9 @@ HVIGOR_JS="$HVIGOR_BIN" \
   OPENLESS_HARMONY_SIGNING_DIR="$SIGNING_DIR" \
   OPENLESS_HARMONY_STORE_SIGNING="${SIGN_PREFIX:+1}" \
   OPENLESS_HARMONY_SIGN_PREFIX="$SIGN_PREFIX" \
-  bash "$APP_ROOT/../harmony/scripts/build-harmony-frontend.sh"
+  OPENLESS_HARMONY_VERSION="$VERSION" \
+  OPENLESS_HARMONY_VERSION_CODE="$VERSION_CODE" \
+  bash "$HARMONY_ROOT/scripts/build-harmony-app.sh"
 
 BUILD_PROJECT="$CACHE_ROOT/harmony/openless-project"
 OUT_DIR="$BUILD_PROJECT/entry/build/default/outputs/default"
@@ -124,11 +130,11 @@ UNSIGNED=$(ls "$OUT_DIR"/*-unsigned.hap 2> /dev/null | head -1)
 SIGNED=""
 APP_PACK=""
 if [ -n "$SIGN_PREFIX" ]; then
-  python3 "$APP_ROOT/../harmony/scripts/sign-harmony-hap.py" \
+  python3 "$HARMONY_ROOT/scripts/sign-harmony-hap.py" \
     "$TOOLCHAIN" "$SIGNING_DIR" "$OUT_DIR" --prefix "$SIGN_PREFIX"
   # The App Pack is signed the same way; `hap-sign-tool sign-app` accepts `.app`.
   if [ -d "$CACHE_ROOT/harmony/openless-project/build/outputs/default" ]; then
-    python3 "$APP_ROOT/../harmony/scripts/sign-harmony-hap.py" \
+    python3 "$HARMONY_ROOT/scripts/sign-harmony-hap.py" \
       "$TOOLCHAIN" "$SIGNING_DIR" "$CACHE_ROOT/harmony/openless-project/build/outputs/default" \
       --prefix "$SIGN_PREFIX" --skip-hap
   fi

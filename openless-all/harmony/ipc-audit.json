@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
   "total": 195,
-  "wired": 108,
-  "missing": 87,
+  "wired": 112,
+  "missing": 83,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -37,7 +37,7 @@
       "calledFrom": [
         "src/lib/ipc/updater.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "app_download_and_install_android_update",
@@ -415,7 +415,7 @@
       "calledFrom": [
         "src/lib/ipc/updater.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "finalize_voice_edit_dictation",
@@ -590,7 +590,7 @@
       "calledFrom": [
         "src/lib/ipc/updater.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "get_voice_activation_state",
@@ -1220,7 +1220,7 @@
       "calledFrom": [
         "src/lib/ipc/updater.ts"
       ],
-      "implementation": "unimplemented"
+      "implementation": "rust"
     },
     {
       "name": "set_vocab_enabled",

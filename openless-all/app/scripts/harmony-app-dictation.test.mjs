@@ -13,7 +13,13 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 function host(granted = true) {
-  const events = [];
+  // The native UI has no DOM: the capability layer publishes dictation state into
+  // AppStorage, and pages observe it with @StorageLink.
+  const store = new Map();
+  const AppStorage = {
+    setOrCreate: (key, value) => store.set(key, value),
+    get: (key) => store.get(key),
+  };
   let starts = 0,
     cancels = 0,
     level,
@@ -38,6 +44,7 @@ function host(granted = true) {
   vm.runInNewContext(compiled, {
     exports,
     console,
+    AppStorage,
     VoiceClient,
     abilityAccessCtrl: {
       GrantStatus: { PERMISSION_GRANTED: 0 },
@@ -48,24 +55,15 @@ function host(granted = true) {
     },
   });
   const api = new exports.HarmonyApi();
-  api.configure(
-    { applicationInfo: { accessTokenId: 1 } },
-    {
-      runJavaScript: async (code) =>
-        vm.runInNewContext(code, {
-          window: { dispatchEvent: (event) => events.push(event) },
-          CustomEvent: class {
-            constructor(type, options) {
-              this.type = type;
-              this.detail = options?.detail;
-            }
-          },
-        }),
-    },
-  );
+  api.configure({ applicationInfo: { accessTokenId: 1 } });
   return {
     api,
-    events,
+    realtime: () => ({
+      phase: store.get('dictPhase'),
+      level: store.get('dictLevel'),
+      error: store.get('dictError'),
+    }),
+    backendChanges: () => store.get('backendRevision') ?? 0,
     starts: () => starts,
     cancels: () => cancels,
     level: (value) => level(value),
@@ -77,8 +75,11 @@ function host(granted = true) {
       startup = reply;
     },
     invoke: async (command) => JSON.parse(await api.invokeAsync(command, '{}')),
-    last: () =>
-      events.filter((event) => event.type === 'openless:harmony-dictation').at(-1)?.detail,
+    last: () => ({
+      phase: store.get('dictPhase'),
+      level: store.get('dictLevel'),
+      error: store.get('dictError'),
+    }),
   };
 }
 const normal = host();
@@ -96,7 +97,7 @@ assert.equal(
 const completed = await normal.invoke('stop_dictation');
 assert.deepEqual(completed.value, { rawText: '模拟识别', polishedText: '模拟润色' });
 assert.equal(normal.last().phase, 'idle');
-assert(normal.events.some((event) => event.type === 'openless:harmony-backend-change'));
+assert.equal(normal.backendChanges(), 1, 'a finished recording bumps the backend revision so the lists reload');
 normal.fail('迟到的回调');
 assert.equal(normal.last().error, '', 'finished sessions ignore late callbacks');
 

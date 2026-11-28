@@ -101,6 +101,36 @@ impl HarmonyCredentials {
         self.dirty.lock().map_err(failure)?.clear();
         Ok(())
     }
+    /// Provider ids that already have at least one non-empty saved `omni.*`
+    /// credential. This reads only the hydrated vault map that the ArkTS host
+    /// replays from the system Asset keystore: it never consults the provider
+    /// catalogue, never performs I/O or network work, and never exposes a secret.
+    ///
+    /// "Started configuring" is deliberately broader than `omni_configured`:
+    /// an endpoint-only or model-only draft still counts, and provider ids with
+    /// no current descriptor are retained so a hand-edited or newer channel is
+    /// not silently dropped from the list.
+    pub fn configured_omni_providers(&self) -> Result<Vec<String>, BackendError> {
+        let values = self.values.lock().map_err(failure)?;
+        let mut providers: Vec<String> = Vec::new();
+        for (key, value) in values.iter() {
+            if key.namespace != CredentialNamespace::Omni {
+                continue;
+            }
+            let Some(raw) = key.provider_id.as_deref() else {
+                continue;
+            };
+            let provider = raw.trim();
+            if provider.is_empty() || value.expose_secret().trim().is_empty() {
+                continue;
+            }
+            if !providers.iter().any(|seen| seen == provider) {
+                providers.push(provider.to_string());
+            }
+        }
+        providers.sort();
+        Ok(providers)
+    }
 }
 impl CredentialStore for HarmonyCredentials {
     fn siwc(&self) -> Option<Arc<openless_core::siwc::SiwcService>> {
@@ -131,6 +161,15 @@ impl CredentialStore for HarmonyCredentials {
             let has = |provider: &str, account: &str| {
                 get(provider, account).is_some_and(|v| !v.trim().is_empty())
             };
+            let provider_type = |kind, id: &str| {
+                meta.list_channels(kind)
+                    .into_iter()
+                    .find(|c| c.id == id)
+                    .map(|c| c.provider_type)
+                    .unwrap_or_else(|| id.into())
+            };
+            let asr_type = provider_type(ChannelKind::Asr, &asr);
+            let llm_type = provider_type(ChannelKind::Llm, &llm);
             let config = openless_core::provider_rules::CredentialConfiguration {
                 asr_api_key: has(&asr, "asr.api_key"),
                 asr_endpoint: has(&asr, "asr.endpoint"),
@@ -149,32 +188,34 @@ impl CredentialStore for HarmonyCredentials {
                 llm_api_key: has(&llm, "ark.api_key"),
                 llm_endpoint: has(&llm, "ark.endpoint"),
                 llm_model: has(&llm, "ark.model_id"),
-                llm_api_key_required: true,
+                llm_api_key_required: openless_core::provider_rules::api_key_required(
+                    openless_core::ProviderKind::Llm,
+                    &llm_type,
+                    get(&llm, "ark.endpoint").as_deref(),
+                ),
                 omni_api_key: has(&omni, "omni.api_key"),
                 omni_endpoint: has(&omni, "omni.endpoint"),
                 omni_model: has(&omni, "omni.model"),
                 ..Default::default()
             };
-            let provider_type = |kind, id: &str| {
-                meta.list_channels(kind)
-                    .into_iter()
-                    .find(|c| c.id == id)
-                    .map(|c| c.provider_type)
-                    .unwrap_or_else(|| id.into())
-            };
             let pipeline_mode = openless_core::shared_types::effective_pipeline_mode(
                 prefs.multimodal_pipeline_enabled,
                 prefs.pipeline_mode,
             );
+            let local_asr_runtime = openless_core::provider_rules::provider_descriptor(
+                openless_core::ProviderKind::Asr,
+                &asr_type,
+            )
+            .is_some_and(|descriptor| {
+                descriptor.auth_requirement == openless_core::provider_rules::AuthRequirement::None
+            })
+            .then_some(false);
             let asr_configured = openless_core::provider_rules::asr_configured(
-                &provider_type(ChannelKind::Asr, &asr),
+                &asr_type,
                 &config,
-                Some(false),
+                local_asr_runtime,
             );
-            let llm_configured = openless_core::provider_rules::llm_configured(
-                &provider_type(ChannelKind::Llm, &llm),
-                &config,
-            );
+            let llm_configured = openless_core::provider_rules::llm_configured(&llm_type, &config);
             Ok(CredentialsStatus {
                 active_asr_provider: asr,
                 active_llm_provider: llm,
@@ -493,6 +534,359 @@ mod tests {
                 .unwrap();
             assert!(store.read(unscoped).await.unwrap().is_none());
         });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cloud_asr_and_custom_omni_channels_report_configured_while_local_asr_stays_false() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-harmony-cred-status-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let host = crate::build_host(root.clone(), root.join("cache"), runtime).unwrap();
+
+        // Cloud ASR with custom channel id (bailian) must report asrConfigured=true.
+        let asr_id = crate::dispatch(
+            &host,
+            "create_channel",
+            serde_json::json!({"kind":"asr","providerType":"bailian","name":"My Bailian"}),
+        )
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+        crate::dispatch(
+            &host,
+            "set_credential",
+            serde_json::json!({"account":"asr.api_key","provider":asr_id,"value":"fixture-asr-key"}),
+        )
+        .unwrap();
+        crate::dispatch(
+            &host,
+            "set_active_asr_provider",
+            serde_json::json!({"provider":asr_id}),
+        )
+        .unwrap();
+        let status = crate::dispatch(&host, "get_credentials", serde_json::json!({})).unwrap();
+        assert_eq!(status["asrConfigured"], true);
+
+        // Iflytek ASR requires xfyun.app_id + xfyun.api_key.
+        let xfyun_id = crate::dispatch(
+            &host,
+            "create_channel",
+            serde_json::json!({"kind":"asr","providerType":"iflytek","name":"My Xfyun"}),
+        )
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+        crate::dispatch(
+            &host,
+            "set_active_asr_provider",
+            serde_json::json!({"provider":xfyun_id}),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::dispatch(&host, "get_credentials", serde_json::json!({})).unwrap()
+                ["asrConfigured"],
+            false
+        );
+        crate::dispatch(
+            &host,
+            "set_credential",
+            serde_json::json!({"account":"xfyun.app_id","provider":xfyun_id,"value":"fixture-app"}),
+        )
+        .unwrap();
+        crate::dispatch(
+            &host,
+            "set_credential",
+            serde_json::json!({"account":"xfyun.api_key","provider":xfyun_id,"value":"fixture-key"}),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::dispatch(&host, "get_credentials", serde_json::json!({})).unwrap()
+                ["asrConfigured"],
+            true
+        );
+
+        // Local ASR providers remain unavailable on HarmonyOS.
+        let local_id = crate::dispatch(
+            &host,
+            "create_channel",
+            serde_json::json!({"kind":"asr","providerType":"local-whisper","name":"Local"}),
+        )
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+        crate::dispatch(
+            &host,
+            "set_active_asr_provider",
+            serde_json::json!({"provider":local_id}),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::dispatch(&host, "get_credentials", serde_json::json!({})).unwrap()
+                ["asrConfigured"],
+            false
+        );
+
+        // Omni provider (fixed provider id, not a ChannelKind) reports omniConfigured=true.
+        crate::dispatch(
+            &host,
+            "set_credential",
+            serde_json::json!({"account":"omni.api_key","provider":"gemini","value":"fixture-omni-key"}),
+        )
+        .unwrap();
+        crate::dispatch(
+            &host,
+            "set_active_omni_provider",
+            serde_json::json!({"provider":"gemini"}),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::dispatch(&host, "get_credentials", serde_json::json!({})).unwrap()
+                ["omniConfigured"],
+            true
+        );
+
+        host.runtime.block_on(host.backend.shutdown()).unwrap();
+        drop(host);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    fn omni_list_store(tag: &str) -> (std::path::PathBuf, HarmonyCredentials) {
+        let root = std::env::temp_dir().join(format!(
+            "openless-harmony-omni-list-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = HarmonyCredentials::new(root.join("channels.json"));
+        (root, store)
+    }
+
+    fn omni_key(provider: Option<&str>, account: &str) -> CredentialKey {
+        CredentialKey::new(
+            CredentialNamespace::Omni,
+            provider.map(str::to_owned),
+            account,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn configured_omni_providers_reports_saved_non_empty_omni_ids_only() {
+        let (root, store) = omni_list_store("ids");
+        store
+            .hydrate(
+                omni_key(Some("openai"), "omni.api_key"),
+                SecretValue::new("fixture-secret-openai"),
+            )
+            .unwrap();
+        // Endpoint-only and model-only drafts still count as started configuration.
+        store
+            .hydrate(
+                omni_key(Some("custom"), "omni.endpoint"),
+                SecretValue::new("https://fixture.example/v1"),
+            )
+            .unwrap();
+        store
+            .hydrate(
+                omni_key(Some("gemini"), "omni.model"),
+                SecretValue::new("gemini-fixture"),
+            )
+            .unwrap();
+        // Empty and whitespace-only values are not configured.
+        store
+            .hydrate(
+                omni_key(Some("empty"), "omni.api_key"),
+                SecretValue::new(""),
+            )
+            .unwrap();
+        store
+            .hydrate(
+                omni_key(Some("blank"), "omni.api_key"),
+                SecretValue::new("   "),
+            )
+            .unwrap();
+        // Other namespaces must never leak into the omni list.
+        store
+            .hydrate(
+                CredentialKey::new(
+                    CredentialNamespace::Asr,
+                    Some("volcengine".into()),
+                    "asr.api_key",
+                )
+                .unwrap(),
+                SecretValue::new("fixture-asr-key"),
+            )
+            .unwrap();
+        store
+            .hydrate(
+                CredentialKey::new(
+                    CredentialNamespace::Llm,
+                    Some("openai".into()),
+                    "ark.api_key",
+                )
+                .unwrap(),
+                SecretValue::new("fixture-llm-key"),
+            )
+            .unwrap();
+        store
+            .hydrate(
+                CredentialKey::new(
+                    CredentialNamespace::Marketplace,
+                    Some("openai".into()),
+                    openless_core::MARKETPLACE_GITHUB_TOKEN_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new("fixture-github-token"),
+            )
+            .unwrap();
+
+        let ids = store.configured_omni_providers().unwrap();
+        assert_eq!(
+            ids,
+            vec![
+                "custom".to_string(),
+                "gemini".to_string(),
+                "openai".to_string()
+            ],
+            "sorted unique ids, one per provider with a saved omni field"
+        );
+        let wire = serde_json::to_string(&ids).unwrap();
+        for secret in [
+            "fixture-secret-openai",
+            "https://fixture.example/v1",
+            "gemini-fixture",
+            "fixture-asr-key",
+            "fixture-llm-key",
+            "fixture-github-token",
+        ] {
+            assert!(
+                !wire.contains(secret),
+                "provider list must never carry credential material"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn configured_omni_providers_deduplicates_fields_and_keeps_unknown_ids() {
+        let (root, store) = omni_list_store("dedupe");
+        for account in [
+            "omni.api_key",
+            "omni.endpoint",
+            "omni.model",
+            "omni.temperature",
+        ] {
+            store
+                .hydrate(
+                    omni_key(Some("my-private-omni"), account),
+                    SecretValue::new("fixture"),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store.configured_omni_providers().unwrap(),
+            vec!["my-private-omni".to_string()],
+            "a provider without a current descriptor survives and appears once"
+        );
+
+        let (empty_root, empty_store) = omni_list_store("empty");
+        assert!(
+            empty_store.configured_omni_providers().unwrap().is_empty(),
+            "no saved omni field is an empty list, not an error"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(empty_root).unwrap();
+    }
+
+    #[test]
+    fn configured_omni_providers_resolve_legacy_unscoped_assets_to_active_provider() {
+        let (root, store) = omni_list_store("legacy");
+        // A pre-provider-scoped Asset record is bound to the active omni provider
+        // when the host hydrates the vault, exactly like the runtime read path.
+        let metadata = CredentialMetadata::from_parts(vec![], vec![], "", "", "dashscope-omni", 1);
+        std::fs::write(
+            root.join("channels.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        store
+            .hydrate(
+                omni_key(None, "omni.api_key"),
+                SecretValue::new("fixture-legacy"),
+            )
+            .unwrap();
+        assert_eq!(
+            store.configured_omni_providers().unwrap(),
+            vec!["dashscope-omni".to_string()]
+        );
+
+        // Without an active omni provider there is no identity to report; the read
+        // must stay empty instead of fabricating a provider id.
+        let (orphan_root, orphan_store) = omni_list_store("orphan");
+        orphan_store
+            .hydrate(
+                omni_key(None, "omni.api_key"),
+                SecretValue::new("fixture-orphan"),
+            )
+            .unwrap();
+        assert!(orphan_store.configured_omni_providers().unwrap().is_empty());
+        std::fs::remove_dir_all(orphan_root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn list_configured_omni_providers_command_returns_ids_without_secrets() {
+        let root = std::env::temp_dir().join(format!(
+            "openless-harmony-omni-list-command-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let host = crate::build_host(root.clone(), root.join("cache"), runtime).unwrap();
+        for (provider, account, value) in [
+            ("openai", "omni.api_key", "fixture-openai-key"),
+            ("custom", "omni.endpoint", "https://fixture.example/v1"),
+            ("empty", "omni.api_key", ""),
+        ] {
+            crate::dispatch(
+                &host,
+                "set_credential",
+                serde_json::json!({
+                    "account": account,
+                    "provider": provider,
+                    "value": value
+                }),
+            )
+            .unwrap();
+        }
+        let listed = crate::dispatch(
+            &host,
+            "list_configured_omni_providers",
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert_eq!(listed, serde_json::json!(["custom", "openai"]));
+        let wire = listed.to_string();
+        assert!(!wire.contains("fixture-openai-key"));
+        assert!(!wire.contains("fixture.example"));
+
+        host.runtime.block_on(host.backend.shutdown()).unwrap();
+        drop(host);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

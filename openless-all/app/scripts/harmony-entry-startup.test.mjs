@@ -15,6 +15,18 @@ const requests = [],
 class UIAbility {
   context = { resourceManager: { getBooleanByName: () => clipboardAccess } };
 }
+// Launch hints are routes only; window geometry is owned by the stage.
+const Boot = {
+  route: '',
+  mainWindow: undefined,
+  takeRoute() {
+    const value = this.route;
+    this.route = '';
+    return value;
+  },
+};
+const stored = new Map();
+const Store = { put: (key, value) => stored.set(key, value) };
 const exports = {};
 vm.runInNewContext(
   ts.transpileModule(source, {
@@ -23,6 +35,8 @@ vm.runInNewContext(
   {
     exports,
     UIAbility,
+    Boot,
+    Store,
     console,
     abilityAccessCtrl: {
       createAtManager: () => ({
@@ -34,8 +48,11 @@ vm.runInNewContext(
     },
   },
 );
+const mainWindow = { name: 'owning-main-window' };
 const stage = {
+  getMainWindowSync: () => mainWindow,
   loadContent: (page, ready) => {
+    assert.equal(Boot.mainWindow, mainWindow, 'window is available before loading Index');
     pages.push(page);
     ready();
   },
@@ -43,6 +60,7 @@ const stage = {
 for (const want of [undefined, {}, { parameters: {} }]) {
   const ability = new exports.default();
   ability.onCreate(want);
+  assert.equal(Boot.route, '', 'a plain launch must not carry a deep link');
   ability.onForeground();
   ability.onWindowStageCreate(stage);
   ability.onNewWant();
@@ -67,6 +85,20 @@ assert.deepEqual(
   [['ohos.permission.READ_PASTEBOARD']],
   'authorized builds request only once per explicit action',
 );
+// Old QA layout arguments are deliberately ignored, including on a warm launch.
+{
+  const ability = new exports.default();
+  ability.onCreate({ parameters: { route: 'settings', layout: 'sm' } });
+  assert.equal(Boot.takeRoute(), 'settings');
+  stored.delete('bpOverride');
+  ability.onNewWant({ parameters: { route: 'history', layout: 'xl' } });
+  assert.equal(stored.get('deepLinkRoute'), 'history');
+  assert.equal(stored.has('bpOverride'), false, 'launch arguments cannot lock responsive layout');
+  ability.onWindowStageCreate(stage);
+  assert.equal(Boot.mainWindow, mainWindow);
+  ability.onWindowStageDestroy();
+  assert.equal(Boot.mainWindow, undefined, 'destroyed window references must be released');
+}
 console.log(
-  'Harmony entry startup: absent launch arguments, page loading and clipboard capability gating passed',
+  'Harmony entry startup: absent launch arguments, page loading, deep links and clipboard capability gating passed',
 );

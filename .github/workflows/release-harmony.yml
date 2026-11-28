@@ -1,7 +1,8 @@
 name: Release HarmonyOS
 
-# HarmonyOS ships its HAP in the same GitHub Release as the desktop, Android and
-# Linux assets, and the same package is pushed to HUAWEI AppGallery Connect.
+# HarmonyOS attaches its unsigned HAP to the shared desktop/Android draft.
+# Store channels upload a separately signed App Pack to AppGallery Connect;
+# published GitHub Release assets are immutable and Linux automation is paused.
 #
 # The build uses the official HarmonyOS command-line tools. Huawei's own download
 # page needs an account, but the same archive is mirrored publicly (the mirror
@@ -12,8 +13,8 @@ name: Release HarmonyOS
 # Override `HARMONY_SDK_URL` / `HARMONY_SDK_SHA256` when a newer tools release is
 # needed, and `runner_labels` for a machine that already has the tools installed.
 #
-# Dispatch it after the tag exists; it rebuilds that tag, signs it with material
-# from Secrets, attaches the HAP to the Release and uploads it to AppGallery.
+# An administrator may dispatch after the tag exists to repair its draft.
+# The checked-out tag supplies the app; signing material comes only from Secrets.
 # `release-tauri.yml` calls this workflow in parallel with desktop and Android
 # after a short shared-draft preflight, using the same immutable tag commit.
 # Manual dispatch remains the repair path; automatic channel is
@@ -136,6 +137,16 @@ jobs:
           ref: ${{ github.event_name == 'push' && github.sha || inputs.tag }}
           submodules: false
 
+      - name: Require a draft before publishing
+        if: inputs.publish
+        run: |
+          set -euo pipefail
+          draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+          if [ "$draft" != true ]; then
+            echo "::error::Published Release assets are immutable; repair the draft before publication"
+            exit 1
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -145,13 +156,9 @@ jobs:
         with:
           node-version: '22'
 
-      # The HAP build shells out to `npm run build` for the ArkWeb bundle and to
-      # `cargo build --target aarch64-unknown-linux-ohos` for the Rust host, so it
-      # needs the app's `node_modules` and the Tier-2 OHOS target std. A hosted
-      # runner ships neither, and both gaps only surface minutes into the build -
-      # the first real dispatch of this workflow died with `can't find crate for
-      # `core`` (error[E0463]) after compiling the Rime/NDK tree. Install them up
-      # front, exactly like `ci.yml`'s `harmony-check` does.
+      # Current HAPs compile native ArkUI plus the Rust host, not the React bundle.
+      # Keep Node dependencies available for checked-out tag tooling, including
+      # guarded historical repairs, and install the Tier-2 OHOS target up front.
       - name: Cache npm from beta
         uses: ./.github/actions/cache-npm
 
@@ -168,9 +175,9 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: 'openless-all/app -> target'
-          # Same key as `ci.yml`'s `harmony-check`: a tag build restores the tree
-          # that job already paid for, and a tag never writes to the cache.
-          key: harmony-host
+          # A job-independent shared key restores `ci.yml`'s `harmony-check`
+          # tree despite this job's different name. Tags never write the cache.
+          shared-key: harmony-host
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       # No toolchain cache here either: `prepare-harmony-sdk.sh` downloads the
@@ -371,11 +378,11 @@ jobs:
         working-directory: openless-all/app
         run: |
           set -euo pipefail
-          # Automatic builds already have a shared draft: never wait for desktop.
-          # Direct manual dispatch still supports explicit published-tag repairs.
+          # Re-check immediately before writing: an admin may publish while the
+          # build runs. Manual repair has the same immutable-asset boundary.
           draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
-          if [ "${{ github.event_name }}" = push ] && [ "$draft" != true ]; then
-            echo "::error::Release was published while building; refusing automatic mutation"
+          if [ "$draft" != true ]; then
+            echo "::error::Published Release assets are immutable; refusing mutation"
             exit 1
           fi
           output=target/harmony-packages

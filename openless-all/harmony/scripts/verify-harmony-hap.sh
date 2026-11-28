@@ -4,10 +4,9 @@
 #
 #   ../harmony/scripts/verify-harmony-hap.sh <hap|app> [toolchain] [versionName] [versionCode] [--allow-unsigned]
 #
-# Checks the things that silently go wrong in a HAP build: a missing ArkWeb
-# bundle, a stale version stamp, a missing native library, and - when the Huawei
-# signing tool is available - an invalid signature. An App Pack (`.app`, what
-# AppGallery accepts) is unwrapped first and checked the same way.
+# Checks the native libraries, Rime data, version stamp, and absence of ArkWeb
+# assets. It also checks the signature when the Huawei signing tool is available.
+# An App Pack (`.app`) is unwrapped first and checked the same way.
 set -euo pipefail
 
 hap=${1:?usage: verify-harmony-hap.sh <hap> [toolchain] [versionName] [versionCode]}
@@ -48,11 +47,18 @@ require_entry() {
 }
 require_entry module.json
 require_entry 'libs/arm64-v8a/libopenless_harmony.so'
-require_entry 'resources/rawfile/web/index.html'
-# The ArkWeb bundle is hashed on every build: a fixed name would hide a stale copy.
-grep -q '^resources/rawfile/web/assets/index-.*\.js$' <<< "$entries" \
+# The UI is native ArkUI now: no web bundle may be staged, and the NAPI module
+# must ship the Rust core it links against (`DT_NEEDED libopenless_harmony_host.so`),
+# otherwise the module fails to load at runtime and the app has no backend.
+require_entry 'libs/arm64-v8a/libopenless_harmony_host.so'
+if grep -q '^resources/rawfile/web/' <<< "$entries"; then
+  echo "HAP still carries the removed ArkWeb bundle" >&2
+  exit 1
+fi
+# The Rime data has to be there for the IME and for history re-transcription.
+grep -q '^resources/rawfile/rime/' <<< "$entries" \
   || {
-    echo "HAP has no hashed ArkWeb entry bundle" >&2
+    echo "HAP has no Rime data" >&2
     exit 1
   }
 

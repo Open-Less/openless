@@ -168,3 +168,6 @@ coverage/
 /docs/test-captures/
 /docs/test-results/
 /openless-all/ios/docs/screenshots/
+
+# Local iOS demo videos, extracted frames and UI reference captures.
+/.refs/
