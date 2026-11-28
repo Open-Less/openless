@@ -8,6 +8,9 @@ use openless_core::{
 
 use crate::fcitx5_available;
 
+/// Whether the shared desktop panel accepts questions as well as edit instructions.
+pub const ASK_ANYTHING_AVAILABLE: bool = false;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxDesktopSession {
     X11,

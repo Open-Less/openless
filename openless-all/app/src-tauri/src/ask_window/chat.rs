@@ -83,8 +83,10 @@ impl AskHost {
             Arc::new(AttachmentPort(registry.clone())),
         );
         let targets = Arc::new(TargetTracker::new());
-        if let Err(error) = targets.start() {
-            log::warn!("[ask] external target observation unavailable: {error}");
+        if crate::build_identity::ask_anything_available() {
+            if let Err(error) = targets.start() {
+                log::warn!("[ask] external target observation unavailable: {error}");
+            }
         }
         Self {
             service,
@@ -306,6 +308,9 @@ impl AskHost {
     }
 
     pub(crate) fn bind_feed(app: AppHandle) {
+        if !crate::build_identity::ask_anything_available() {
+            return;
+        }
         let Some(host) = app.try_state::<Arc<Self>>() else {
             return;
         };
@@ -582,6 +587,12 @@ fn attachment_error(error: AttachmentError) -> BackendError {
 }
 
 fn authorize(window: &WebviewWindow) -> Result<(), Value> {
+    if !crate::build_identity::ask_anything_available() {
+        return Err(wire::error(BackendError::new(
+            BackendErrorCode::Unsupported,
+            super::UNAVAILABLE,
+        )));
+    }
     if window.label() == LABEL {
         Ok(())
     } else {

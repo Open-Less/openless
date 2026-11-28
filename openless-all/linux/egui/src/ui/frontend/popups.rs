@@ -362,6 +362,12 @@ pub fn selection_ask(
     avatar: Option<&egui::TextureHandle>,
 ) -> QaAction {
     let mut action = QaAction::None;
+    let edit_only = !openless_linux_egui::ASK_ANYTHING_AVAILABLE && state.edit_instruction_mode;
+    let title = if edit_only {
+        "qa.edit_instruction_mode"
+    } else {
+        "qa.title"
+    };
     let phase = state.phase.to_ascii_lowercase();
     let recording = phase == "recording";
     // Tauri 在 loading / thinking / awaiting_approval 以及流式增量期间都保持
@@ -398,17 +404,19 @@ pub fn selection_ask(
                         .horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "qa.title"))
+                                    egui::RichText::new(tr_l10n(lang, title))
                                         .size(16.0)
                                         .strong()
                                         .color(theme::INK),
                                 );
-                                ui.add_space(2.0);
-                                ui.label(
-                                    egui::RichText::new(tr_l10n(lang, "qa.header_hint"))
-                                        .size(12.0)
-                                        .color(theme::INK_4),
-                                );
+                                if !edit_only {
+                                    ui.add_space(2.0);
+                                    ui.label(
+                                        egui::RichText::new(tr_l10n(lang, "qa.header_hint"))
+                                            .size(12.0)
+                                            .color(theme::INK_4),
+                                    );
+                                }
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                 if icon_button(ui, icons::IconName::Close, theme::INK_3)
@@ -463,10 +471,11 @@ pub fn selection_ask(
             } else {
                 0.0
             };
+            let mode_toggle_height = if edit_only { 0.0 } else { 22.0 };
             let footer_height = CARD_SPACING * 2.0
                 + COMPOSER_HEIGHT
                 + 12.0
-                + 22.0
+                + mode_toggle_height
                 + recording_selection_height
                 + edit_block;
             // Never force an 80px thread area: on short work areas that
@@ -481,7 +490,11 @@ pub fn selection_ask(
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     if !has_thread {
-                        empty_state(ui, lang, content_height);
+                        if edit_only {
+                            ui.add_space(content_height);
+                        } else {
+                            empty_state(ui, lang, content_height);
+                        }
                     } else {
                         egui::ScrollArea::vertical()
                             .id_salt("openless-qa-thread")
@@ -560,51 +573,53 @@ pub fn selection_ask(
                         }
                     }
                     // 「编辑指令」勾选框（Tauri Composer 左下角，busy 时禁用）。
-                    let busy = thinking || recording;
-                    let checkbox_label = tr_l10n(lang, "qa.edit_instruction_mode");
-                    let (checkbox_rect, checkbox_response) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 20.0),
-                        if busy {
-                            egui::Sense::hover()
-                        } else {
-                            egui::Sense::click()
-                        },
-                    );
-                    let box_rect = egui::Rect::from_center_size(
-                        egui::pos2(checkbox_rect.left() + 7.0, checkbox_rect.center().y),
-                        egui::vec2(14.0, 14.0),
-                    );
-                    let checked = state.edit_instruction_mode;
-                    ui.painter().rect_filled(
-                        box_rect,
-                        egui::CornerRadius::same(3),
-                        if checked { theme::INK } else { theme::SURFACE },
-                    );
-                    ui.painter().rect_stroke(
-                        box_rect,
-                        egui::CornerRadius::same(3),
-                        egui::Stroke::new(0.8, theme::LINE_STRONG),
-                        egui::StrokeKind::Inside,
-                    );
-                    if checked {
-                        icons::draw_icon(
-                            ui,
-                            box_rect.center(),
-                            icons::IconName::Check,
-                            theme::SURFACE,
+                    if !edit_only {
+                        let busy = thinking || recording;
+                        let checkbox_label = tr_l10n(lang, "qa.edit_instruction_mode");
+                        let (checkbox_rect, checkbox_response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 20.0),
+                            if busy {
+                                egui::Sense::hover()
+                            } else {
+                                egui::Sense::click()
+                            },
                         );
+                        let box_rect = egui::Rect::from_center_size(
+                            egui::pos2(checkbox_rect.left() + 7.0, checkbox_rect.center().y),
+                            egui::vec2(14.0, 14.0),
+                        );
+                        let checked = state.edit_instruction_mode;
+                        ui.painter().rect_filled(
+                            box_rect,
+                            egui::CornerRadius::same(3),
+                            if checked { theme::INK } else { theme::SURFACE },
+                        );
+                        ui.painter().rect_stroke(
+                            box_rect,
+                            egui::CornerRadius::same(3),
+                            egui::Stroke::new(0.8, theme::LINE_STRONG),
+                            egui::StrokeKind::Inside,
+                        );
+                        if checked {
+                            icons::draw_icon(
+                                ui,
+                                box_rect.center(),
+                                icons::IconName::Check,
+                                theme::SURFACE,
+                            );
+                        }
+                        ui.painter().text(
+                            egui::pos2(box_rect.right() + 6.0, checkbox_rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            checkbox_label,
+                            egui::FontId::proportional(11.5),
+                            if busy { theme::INK_4 } else { theme::INK_3 },
+                        );
+                        if checkbox_response.clicked() && !busy {
+                            action = QaAction::SetEditInstructionMode(!checked);
+                        }
+                        ui.add_space(2.0);
                     }
-                    ui.painter().text(
-                        egui::pos2(box_rect.right() + 6.0, checkbox_rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        checkbox_label,
-                        egui::FontId::proportional(11.5),
-                        if busy { theme::INK_4 } else { theme::INK_3 },
-                    );
-                    if checkbox_response.clicked() && !busy {
-                        action = QaAction::SetEditInstructionMode(!checked);
-                    }
-                    ui.add_space(2.0);
                     let width = ui.available_width();
                     let (rect, _) = ui.allocate_exact_size(
                         egui::vec2(width, COMPOSER_HEIGHT),
@@ -672,7 +687,11 @@ pub fn selection_ask(
                             .frame(egui::Frame::NONE)
                             .text_color(theme::INK)
                             .font(egui::FontId::proportional(13.5))
-                            .hint_text(tr_l10n(lang, "qa.composer_placeholder"))
+                            .hint_text(if edit_only {
+                                ""
+                            } else {
+                                tr_l10n(lang, "qa.composer_placeholder")
+                            })
                             .desired_width(input_rect.width()),
                     );
                     if response.lost_focus()

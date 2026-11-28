@@ -861,7 +861,9 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         ui,
         tr_l10n(lang, "settings.selection_workspace.title"),
         |ui| {
-            hint_line(ui, tr_l10n(lang, "settings.selection_workspace.hint"));
+            if openless_linux_egui::ASK_ANYTHING_AVAILABLE {
+                hint_line(ui, tr_l10n(lang, "settings.selection_workspace.hint"));
+            }
             let recording_label = if vm.dictation_hotkey.trim().is_empty() {
                 recording_mode_hint(lang, vm.settings.recording_mode)
             } else {
@@ -889,7 +891,9 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
             segmented_row(
                 ui,
                 tr_l10n(lang, "settings.selection_workspace.polish_delivery"),
-                if vm.settings.selection_voice_enabled {
+                if vm.settings.selection_voice_enabled
+                    && openless_linux_egui::ASK_ANYTHING_AVAILABLE
+                {
                     tr_l10n(lang, "settings.selection_workspace.voice_delivery_desc")
                 } else {
                     ""
@@ -903,6 +907,15 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
                     ));
                 },
             );
+            if !openless_linux_egui::ASK_ANYTHING_AVAILABLE {
+                toggle_row(
+                    ui,
+                    tr_l10n(lang, "selection_ask.history_title"),
+                    "",
+                    vm.qa_save_history,
+                    || actions.push(FrontendAction::SelectionAskToggleHistory),
+                );
+            }
             if vm.settings.selection_voice_enabled {
                 toggle_row(
                     ui,
@@ -1137,7 +1150,14 @@ fn shortcuts(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fr
         },
         ShortcutRow {
             field: ShortcutField::Qa,
-            label: tr_l10n(lang, "selection_ask.hotkey_title"),
+            label: tr_l10n(
+                lang,
+                if openless_linux_egui::ASK_ANYTHING_AVAILABLE {
+                    "selection_ask.hotkey_title"
+                } else {
+                    "qa.edit_instruction_mode"
+                },
+            ),
             value: vm.qa_hotkey.clone(),
             can_disable: true,
             hint: String::new(),

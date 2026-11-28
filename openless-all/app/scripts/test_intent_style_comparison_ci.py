@@ -153,6 +153,20 @@ class IntentComparisonCiTests(unittest.TestCase):
         })
         self.assertEqual((report["runId"], report["runAttempt"]), ("123456789", 1))
 
+    def test_current_candidate_and_original_request_budget(self):
+        report = ci.safe_report(self.evaluation)
+        self.assertEqual(report["baselineVersion"], "1.3.0")
+        self.assertEqual(report["candidateVersion"], "1.5.0")
+        self.assertEqual(len(report["cases"]), 16)
+        self.assertEqual(report["primaryRequestLimit"], 32)
+        self.assertEqual(report["totalRequestLimit"], 36)
+        ci.apply_status(report, self.raw())
+        for stale in ("1.4.0", "1.0.0"):
+            raw = self.raw()
+            raw["candidateVersion"] = stale
+            with self.assertRaises(ValueError):
+                ci.apply_status(report, raw)
+
     def test_missing_recipient_fails_before_any_model_process(self):
         code, report, calls = self.execute(certificate="")
         self.assertEqual((code, calls), (1, 0))
@@ -386,7 +400,7 @@ class IntentComparisonCiTests(unittest.TestCase):
         self.assertNotIn("intent_allowed_actor", text)
         self.assertLess(
             live.index("Verify intent mock transport gates"),
-            live.index("Compare intent 1.3.0 and 1.4.0"),
+            live.index("Compare intent 1.3.0 and 1.5.0"),
         )
         self.assertIn("CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target", live)
         self.assertIn('rm -rf "$RUNNER_TEMP/openless-live-target"', live)

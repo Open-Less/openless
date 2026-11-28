@@ -1428,7 +1428,7 @@ jobs:
           esac
           cargo test --locked -p openless-core --lib "$target" -- --list --ignored | grep -q "$target: test"
           cargo test --locked -p openless-core --lib "$target" -- --ignored --nocapture --test-threads=1 | tee live-acceptance.log
-      - name: Compare intent 1.3.0 and 1.4.0 with existing official credentials
+      - name: Compare intent 1.3.0 and 1.5.0 with existing official credentials
         if: inputs.live_acceptance == 'intent-style-comparison'
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

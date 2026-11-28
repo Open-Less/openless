@@ -53,6 +53,8 @@ mod unicode_keystroke {
 mod combo_hotkey;
 #[path = "../../src/hotkey.rs"]
 mod hotkey;
+#[path = "../../src/build_identity.rs"]
+mod build_identity;
 #[path = "../../src/recording_companion.rs"]
 mod recording_companion;
 #[path = "../../src/side_aware_combo.rs"]

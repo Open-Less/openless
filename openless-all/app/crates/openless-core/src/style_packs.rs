@@ -501,6 +501,15 @@ pub(crate) fn released_intent_v1_3_pack() -> StylePack {
     pack
 }
 
+pub(crate) fn released_intent_v1_4_pack() -> StylePack {
+    let mut pack: StylePack = serde_json::from_str(include_str!(
+        "builtin_styles/releases/intent-reconstruction-1.4.0.json"
+    ))
+    .expect("bundled shipped 1.4 style pack");
+    pack.kind = StylePackKind::Builtin;
+    pack
+}
+
 /// The authored slots share one body, verified against the editable Markdown source.
 /// Runtime revision rules are appended once; dynamic data stays in the composer.
 pub fn builtin_intent_pack() -> StylePack {
@@ -593,6 +602,7 @@ pub(crate) fn is_known_intent_release(pack: &StylePack) -> bool {
         released_intent_v1_1_pack(),
         released_intent_v1_2_pack(),
         released_intent_v1_3_pack(),
+        released_intent_v1_4_pack(),
         builtin_intent_pack(),
     ]
     .iter()

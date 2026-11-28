@@ -1053,6 +1053,11 @@ pub trait QaProgressSink: Send + Sync {
 /// implementations only capture host context, operate recording resources and
 /// execute the provider request described by [`QaTurnRequest`].
 pub trait QaRuntimeAdapter: Send + Sync {
+    /// Whether this adapter supports questions in addition to selection editing.
+    fn questions_available(&self) -> bool {
+        true
+    }
+
     fn prepare_text(
         &self,
         session_id: SessionId,
@@ -1120,6 +1125,11 @@ pub trait QaRuntimeAdapter: Send + Sync {
 }
 
 pub trait QaApi: Send + Sync {
+    /// Reject an explicitly requested question before a host changes state.
+    fn ensure_questions_available(&self) -> Result<(), BackendError> {
+        Ok(())
+    }
+
     fn ask_history_sink(&self) -> Option<Arc<crate::ask::AskHistorySink>> {
         None
     }

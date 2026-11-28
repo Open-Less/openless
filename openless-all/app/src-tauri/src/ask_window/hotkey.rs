@@ -224,13 +224,13 @@ pub(crate) fn held_recording_key() -> Option<u16> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn can_buffer_space() -> bool {
-    RUNTIME.get().is_some_and(|runtime| {
-        !runtime.suspended.load(Ordering::Acquire)
-            && {
+    crate::build_identity::ask_anything_available()
+        && RUNTIME.get().is_some_and(|runtime| {
+            !runtime.suspended.load(Ordering::Acquire) && {
                 let native = runtime.native.lock();
                 native.binding.is_some_and(is_mac_fn) && native.modifiers == 0
             }
-    })
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -370,7 +370,7 @@ impl Native {
             let held = &mut self.held;
             let modifiers = self.modifiers;
             let handled = self.space.edge(down, repeat, || {
-                if disabled {
+                if disabled || !crate::build_identity::ask_anything_available() {
                     return false;
                 }
                 #[cfg(target_os = "macos")]

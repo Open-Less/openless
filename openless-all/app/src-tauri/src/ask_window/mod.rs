@@ -38,6 +38,7 @@ use tauri::{
 use capture::{Invocation, Trigger};
 
 pub(crate) const LABEL: &str = "ask-anything";
+pub(super) const UNAVAILABLE: &str = "Ask is unavailable in this build.";
 const PAGE: &str = "ask-window/index.html";
 const COMPOSER_WIDTH: f64 = 640.0;
 const CONVERSATION_WIDTH: f64 = 800.0;
@@ -175,9 +176,12 @@ impl Desktop {
             recent_recordings: Mutex::new(VecDeque::new()),
             voice: voice::Controller::new(),
         });
-        desktop.voice.listen(Arc::downgrade(&desktop));
+        if crate::build_identity::ask_anything_available() {
+            desktop.voice.listen(Arc::downgrade(&desktop));
+        }
         #[cfg(target_os = "macos")]
         macos_window::observe_spaces();
+        // The controller also arbitrates ordinary dictation shortcuts.
         hotkey::install(Arc::downgrade(&desktop));
         desktop
     }
@@ -302,7 +306,8 @@ impl Desktop {
     }
 
     fn is_native_target(&self, foreground: Option<&capture::Foreground>) -> bool {
-        self.focused.load(Ordering::Acquire)
+        crate::build_identity::ask_anything_available()
+            && self.focused.load(Ordering::Acquire)
             && foreground.is_some_and(|foreground| {
                 if foreground.pid != std::process::id() {
                     return false;
@@ -458,6 +463,9 @@ impl Desktop {
     }
 
     pub(crate) async fn open(self: &Arc<Self>) -> Result<(), String> {
+        if !crate::build_identity::ask_anything_available() {
+            return Err(UNAVAILABLE.into());
+        }
         let foreground = capture::foreground();
         let trigger = (!self.is_native_target(foreground.as_ref()))
             .then(|| Trigger::at_key_event(foreground));
@@ -520,6 +528,9 @@ impl Desktop {
         generation: u64,
     ) -> Result<(), String> {
         let _pending = PendingOpen(&self.pending_open, generation);
+        if !crate::build_identity::ask_anything_available() {
+            return Err(UNAVAILABLE.into());
+        }
         let _opening = OPEN.lock().await;
         let is_latest = || self.invocation_epoch.load(Ordering::Acquire) == generation;
         if !is_latest() || (chord.is_some() && trigger.is_none() && !self.is_focused()) {

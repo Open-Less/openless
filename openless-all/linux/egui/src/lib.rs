@@ -55,7 +55,9 @@ pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
 pub use audio_mute::AudioMuteGuard;
 pub use audio_player::ClipPlayer;
 pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
-pub use capabilities::{LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxPlatformApi};
+pub use capabilities::{
+    LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxPlatformApi, ASK_ANYTHING_AVAILABLE,
+};
 pub use credentials::LinuxCredentialStore;
 pub use desktop::{
     atomic_save, notify, open_external, open_local_file, validate_save_path, AutostartManager,
@@ -268,6 +270,7 @@ impl LinuxHost {
                 self.backend.request_host_action(HostAction::FocusMain)?;
                 Ok(None)
             }
+            LinuxLaunchIntent::Cli(CliIntent::ToggleQa) if !ASK_ANYTHING_AVAILABLE => Ok(None),
             LinuxLaunchIntent::Cli(intent) => {
                 self.backend.dispatch_cli_intent(intent).await.map(Some)
             }
@@ -309,6 +312,7 @@ impl LinuxHost {
                 .await
                 .map(Some),
             LinuxHotkeyEvent::QuickNotePressed => Ok(None), // Host toggles the permanent recording.
+            LinuxHotkeyEvent::QaPressed if !ASK_ANYTHING_AVAILABLE => Ok(None),
             LinuxHotkeyEvent::QaPressed => {
                 // 用户报「选区助手快捷键打不开」时，这一行 + 宿主的 ShowQa/HideQa
                 // 日志能直接区分「键没到」和「到了但被隐藏」。

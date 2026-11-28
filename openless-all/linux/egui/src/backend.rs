@@ -582,8 +582,26 @@ mod tests {
         .build()?;
         runtime.backend.start().await?;
 
-        runtime.backend.services().qa.show().await?;
-        runtime.backend.services().qa.toggle_recording().await?;
+        let qa = &runtime.backend.services().qa;
+        if !crate::ASK_ANYTHING_AVAILABLE {
+            for result in [
+                qa.show().await,
+                qa.toggle_recording().await,
+                qa.start_question().await,
+                qa.submit_text("question".into()).await,
+                qa.submit_text_in_context("question".into(), None).await,
+            ] {
+                assert_eq!(result.unwrap_err().code, BackendErrorCode::Unsupported);
+            }
+            assert_eq!(qa.snapshot().await?.phase, openless_core::QaPhase::Idle);
+            qa.set_edit_instruction_mode(true).await?;
+            assert_eq!(
+                qa.set_edit_instruction_mode(false).await.unwrap_err().code,
+                BackendErrorCode::Unsupported,
+            );
+        }
+        qa.show().await?;
+        qa.toggle_recording().await?;
         assert_eq!(
             runtime.backend.services().qa.snapshot().await?.phase,
             openless_core::QaPhase::Recording

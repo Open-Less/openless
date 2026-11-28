@@ -4,6 +4,14 @@ import { comparisonTemplate, renderComparison } from './intent-style-comparison.
 
 const report = comparisonTemplate();
 assert.equal(report.cases.length, 16);
+assert.equal(report.baselineVersion, '1.3.0');
+assert.equal(report.candidateVersion, '1.5.0');
+const correction = report.cases.find((entry) => entry.id === 'partial-correction');
+assert.ok(correction.mustPreserve.includes('启用自动保存的最终肯定要求'));
+assert.ok(correction.mustRemove.includes('不要启用自动保存的已撤回禁止'));
+const constraints = report.cases.find((entry) => entry.id === 'local-constraint');
+assert.ok(constraints.mustPreserve.includes('访客禁止删除'));
+assert.ok(constraints.mustPreserve.includes('管理员仅在备份成功后允许删除'));
 assert.ok(report.cases.every((entry) => entry.old === null && entry.new === null));
 const pending = renderComparison(report);
 assert.equal(pending.match(/Pending real model run/g).length, 32);
@@ -24,7 +32,7 @@ assert.throws(() => renderComparison({ schemaVersion: 2, cases: [] }));
 const root = new URL('../crates/openless-core/src/builtin_styles/', import.meta.url);
 const pack = JSON.parse(readFileSync(new URL('intent-reconstruction-v1.json', root), 'utf8'));
 const shared = readFileSync(new URL('intent-reconstruction-shared-v1.md', root), 'utf8').trimEnd();
-assert.equal(pack.version, '1.4.0');
+assert.equal(pack.version, report.candidateVersion);
 assert.equal(pack.prompt, shared);
 assert.equal(pack.selectionPrompt, shared);
 const source = readFileSync(

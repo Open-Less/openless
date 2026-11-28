@@ -1225,6 +1225,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
                     }
                     SelectionVoiceDisposition::Question { instruction, .. } => {
                         let qa = service.qa()?;
+                        qa.ensure_questions_available()?;
                         qa.show().await?;
                         qa.set_edit_instruction_mode(false).await?;
                         qa.submit_text(instruction).await?;
@@ -1239,8 +1240,8 @@ impl SelectionVoiceApi for SelectionVoiceService {
                                 instruction,
                             } => {
                                 let qa = service.qa()?;
-                                qa.show().await?;
                                 qa.set_edit_instruction_mode(true).await?;
+                                qa.show().await?;
                                 // The capture predates the QA window. Passing
                                 // it explicitly prevents a focus change from
                                 // silently replacing the source text/target

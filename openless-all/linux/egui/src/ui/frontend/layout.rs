@@ -669,13 +669,15 @@ pub fn sidebar(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Ve
                                             NavTarget::Page(Page::Translation),
                                             actions,
                                         );
-                                        subnav(
-                                            ui,
-                                            vm,
-                                            "nav.selection_ask",
-                                            NavTarget::Page(Page::SelectionAsk),
-                                            actions,
-                                        );
+                                        if openless_linux_egui::ASK_ANYTHING_AVAILABLE {
+                                            subnav(
+                                                ui,
+                                                vm,
+                                                "nav.selection_ask",
+                                                NavTarget::Page(Page::SelectionAsk),
+                                                actions,
+                                            );
+                                        }
                                         subnav(
                                             ui,
                                             vm,

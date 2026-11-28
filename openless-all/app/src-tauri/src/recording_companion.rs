@@ -99,25 +99,8 @@ impl ChordState {
         (complete, complete)
     }
 }
-// Keep this in sync with the frontend's version-flavor check.
-pub(crate) fn ask_anything_available() -> bool {
-    if crate::build_identity::DEV {
-        return true;
-    }
-    ask_anything_available_for_version(
-        env!("CARGO_PKG_VERSION_PRE"),
-        env!("CARGO_PKG_VERSION")
-            .split_once('+')
-            .map_or("", |(_, build)| build),
-    )
-}
-
-fn ask_anything_available_for_version(prerelease: &str, build: &str) -> bool {
-    !prerelease.starts_with("dev.noask.") && !build.starts_with("build.noask.")
-}
-
 pub(crate) fn configure(recording: ShortcutBinding, auxiliary: String) {
-    if !ask_anything_available() {
+    if !crate::build_identity::ask_anything_available() {
         return;
     }
     let mut route = route().lock().unwrap();
@@ -177,7 +160,7 @@ mod tests {
             ("Beta.2", "build.20261123", true),
         ] {
             assert_eq!(
-                super::ask_anything_available_for_version(prerelease, build),
+                crate::build_identity::ask_anything_available_for_version(prerelease, build),
                 available
             );
         }

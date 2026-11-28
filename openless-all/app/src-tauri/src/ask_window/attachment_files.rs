@@ -351,6 +351,9 @@ pub(crate) fn run_pdf_worker_if_requested() -> Option<i32> {
     if std::env::args_os().nth(1).as_deref() != Some(OsStr::new(PDF_WORKER_FLAG)) {
         return None;
     }
+    if !crate::build_identity::ask_anything_available() {
+        return Some(1);
+    }
     let limits = install_pdf_worker_limits().map_err(|_| AttachmentError::PdfUnavailable);
     let mut stdout = io::stdout().lock();
     let result = pdf::write_worker_reply(limits, io::stdin().lock(), &mut stdout)

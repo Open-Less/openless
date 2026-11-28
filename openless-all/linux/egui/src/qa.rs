@@ -195,6 +195,10 @@ impl LinuxQaRuntime {
 }
 
 impl QaRuntimeAdapter for LinuxQaRuntime {
+    fn questions_available(&self) -> bool {
+        crate::ASK_ANYTHING_AVAILABLE
+    }
+
     fn prepare_text(
         &self,
         session_id: SessionId,
@@ -345,6 +349,14 @@ impl QaRuntimeAdapter for LinuxQaRuntime {
         request: QaTurnRequest,
         progress: Arc<dyn QaProgressSink>,
     ) -> BoxFuture<'static, Result<QaTurnResult, BackendError>> {
+        if !self.questions_available() {
+            return Box::pin(async {
+                Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "Ask is unavailable in this build.",
+                ))
+            });
+        }
         let session = self.session(request.session_id);
         let credentials = Arc::clone(&self.credentials);
         let sessions = Arc::clone(&self.sessions);
@@ -547,6 +559,7 @@ mod tests {
         });
         let (backend, runtime, data_dir) = voice_backend(recorder.clone());
         let qa = backend.services().qa.clone();
+        qa.set_edit_instruction_mode(true).await.unwrap();
         let starting = tokio::spawn(qa.toggle_recording());
         recorder.entered.acquire().await.unwrap().forget();
         let session_id = qa.snapshot().await.unwrap().session_id.unwrap();
@@ -587,6 +600,7 @@ mod tests {
                 )
                 .unwrap();
             let qa = &backend.services().qa;
+            qa.set_edit_instruction_mode(true).await.unwrap();
             qa.toggle_recording().await.unwrap();
             tokio::time::timeout(std::time::Duration::from_secs(1), async {
                 loop {

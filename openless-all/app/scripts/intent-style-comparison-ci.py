@@ -51,7 +51,7 @@ def safe_report(evaluation):
     return {
         "schemaVersion": 1,
         "baselineVersion": "1.3.0",
-        "candidateVersion": "1.4.0",
+        "candidateVersion": "1.5.0",
         "requestedModel": MODEL,
         "thinkingEnabled": False,
         "primaryRequestLimit": 32,
@@ -84,7 +84,7 @@ def apply_status(report, raw):
     if (
         raw.get("schemaVersion") != 1
         or raw.get("baselineVersion") != "1.3.0"
-        or raw.get("candidateVersion") != "1.4.0"
+        or raw.get("candidateVersion") != "1.5.0"
         or raw.get("requestedModel") != MODEL
         or raw.get("thinkingEnabled") is not False
         or not isinstance(raw.get("cases"), list)

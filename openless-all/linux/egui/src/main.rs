@@ -46,7 +46,7 @@ mod linux_app {
         LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxHotkeyEvent, LinuxLaunchIntent,
         LinuxNativeRuntime, LinuxResourceLayout, Notification, PopupActionGuard, PopupChatMessage,
         PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost,
-        SingleInstanceBroker, SingleInstanceRole, POPUP_PROTOCOL_VERSION,
+        SingleInstanceBroker, SingleInstanceRole, ASK_ANYTHING_AVAILABLE, POPUP_PROTOCOL_VERSION,
     };
     use window::*;
 
@@ -1345,15 +1345,20 @@ mod linux_app {
             }
         }
 
+        fn qa_panel_accepts_input(&self) -> bool {
+            self.qa_visible
+                && !self.polish_result_visible
+                && (ASK_ANYTHING_AVAILABLE || self.qa_edit.instruction_mode)
+        }
+
         fn show_qa_popup(&mut self) {
-            // 收起状态或润色结果模式下不得用 QA 快照把面板拉回来。
-            if !self.qa_visible || self.polish_result_visible {
+            if !self.qa_panel_accepts_input() {
                 return;
             }
-            self.ensure_popup(PopupKind::Qa);
             let Some(state) = self.qa_state.clone() else {
                 return;
             };
+            self.ensure_popup(PopupKind::Qa);
             self.send_popup(
                 PopupKind::Qa,
                 HostToPopup::QaSnapshot {
@@ -1867,8 +1872,9 @@ mod linux_app {
             match event {
                 PopupSupervisorEvent::Message(PopupToHost::SubmitQa {
                     session_id, text, ..
-                }) if self.expected_popup_session(PopupKind::Qa).as_deref()
-                    == Some(session_id.as_str()) =>
+                }) if self.qa_panel_accepts_input()
+                    && self.expected_popup_session(PopupKind::Qa).as_deref()
+                        == Some(session_id.as_str()) =>
                 {
                     if let Some(backend) = self.backend() {
                         // 空态面板没有 Core 会话：仍然允许发送，由 Core 在
@@ -1901,8 +1907,9 @@ mod linux_app {
                 PopupSupervisorEvent::Message(PopupToHost::ToggleQaRecording {
                     session_id,
                     ..
-                }) if self.expected_popup_session(PopupKind::Qa).as_deref()
-                    == Some(session_id.as_str()) =>
+                }) if self.qa_panel_accepts_input()
+                    && self.expected_popup_session(PopupKind::Qa).as_deref()
+                        == Some(session_id.as_str()) =>
                 {
                     if let Some(backend) = self.backend() {
                         let context = self
@@ -4036,10 +4043,13 @@ mod linux_app {
             } else {
                 log::info!("[hotkey] QA panel toggle: showing");
                 if let Some(backend) = self.backend() {
-                    self.qa_visible = true;
                     // `show()` 只发 HostAction::ShowQa：Core 仍停在 Idle，不录音。
                     self.spawn_hotkey(async move {
-                        backend.services().qa.show().await?;
+                        let qa = &backend.services().qa;
+                        if !ASK_ANYTHING_AVAILABLE {
+                            qa.set_edit_instruction_mode(true).await?;
+                        }
+                        qa.show().await?;
                         Ok(String::new())
                     });
                 }
@@ -4131,7 +4141,7 @@ mod linux_app {
                 // 这条缺失正是「选区助手里开始录音后，按语音热键完全没反应」的成因：
                 // 原来一律送 Core 听写，Core 因 QA 正忙而拒绝，界面自然没反应。
                 LinuxHotkeyEvent::DictationPressed { .. }
-                    if self.qa_visible && self.dictation_is_idle() =>
+                    if self.qa_panel_accepts_input() && self.dictation_is_idle() =>
                 {
                     log::info!(
                         "[hotkey] dictation hotkey while the QA panel is visible: toggling QA recording"
@@ -4211,7 +4221,7 @@ mod linux_app {
                     }
                     LocalHotkey::Dictation
                         if edge.kind == LocalHotkeyEdgeKind::Pressed
-                            && self.qa_visible
+                            && self.qa_panel_accepts_input()
                             && self.qa_state.is_some()
                             && self.dictation_is_idle() =>
                     {
@@ -4345,15 +4355,14 @@ mod linux_app {
                 native.host_actions().drain(|action| actions.push(action));
                 for intent in launch_intents {
                     log::info!("[ui-host] launch intent from the user: {intent:?}");
-                    // CLI 的 ToggleQa 与「按一次 QA 热键」等价（Tauri
-                    // `dispatch_cli_intent` 把 ToggleQa 直接转给 `handle_qa_hotkey_pressed`），
-                    // 所以它既不拉起主窗口，也不走 Core 的 ToggleQa（那条是“切换录音”）。
+                    // The Ask launcher intent never opens the edit-only panel.
                     if matches!(
                         intent,
                         LinuxLaunchIntent::Cli(openless_core::CliIntent::ToggleQa)
                     ) {
-                        log::info!("[ui-host] CLI intent toggles the QA panel");
-                        self.toggle_qa_panel();
+                        if ASK_ANYTHING_AVAILABLE {
+                            self.toggle_qa_panel();
+                        }
                         continue;
                     }
                     launch_intent_window_requested = true;
@@ -5903,10 +5912,8 @@ mod linux_app {
                 })
                 .collect();
 
-            // Translation and selection-ask are always wired through Core; the
-            // pages only render state that is already loaded.
             vm.translation_unsupported = false;
-            vm.selection_unsupported = false;
+            vm.selection_unsupported = !ASK_ANYTHING_AVAILABLE;
 
             // Marketplace: wired through Core; the list loads lazily on first visit.
             vm.marketplace_unsupported = false;
@@ -9144,6 +9151,14 @@ focus_was_stolen={} focus_restored={} warnings={:?}",
                 if message
                     .content_kind()
                     .is_some_and(|message_kind| message_kind != self.kind)
+                    || (!ASK_ANYTHING_AVAILABLE
+                        && matches!(
+                            &message,
+                            HostToPopup::QaSnapshot {
+                                edit_instruction_mode: false,
+                                ..
+                            }
+                        ))
                 {
                     continue;
                 }
@@ -10303,6 +10318,7 @@ Internal flags (set by OpenLess itself, not for regular use):
                 .unwrap();
             let mut app = OpenLessEguiApp::new(tokio.clone(), Ok(native), None, true);
             app.qa_visible = true;
+            app.qa_edit.instruction_mode = true;
             app.qa_state = Some(QaStateEvent::simple(QaStateKind::Idle));
             let submission = PopupToHost::SubmitQa {
                 version: POPUP_PROTOCOL_VERSION,

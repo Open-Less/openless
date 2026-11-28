@@ -5999,6 +5999,7 @@ impl OpenLessBackend {
             },
             crate::cli::CliIntent::ToggleQa => {
                 let qa = &self.deps.services.qa;
+                qa.ensure_questions_available()?;
                 let snapshot = qa.snapshot().await?;
                 match (snapshot.phase, snapshot.session_id) {
                     (crate::QaPhase::Recording, Some(session_id)) => {
@@ -6394,6 +6395,7 @@ impl OpenLessBackend {
     /// with physical dictation edges so a delayed prefix release cannot restart
     /// dictation after QA has acquired the microphone.
     pub async fn start_voice_question_from_recording_key(&self) -> Result<(), BackendError> {
+        self.deps.services.qa.ensure_questions_available()?;
         let _dispatch = self.hotkey_dispatch_gate.lock().await;
         let snapshot = self.snapshot().dictation;
         if let Some(session_id) = snapshot.session_id {

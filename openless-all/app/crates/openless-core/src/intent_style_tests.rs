@@ -66,7 +66,8 @@ fn intent_evaluation_has_reviewable_expectations_and_all_required_scenarios() {
     let evaluation = evaluation();
     assert_eq!(evaluation.schema_version, 1);
     assert!(evaluation.provenance.contains("虚构"));
-    assert!(evaluation.cases.len() >= 12);
+    // The approved comparison loop is bounded to 32 primary + 4 fallback sends.
+    assert_eq!(evaluation.cases.len(), 16);
     let mut ids = std::collections::HashSet::new();
     let mut tags = std::collections::HashSet::new();
     for case in &evaluation.cases {
@@ -122,6 +123,7 @@ fn intent_evaluation_has_reviewable_expectations_and_all_required_scenarios() {
         "数字",
         "翻译",
         "选区编辑",
+        "否定反转",
     ] {
         assert!(tags.contains(required), "{required}");
     }
@@ -133,7 +135,7 @@ fn intent_current_projection_and_authored_slots_match_the_shared_source() {
     let body = include_str!("builtin_styles/intent-reconstruction-shared-v1.md").trim_end();
     let authored: crate::StylePack =
         serde_json::from_str(include_str!("builtin_styles/intent-reconstruction-v1.json")).unwrap();
-    assert_eq!(authored.version, "1.4.0");
+    assert_eq!(authored.version, "1.5.0");
     assert_eq!(authored.prompt, body);
     assert_eq!(authored.selection_prompt, body);
     assert!(
@@ -145,7 +147,7 @@ fn intent_current_projection_and_authored_slots_match_the_shared_source() {
         format!("{body}\n\n{}", crate::style_packs::DICTATION_REVISION_RULES)
     );
     let fixture: Value = serde_json::from_str(include_str!(
-        "../tests/fixtures/intent-reconstruction-1.4-projection.json"
+        "../tests/fixtures/intent-reconstruction-1.5-projection.json"
     ))
     .unwrap();
     let mut projected = serde_json::to_value(&pack).unwrap();
@@ -169,6 +171,13 @@ fn intent_current_projection_and_authored_slots_match_the_shared_source() {
         "不要输出分析过程",
         "专名",
         "EditPlan",
+        "术语名词，如专名、项目名、CLI 工具名",
+        "准确理解和表达用户原意优先于排版、归类和精简",
+        "不得把意思表达相反",
+        "主体/对象",
+        "保留每个仍然有效的否定",
+        "已被用户明确改口或撤回的旧表达",
+        "与当前口述冲突时以当前口述为准",
     ] {
         assert!(body.contains(required), "{required}");
     }

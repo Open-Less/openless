@@ -445,7 +445,6 @@ mod tests {
             "nav.group_style",
             "nav.group_tools",
             "nav.translation",
-            "nav.selection_ask",
             "nav.corrections",
             "nav.settings",
         ] {
@@ -455,6 +454,12 @@ mod tests {
                 "expected the overview dashboard to paint {key} ({expected:?})"
             );
         }
+        let ask_label =
+            openless_linux_egui::tr_l10n(openless_linux_egui::Lang::ZhCn, "nav.selection_ask");
+        assert_eq!(
+            painted.contains(ask_label),
+            openless_linux_egui::ASK_ANYTHING_AVAILABLE
+        );
         let heatmap: egui::Rect = ctx.data(|data| {
             data.get_temp(egui::Id::unique("openless-overview-heatmap-rect"))
                 .expect("populated overview should show the heatmap")
@@ -1644,7 +1649,11 @@ mod tests {
         };
         let start = index_of("settings.shortcuts.start_stop");
         let translation = index_of("hotkey.translation");
-        let qa = index_of("selection_ask.hotkey_title");
+        let qa = index_of(if openless_linux_egui::ASK_ANYTHING_AVAILABLE {
+            "selection_ask.hotkey_title"
+        } else {
+            "qa.edit_instruction_mode"
+        });
         let polish = index_of("settings.selection_workspace.polish_hotkey");
         let switch_style = index_of("settings.shortcuts.switch_style");
         let open_app = index_of("settings.shortcuts.open_app");

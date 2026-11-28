@@ -13,8 +13,8 @@ export function comparisonTemplate() {
   return {
     schemaVersion: evaluation.schemaVersion,
     provenance: evaluation.provenance,
-    baselineVersion: '1.0.0',
-    candidateVersion: '1.4.0',
+    baselineVersion: '1.3.0',
+    candidateVersion: '1.5.0',
     semanticReview: 'pending human review; no real model requests have been made',
     cases: evaluation.cases.map((entry) => ({ ...entry, old: null, new: null })),
   };

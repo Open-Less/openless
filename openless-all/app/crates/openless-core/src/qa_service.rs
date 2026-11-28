@@ -87,6 +87,14 @@ impl QaPersistence {
 }
 
 impl QaService {
+    fn ensure_mode_available(&self, edit_instruction_mode: bool) -> Result<(), BackendError> {
+        if edit_instruction_mode {
+            Ok(())
+        } else {
+            self.ensure_questions_available()
+        }
+    }
+
     pub fn standalone_history_sink(&self) -> Arc<standalone::AskHistorySink> {
         let service = self.clone();
         Arc::new(move |question, answer| {
@@ -231,6 +239,7 @@ impl QaService {
                 .expect("QA presentation lock poisoned");
             let previous = {
                 let mut state = self.state.lock().expect("QA state lock poisoned");
+                self.ensure_mode_available(state.snapshot.edit_instruction_mode)?;
                 ensure_qa_idle(&state.snapshot)?;
                 self.voice_sessions
                     .acquire(session_id, crate::voice_session::VoiceSessionKind::Qa)?;
@@ -319,6 +328,9 @@ impl QaService {
     }
 
     async fn submit_inner(&self, submission: QaSubmission) -> Result<(), BackendError> {
+        if matches!(&submission, QaSubmission::Captured(_)) {
+            self.ensure_questions_available()?;
+        }
         let _runtime = self.begin_runtime_work()?;
         let expected_session = match &submission {
             QaSubmission::ScopedText {
@@ -345,6 +357,7 @@ impl QaService {
                 .expect("QA presentation lock poisoned");
             let previous = {
                 let mut state = self.state.lock().expect("QA state lock poisoned");
+                self.ensure_mode_available(state.snapshot.edit_instruction_mode)?;
                 ensure_qa_idle(&state.snapshot)?;
                 if expected_session.is_some_and(|expected| expected != state.snapshot.session_id) {
                     return Err(BackendError::new(
@@ -782,6 +795,17 @@ impl QaService {
 }
 
 impl QaApi for QaService {
+    fn ensure_questions_available(&self) -> Result<(), BackendError> {
+        if self.runtime.questions_available() {
+            Ok(())
+        } else {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "Ask is unavailable in this build.",
+            ))
+        }
+    }
+
     fn ask_history_sink(&self) -> Option<Arc<standalone::AskHistorySink>> {
         Some(self.standalone_history_sink())
     }
@@ -817,6 +841,13 @@ impl QaApi for QaService {
                 .presentation
                 .lock()
                 .expect("QA presentation lock poisoned");
+            let edit = service
+                .state
+                .lock()
+                .expect("QA state lock poisoned")
+                .snapshot
+                .edit_instruction_mode;
+            service.ensure_mode_available(edit)?;
             service.host_actions.request(HostAction::ShowQa)?;
             let mut state = service.state.lock().expect("QA state lock poisoned");
             state.snapshot.panel_open = true;
@@ -841,7 +872,10 @@ impl QaApi for QaService {
 
     fn start_question(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
-        Box::pin(async move { service.begin_recording().await })
+        Box::pin(async move {
+            service.ensure_questions_available()?;
+            service.begin_recording().await
+        })
     }
 
     fn toggle_recording(&self) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -939,6 +973,7 @@ impl QaApi for QaService {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move {
+            service.ensure_mode_available(enabled)?;
             let _presentation = service
                 .presentation
                 .lock()
