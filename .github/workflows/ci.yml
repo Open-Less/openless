@@ -20,10 +20,25 @@ on:
   workflow_dispatch:
     inputs:
       live_acceptance:
-        description: Paid official-provider acceptance only (skips ordinary platform checks)
+        description: Optional acceptance or secretless preflight (skips platform checks)
         type: choice
-        options: ['off', style, style-diagnostic, search]
+        options: ['off', style, style-diagnostic, search, intent-style-comparison, intent-style-preflight]
         default: 'off'
+      intent_recipient_certificate:
+        description: Public PEM recipient certificate for encrypted intent evidence (never a private key)
+        type: string
+        required: false
+        default: ''
+      intent_expected_source_sha:
+        description: Reviewed 40-character source/workflow SHA for intent preflight or comparison
+        type: string
+        required: false
+        default: ''
+      intent_recipient_sha256:
+        description: Locally confirmed recipient certificate DER SHA256 for this single intent dispatch
+        type: string
+        required: false
+        default: ''
       platform:
         description: Platforms to check (macos runs only macOS gates)
         type: choice
@@ -1024,7 +1039,36 @@ jobs:
         run: |
           cargo test --locked -p openless-core --target-dir src-tauri/target --test prompt_contract
           cargo test --locked -p openless-core --target-dir src-tauri/target --test dictation_target_capture
-          cargo test --locked -p openless-core --target-dir src-tauri/target --test selection_contract normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams
+          (
+            selection_scratch=
+            selection_finished=false
+            cleanup_selection_contract() {
+              selection_status=$?
+              trap - EXIT
+              if [ -n "$selection_scratch" ]; then
+                if [ "$selection_finished" != true ]; then
+                  printf '::warning::selection_contract termination unconfirmed; keeping scratch: %s\n' "$selection_scratch" >&2
+                  if [ "$selection_status" -eq 0 ]; then selection_status=1; fi
+                elif ! rm -rf -- "$selection_scratch"; then
+                  printf '::error::Failed to remove selection_contract scratch: %s\n' "$selection_scratch" >&2
+                  if [ "$selection_status" -eq 0 ]; then selection_status=1; fi
+                fi
+              fi
+              exit "$selection_status"
+            }
+            trap cleanup_selection_contract EXIT
+            trap 'selection_finished=false; exit 130' INT
+            trap 'selection_finished=false; exit 143' TERM
+            trap 'selection_finished=false; exit 129' HUP
+            selection_scratch="$(mktemp -d "${RUNNER_TEMP:?}/selection-contract.XXXXXX")"
+            if TMPDIR="$selection_scratch" cargo test --locked -p openless-core --target-dir src-tauri/target --test selection_contract -- --test-threads=1; then
+              selection_status=0
+            else
+              selection_status=$?
+            fi
+            if [ "$selection_status" -lt 128 ]; then selection_finished=true; fi
+            exit "$selection_status"
+          )
           cargo test --locked -p openless-core --target-dir src-tauri/target --test settings_field_updates
           cargo test --locked -p openless-core --target-dir src-tauri/target --lib long_recording
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test clipboard_delivery
@@ -1295,9 +1339,13 @@ jobs:
             test "$MSRV_RESULT" = success
           fi
 
-  live-acceptance:
-    name: Optional official-provider live acceptance
-    if: github.event_name == 'workflow_dispatch' && inputs.live_acceptance != 'off'
+  intent-secretless-preflight:
+    name: Optional secretless intent preflight
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.live_acceptance == 'intent-style-preflight' &&
+      github.repository == 'Open-Less/openless' &&
+      contains(fromJSON('["refs/heads/main","refs/heads/beta"]'), github.ref)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1307,11 +1355,80 @@ jobs:
         working-directory: openless-all/app
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify reviewed source without provider credentials
+        env:
+          INTENT_EXPECTED_SOURCE_SHA: ${{ inputs.intent_expected_source_sha }}
+          INTENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: python3 scripts/intent-style-comparison-ci.py source-preflight
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile once and verify only dummy and local mock paths
+        run: |
+          set -euo pipefail
+          umask 077
+          scratch=$(mktemp -d "$RUNNER_TEMP/openless-intent-preflight.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          export TMPDIR="$scratch/tmp"
+          export CARGO_TARGET_DIR="$scratch/target"
+          mkdir -p "$TMPDIR"
+          bash scripts/intent-style-gates.sh python
+          binary_assignment=$(bash scripts/intent-style-gates.sh build "$scratch/manifest.jsonl")
+          [[ "$binary_assignment" == binary=* ]]
+          binary=${binary_assignment#binary=}
+          bash scripts/intent-style-gates.sh verify "$binary"
+
+  live-acceptance:
+    name: Optional official-provider live acceptance
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.live_acceptance != 'off' &&
+      inputs.live_acceptance != 'intent-style-preflight' &&
+      github.repository == 'Open-Less/openless' &&
+      contains(fromJSON('["refs/heads/main","refs/heads/beta"]'), github.ref)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate intent evidence recipient before any paid request
+        if: inputs.live_acceptance == 'intent-style-comparison'
+        env:
+          INTENT_RECIPIENT_CERTIFICATE: ${{ inputs.intent_recipient_certificate }}
+          INTENT_RECIPIENT_SHA256: ${{ inputs.intent_recipient_sha256 }}
+          INTENT_EXPECTED_SOURCE_SHA: ${{ inputs.intent_expected_source_sha }}
+          INTENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          INTENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 scripts/intent-style-comparison-ci.py preflight
       - uses: dtolnay/rust-toolchain@stable
       - name: Build acceptance without credentials
-        run: cargo test --locked -p openless-core --lib --no-run
-      - name: Run explicitly selected bounded acceptance
+        id: live-build
         env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target
+        run: |
+          set -euo pipefail
+          umask 077
+          build_manifest=$(mktemp "$RUNNER_TEMP/openless-live-build.XXXXXX")
+          trap 'rm -f "$build_manifest"' EXIT
+          bash scripts/intent-style-gates.sh build "$build_manifest" >> "$GITHUB_OUTPUT"
+      - name: Verify intent mock transport gates without provider credentials
+        if: inputs.live_acceptance == 'intent-style-comparison'
+        env:
+          INTENT_TEST_BINARY: ${{ steps.live-build.outputs.binary }}
+        run: |
+          set -euo pipefail
+          bash scripts/intent-style-gates.sh python
+          bash scripts/intent-style-gates.sh verify "$INTENT_TEST_BINARY"
+      - name: Run explicitly selected bounded acceptance
+        if: inputs.live_acceptance != 'intent-style-comparison'
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/openless-live-target
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           LIVE_ACCEPTANCE: ${{ inputs.live_acceptance }}
         run: |
@@ -1324,10 +1441,42 @@ jobs:
           esac
           cargo test --locked -p openless-core --lib "$target" -- --list --ignored | grep -q "$target: test"
           cargo test --locked -p openless-core --lib "$target" -- --ignored --nocapture --test-threads=1 | tee live-acceptance.log
+      - name: Compare intent 1.3.0 and 1.4.0 with existing official credentials
+        if: inputs.live_acceptance == 'intent-style-comparison'
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          INTENT_TEST_BINARY: ${{ steps.live-build.outputs.binary }}
+          INTENT_RECIPIENT_CERTIFICATE: ${{ inputs.intent_recipient_certificate }}
+          INTENT_RECIPIENT_SHA256: ${{ inputs.intent_recipient_sha256 }}
+          INTENT_EXPECTED_SOURCE_SHA: ${{ inputs.intent_expected_source_sha }}
+          INTENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          INTENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          umask 077
+          private_dir=$(mktemp -d "$RUNNER_TEMP/openless-intent.XXXXXX")
+          chmod 700 "$private_dir"
+          trap 'rm -rf "$private_dir"' EXIT
+          python3 scripts/intent-style-comparison-ci.py run \
+            "$INTENT_TEST_BINARY" "$private_dir" "$RUNNER_TEMP/openless-intent-evidence"
       - name: Preserve public output evidence
-        if: always()
+        if: always() && inputs.live_acceptance != 'intent-style-comparison'
         uses: actions/upload-artifact@v4
         with:
           name: official-provider-live-acceptance
           path: openless-all/app/live-acceptance.log
           if-no-files-found: ignore
+      - name: Preserve encrypted intent review and safe execution status
+        if: always() && inputs.live_acceptance == 'intent-style-comparison'
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-style-comparison-evidence
+          path: |
+            ${{ runner.temp }}/openless-intent-evidence/status.json
+            ${{ runner.temp }}/openless-intent-evidence/comparison.cms
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Clean dedicated live acceptance artifacts
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/openless-live-target" "$RUNNER_TEMP/openless-intent-evidence"

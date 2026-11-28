@@ -206,6 +206,12 @@ async fn forward_legacy_event(
             if current.dictation.session_id.is_none()
                 && current.processing_dictations.first().is_some_and(|job| job.session_id != snapshot.session_id)
             { return; }
+            #[cfg(not(mobile))]
+            let snapshot = {
+                let mut snapshot = snapshot;
+                crate::capsule_style_menu::project_current_style(&mut snapshot, &current.dictation);
+                snapshot
+            };
             capsule_owners.transcription_notice = None;
             if snapshot.phase != DictationPhase::Idle {
                 capsule_owners.qa_voice = None;
@@ -327,6 +333,9 @@ async fn forward_legacy_event(
                                 .then(|| "正在准备语音…".to_string()),
                             inserted_chars: None,
                             translation: false,
+                            skip_auto_style: false,
+                            style_pack_id: None,
+                            style_pack_name: None,
                             operating: true,
                             warming: *phase == LessComputerVoicePhase::Starting,
                             capsule_style: backend.get_preferences().capsule_style,
@@ -396,6 +405,9 @@ async fn forward_legacy_event(
                         message: None,
                         inserted_chars: None,
                         translation: false,
+                        skip_auto_style: false,
+                        style_pack_id: None,
+                        style_pack_name: None,
                         operating: false,
                         // First PCM frame proves capture is live (mirrors QA / Less Computer).
                         warming: false,
@@ -577,6 +589,9 @@ fn map_dictation_state(
         message,
         inserted_chars: None,
         translation: snapshot.translation_active,
+        skip_auto_style: snapshot.skip_auto_style,
+        style_pack_id: snapshot.style_pack_id,
+        style_pack_name: snapshot.style_pack_name,
         operating: false,
         warming: matches!(
             snapshot.phase,
@@ -667,6 +682,9 @@ fn transcription_notice_payload(
         message: Some(message.to_string()),
         inserted_chars: None,
         translation: dictation.translation_active,
+        skip_auto_style: false,
+        style_pack_id: None,
+        style_pack_name: None,
         operating,
         warming: false,
         capsule_style: style,
@@ -784,6 +802,9 @@ fn mobile_qa_capsule_payload(
         }),
         inserted_chars: None,
         translation: false,
+        skip_auto_style: false,
+        style_pack_id: None,
+        style_pack_name: None,
         operating: false,
         // Core announces Recording before native startup completes; only a
         // real PCM level proves the microphone is ready, including level zero.
@@ -1505,6 +1526,9 @@ mod tests {
                     message: Some("fixture".to_string()),
                     translation_active: true,
                     recording_ready: phase != DictationPhase::Starting,
+                    skip_auto_style: false,
+                    style_pack_id: None,
+                    style_pack_name: None,
                 },
                 CapsuleStyle::Classic,
             );

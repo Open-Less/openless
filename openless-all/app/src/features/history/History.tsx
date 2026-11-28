@@ -15,6 +15,7 @@ import { useInteraction } from '../../ui/overlays/InteractionProvider';
 import { HistoryDetail } from './HistoryDetail';
 import { HistoryList } from './HistoryList';
 import { errorMessage, styleLabelFor, useModeLabel } from './presentation';
+import { useHistoryOriginalSelection } from './useHistoryOriginalSelection';
 
 const emptyHistory: DictationSession[] = [];
 
@@ -134,6 +135,10 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
         rawTranscript.toLowerCase().includes(term) || finalText.toLowerCase().includes(term),
     );
   }, [items, debouncedQuery]);
+  const originalSelection = useHistoryOriginalSelection(
+    quickNotesOnly ? emptyHistory : filtered,
+    notify,
+  );
   const item = filtered.find((entry) => entry.id === selectedId) ?? filtered[0];
   const styleLabel = (entry: DictationSession) => styleLabelFor(entry, allPacks, modeLabel);
   const clearableCount = items.filter((entry) => entry.source !== 'quick_note').length;
@@ -205,6 +210,7 @@ export function History({ quickNotesOnly = false }: { quickNotesOnly?: boolean }
             loadError={loadError}
             refresh={refresh}
             styleLabel={styleLabel}
+            originals={originalSelection}
           />
         )}
         {(!mobile || mobileDetailOpen) &&

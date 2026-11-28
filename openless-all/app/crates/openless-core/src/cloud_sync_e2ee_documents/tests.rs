@@ -120,6 +120,24 @@ fn all_current_preference_fields_have_an_explicit_registration() {
 }
 
 #[test]
+fn skip_auto_style_e2ee_device_profile_accepts_legacy_and_new_fields() {
+    let mut old = sample().documents().clone();
+    let profile = old.documents.iter_mut().find(|doc| doc.kind == DocumentKind::DeviceProfile).unwrap();
+    profile.value["preferences"].as_object_mut().unwrap().remove("skipAutoStyleHotkey");
+    profile.value["preferences"].as_object_mut().unwrap().remove("skipAutoStylePickerEnabled");
+    validate_sync_documents(old, Revision::new(3)).unwrap();
+    let mut data = snapshot();
+    data.preferences.expose_mut()["skipAutoStyleHotkey"] = json!({"primary":"","modifiers":[]});
+    data.preferences.expose_mut()["skipAutoStylePickerEnabled"] = json!(true);
+    let exported = export_snapshot(data).unwrap();
+    let documents = &exported.documents.documents().documents;
+    let profile = documents.iter().find(|doc| doc.kind == DocumentKind::DeviceProfile).unwrap();
+    assert_eq!(profile.value["preferences"]["skipAutoStyleHotkey"]["primary"], "");
+    let picker = documents.iter().find(|doc| doc.kind == DocumentKind::Preferences && doc.id == "skipAutoStylePickerEnabled").unwrap();
+    assert_eq!(picker.value, true);
+}
+
+#[test]
 fn new_optional_preference_distinguishes_untouched_from_explicit_default() {
     let untouched = crate::shared_types::UserPreferences::default();
     assert_eq!(untouched.translation_shift_tap_count(), 1);

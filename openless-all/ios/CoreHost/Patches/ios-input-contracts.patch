@@ -189,7 +189,7 @@ diff --git a/crates/openless-core/src/api.rs b/crates/openless-core/src/api.rs
 +            ..Default::default()
 +        };
 +        let reservation =
-+            self.reserve_dictation_session(insert_text, options.output_target, None)?;
++            self.reserve_dictation_session(&options, None)?;
 +        self.start_reserved_dictation_with_raw_provider(
 +            reservation,
 +            options,
@@ -283,8 +283,8 @@ diff --git a/crates/openless-core/src/api.rs b/crates/openless-core/src/api.rs
          &self,
          options: &DictationStartOptions,
 @@ -10480,6 +10700,11 @@
-             .style_packs
-             .get_for_dictation(assigned_ids.iter().map(String::as_str), active_id)?;
+             assigned_ids.iter().map(String::as_str), active_id, &preferences.active_style_pack_id,
+         )?;
          let mut captured_options = options.clone();
 +        if let Some(target) = &options.translation_target_language {
 +            captured_options.translation_target_language = Some(
@@ -989,21 +989,23 @@ diff --git a/crates/openless-core/src/cloud_sync_e2ee_documents/tests.rs b/crate
 diff --git a/crates/openless-core/src/dictation_context.rs b/crates/openless-core/src/dictation_context.rs
 --- a/crates/openless-core/src/dictation_context.rs
 +++ b/crates/openless-core/src/dictation_context.rs
-@@ -44,6 +44,9 @@
+@@ -44,7 +44,10 @@
  #[derive(Debug, Clone, PartialEq, Eq)]
  pub struct DictationStartOptions {
      pub translation_requested: bool,
 +    /// Configured target for this session only; None uses the legacy selected target.
 +    /// Selecting a target does not request translation or enable any provider.
 +    pub translation_target_language: Option<String>,
+     pub skip_auto_style: bool,
      pub audio_source: DictationAudioSource,
      pub insert_text: bool,
      pub output_target: DictationOutputTarget,
-@@ -56,6 +59,7 @@
+@@ -56,7 +59,8 @@
      fn default() -> Self {
          Self {
              translation_requested: false,
 +            translation_target_language: None,
+             skip_auto_style: false,
              audio_source: DictationAudioSource::Microphone,
              insert_text: true,
              output_target: DictationOutputTarget::ForegroundApp,

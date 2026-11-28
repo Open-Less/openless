@@ -1,6 +1,9 @@
 import type {
   BackendEvent,
   CapsulePayload,
+  CapsuleStyleMenuIdentity,
+  CapsuleStyleMenuKey,
+  CapsuleStyleMenuRequest,
   InsertFallbackCardPayload,
   PendingCorrection,
   UserPreferences,
@@ -41,6 +44,12 @@ export function createCapsuleSubscriptions() {
     dispose: events.dispose,
     state: (onPayload: (payload: CapsulePayload) => void) =>
       events.listen('capsule:state', onPayload, 'window'),
+    styleMenuRequests: (onPayload: (payload: CapsuleStyleMenuRequest) => void) =>
+      events.listen('capsule:style-menu-request', onPayload, 'window'),
+    styleMenuKeys: (onPayload: (payload: CapsuleStyleMenuKey) => void) =>
+      events.listen('capsule:style-menu-key', onPayload, 'window'),
+    styleMenuClosed: (onPayload: (payload: CapsuleStyleMenuIdentity) => void) =>
+      events.listen('capsule:style-menu-closed', onPayload, 'window'),
     jobs: (onPayload: (payload: CapsuleProcessingJob[]) => void) =>
       events.listen('dictation:jobs', onPayload, 'app'),
     transcript: (onPayload: (payload: BackendEvent) => void) =>

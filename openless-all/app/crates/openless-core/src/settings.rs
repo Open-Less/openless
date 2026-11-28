@@ -64,6 +64,8 @@ pub struct HotkeyRuntimeTarget {
     pub qa_companion_key: String,
     pub quick_note: Option<ShortcutBinding>,
     pub translation: ShortcutBinding,
+    #[serde(default = "crate::shared_types::default_skip_auto_style_hotkey")]
+    pub skip_auto_style: ShortcutBinding,
     pub switch_style: Option<ShortcutBinding>,
     pub open_app: Option<ShortcutBinding>,
     pub selection_polish: Option<ShortcutBinding>,
@@ -85,6 +87,7 @@ impl From<&UserPreferences> for HotkeyRuntimeTarget {
             qa_companion_key: preferences.qa_companion_key.clone(),
             quick_note: preferences.quick_note_hotkey.clone(),
             translation: preferences.translation_hotkey.clone(),
+            skip_auto_style: preferences.skip_auto_style_hotkey.clone(),
             switch_style: preferences.switch_style_hotkey.clone(),
             open_app: preferences.open_app_hotkey.clone(),
             selection_polish: preferences.selection_polish_hotkey.clone(),

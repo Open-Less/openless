@@ -46,6 +46,17 @@ pub struct CapturedTextTarget {
 }
 
 pub trait HostContextAdapter: Send + Sync {
+    /// Local destination evidence from capture time. This is deliberately kept
+    /// separate from HostContextCapture, whose text may be sent to a model.
+    fn target_identity(&self) -> Option<crate::host_document::target::HostTargetIdentity> {
+        None
+    }
+    /// Native checks may block; hosts must run them off the async worker.
+    fn validate_target(
+        &self,
+    ) -> BoxFuture<'static, crate::host_document::target::HostTargetValidation> {
+        Box::pin(async { crate::host_document::target::HostTargetValidation::Unavailable })
+    }
     /// Stable identity, when this adapter is attached to a frozen insertion target.
     fn input_app(&self) -> Option<crate::app_style_routing::InputApp> {
         None
@@ -371,8 +382,8 @@ pub trait DictationEngine: Send + Sync + 'static {
     }
 
     /// Replace the immutable session snapshot before finalization when a host
-    /// action (currently Android's finish-and-translate gesture) is only known
-    /// at stop time. Implementations that retain the context must override this
+    /// action (translation, destination or output-style selection) changes the
+    /// final polish intent. Implementations that retain the context must override this
     /// method; settings are never re-read here.
     fn update_context(
         &self,

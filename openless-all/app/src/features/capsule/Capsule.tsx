@@ -9,6 +9,13 @@ import { useReducedMotion } from '../../lib/motion';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
+import { CapsulePickerMenu } from './capsulePickerMenu';
+import { CapsuleStyleBadge } from './CapsuleStyleBadge';
+import {
+  projectCapsuleOutputStyle,
+  sameCapsuleOutputStyle,
+  type CapsuleOutputStyle,
+} from './capsuleOutputStyle';
 import { useMainCaptionTrace } from './useMainCaptionTrace';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
 import { getSettings } from '../../api/preferences';
@@ -193,8 +200,6 @@ interface ClassicCapsuleProps {
   message?: string;
   transcript?: string;
   transcriptFontSize?: number;
-  transcriptVisible?: boolean;
-  transcriptInSameWindow?: boolean;
   operating: boolean;
   translation: boolean;
   leaving: boolean;
@@ -202,7 +207,7 @@ interface ClassicCapsuleProps {
 }
 
 /**
- * Classic pill + "translating" badge (matching 1.3.14). Cancel/confirm call the
+ * Classic pill and transcript. Cancel/confirm call the
  * dictation commands directly (the capsule window never takes focus, so button
  * interaction only appears while recording).
  */
@@ -215,8 +220,6 @@ function ClassicCapsule({
   message,
   transcript,
   transcriptFontSize = 14,
-  transcriptVisible = false,
-  transcriptInSameWindow = true,
   operating,
   translation,
   leaving,
@@ -229,70 +232,35 @@ function ClassicCapsule({
   const onConfirm = useCallback(() => {
     void stopDictation(sessionId);
   }, [sessionId]);
-  const reduced = useReducedMotion();
-  // The top floating translation badge reflects only the current foreground session,
-  // never background processing jobs (which show their own status on the rear satellite).
-  const translating = translation && (state === 'recording' || state === 'transcribing' || state === 'polishing');
   const liveText = transcript?.trim() ?? '';
-  const classicGeometry = getClassicCapsuleGeometry(
-    os,
-    transcriptVisible || Boolean(liveText),
-    translating,
-    transcriptInSameWindow,
-  );
 
   return (
-    <>
-      {/* "Translating" badge — two nested layers:
-          the outer layer only does absolute positioning + horizontal centering
-          (translateX(-50%)) with no animation; the inner layer only does vertical
-          shift + fade. This avoids conflicting with translateX(-50%) and avoids
-          keyframe vs inline transform overrides causing visual jumps. */}
-      {/* The language picker belongs to the interactive capsule, even when
-          Windows puts the transcript in a separate click-through rail. */}
-      <motion.div
-        initial={false}
-        animate={{ bottom: classicGeometry.badgeBottomOffset }}
-        transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-        style={{
-          position: 'absolute',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          pointerEvents: 'none',
-        }}
-      >
-        <CapsuleTranslationBadge
-          visible={translating && !leaving}
-          processing={state !== 'recording'}
+    <div className="ol-classic-capsule-stack">
+      {liveText && (
+        <CapsuleTranscriptRail
+          text={liveText}
+          fontSize={transcriptFontSize}
+          tone="frost"
+          stageWidth={hostMetrics.width}
+          maxWidth={hostMetrics.width - 16}
+          height={getCapsuleTranscriptRailHeight('classic')}
         />
-      </motion.div>
-      <div className="ol-classic-capsule-stack">
-        {liveText && (
-          <CapsuleTranscriptRail
-            text={liveText}
-            fontSize={transcriptFontSize}
-            tone="frost"
-            stageWidth={hostMetrics.width}
-            maxWidth={hostMetrics.width - 16}
-            height={getCapsuleTranscriptRailHeight('classic')}
-          />
-        )}
-        <OpenLessPill
-          sessionId={sessionId}
-          os={os}
-          state={state}
-          level={level}
-          insertedChars={insertedChars}
-          message={message}
-          operating={operating}
-          translation={translation}
-          leaving={leaving}
-          warming={warming}
-          onCancel={onCancel}
-          onConfirm={onConfirm}
-        />
-      </div>
-    </>
+      )}
+      <OpenLessPill
+        sessionId={sessionId}
+        os={os}
+        state={state}
+        level={level}
+        insertedChars={insertedChars}
+        message={message}
+        operating={operating}
+        translation={translation}
+        leaving={leaving}
+        warming={warming}
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />
+    </div>
   );
 }
 
@@ -378,6 +346,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const os = forcedOs ?? getRuntimeOS();
   const isTauri = isTauriHost();
   const [publishInputRegions] = useState(createCapsuleRegionPublisher);
+  const [pickerController] = useState(() => new CapsulePickerMenu());
   const preview = useMemo(() => getPreviewCapsulePayload(), []);
   const reducedMotion = useReducedMotion();
   const metrics = getCapsulePillMetrics(os);
@@ -401,6 +370,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const transcriptViewRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
+  const [outputStyle, setOutputStyle] = useState<CapsuleOutputStyle | null>(null);
+  const [stylePickerEnabled, setStylePickerEnabled] = useState(false);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
@@ -548,6 +519,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         transcriptViewRef.current = nextTranscript;
         if (nextTranscript !== previousTranscript) setLocalAsrText(nextTranscript.text);
         setTranslation(p.translation === true);
+        const nextOutputStyle = projectCapsuleOutputStyle(p);
+        setOutputStyle((current) =>
+          sameCapsuleOutputStyle(current, nextOutputStyle) ? current : nextOutputStyle,
+        );
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
         const style = parseCapsuleStyle(p.capsuleStyle);
@@ -646,6 +621,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       if (
         !(await events.preferences((preferences) => {
           preferenceRevision += 1;
+          setStylePickerEnabled(
+            preferences.showCapsule && preferences.skipAutoStylePickerEnabled === true,
+          );
           setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
           setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
           const next = parseCapsuleStyle(preferences.capsuleStyle);
@@ -659,11 +637,16 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       const revisionAtRead = preferenceRevision;
       const preferences = await getSettings();
       const next = parseCapsuleStyle(preferences.capsuleStyle);
-      if (!cancelled && revisionAtRead === preferenceRevision && next) {
+      if (!cancelled && revisionAtRead === preferenceRevision) {
+        setStylePickerEnabled(
+          preferences.showCapsule && preferences.skipAutoStylePickerEnabled === true,
+        );
         setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
         setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
-        stylePreferenceReadyRef.current = true;
-        setCapsuleStyle(next);
+        if (next) {
+          stylePreferenceReadyRef.current = true;
+          setCapsuleStyle(next);
+        }
       }
     })().catch((error) => console.warn('[capsule] preferences subscription failed', error));
     return () => {
@@ -757,7 +740,6 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // suggestion card, and the hidden idle branch.
   const renderedState: CapsuleState = state === 'idle' ? lastVisibleState : state;
   const renderedSelectionPolish = state === 'idle' ? lastVisibleSelectionPolish : selectionPolish;
-  const showSiriBadge = !leaving && translation;
   const renderedMessage =
     state === 'idle'
       ? lastVisibleMessage
@@ -776,6 +758,18 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const showLiveTranscript = state !== 'idle' && liveTranscript.length > 0;
   const transcriptVisible =
     showLiveTranscript && (state === 'recording' || (!insertFallback && suggestions.length === 0));
+  const translating =
+    !leaving &&
+    translation &&
+    (!isClassic || ['recording', 'transcribing', 'polishing'].includes(renderedState));
+  const badgeOffset = isClassic
+    ? getClassicCapsuleGeometry(
+        os,
+        transcriptVisible || (!splitTranscriptRail && showLiveTranscript),
+        translating || Boolean(outputStyle),
+        !splitTranscriptRail,
+      ).badgeBottomOffset
+    : badgeBottom;
   const observeCaptionTrace = useMainCaptionTrace(
     transcriptViewRef,
     transcriptVisible && !splitTranscriptRail ? liveTranscript : '',
@@ -980,6 +974,35 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           </button>
         );
       })()}
+      {!renderedSelectionPolish && (
+        <motion.div
+          className="ol-capsule-status-lane"
+          data-with-style={Boolean(outputStyle)}
+          data-translating={translating}
+          initial={false}
+          animate={{ bottom: badgeOffset }}
+          transition={{ duration: reducedMotion || !isClassic ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {isClassic ? (
+            <CapsuleTranslationBadge
+              pickerController={pickerController}
+              visible={translating}
+              processing={state !== 'recording'}
+            />
+          ) : (
+            <div className="ol-siri-translation-badge" aria-hidden={!translating}>
+              <span />
+              {t('capsule.translating')}
+            </div>
+          )}
+          <CapsuleStyleBadge
+            style={outputStyle}
+            pickerController={pickerController}
+            pickerEnabled={stylePickerEnabled && !leaving}
+            captureSessionId={state === 'recording' ? displayedSession : undefined}
+          />
+        </motion.div>
+      )}
       {!renderedSelectionPolish &&
         (isClassic ? (
           <ClassicCapsule
@@ -991,94 +1014,39 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             message={renderedState === 'transcribing' ? undefined : renderedMessage}
             transcript={splitTranscriptRail ? '' : liveTranscript}
             transcriptFontSize={transcriptFontSize}
-            transcriptVisible={transcriptVisible}
-            transcriptInSameWindow={!splitTranscriptRail}
             operating={operatingRef.current}
             translation={translation}
             leaving={leaving}
             warming={warming}
           />
         ) : (
-          <>
-            {/* "Translating" badge — two nested layers:
-          the outer layer only does absolute positioning + horizontal centering
-          (translateX(-50%)) with no animation; the inner layer only does vertical
-          shift + fade. This avoids conflicting with translateX(-50%) and avoids
-          keyframe vs inline transform overrides causing visual jumps. */}
+          <div className="ol-siri-capsule-stack">
+            {showLiveTranscript && !splitTranscriptRail && (
+              <CapsuleTranscriptRail
+                text={liveTranscript}
+                fontSize={transcriptFontSize}
+                tone="frost"
+                stageWidth={hostMetrics.width}
+                maxWidth={hostMetrics.width - 24}
+                height={getCapsuleTranscriptRailHeight('siri')}
+              />
+            )}
             <div
               style={{
-                position: 'absolute',
-                left: '50%',
-                bottom: `${badgeBottom}px`,
-                transform: 'translateX(-50%)',
-                pointerEvents: 'none',
+                opacity: 1,
+                transition: 'opacity .28s var(--ol-motion-soft)',
               }}
             >
-              <div
-                aria-hidden={!showSiriBadge}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  fontSize: 10.5,
-                  fontWeight: 'var(--ol-font-weight-semibold)',
-                  color: 'var(--ol-capsule-center-ink)',
-                  background: 'var(--ol-capsule-badge-bg)',
-                  border: '1px solid var(--ol-capsule-pill-border)',
-                  borderRadius: 999,
-                  padding: '4px 10px',
-                  letterSpacing: '0.02em',
-                  whiteSpace: 'nowrap',
-                  // Hidden: starts just below the orb; shown: settles above the orb.
-                  opacity: showSiriBadge ? 1 : 0,
-                  transform: showSiriBadge
-                    ? 'translateY(0) scale(1)'
-                    : 'translateY(40px) scale(.88)',
-                  transformOrigin: 'center bottom',
-                  transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
-                  willChange: 'opacity, transform',
-                }}
-              >
-                <span
-                  style={{
-                    width: 5,
-                    height: 5,
-                    borderRadius: 999,
-                    background: 'rgba(150, 185, 255, 0.95)',
-                    boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
-                  }}
-                />
-                {t('capsule.translating')}
-              </div>
+              <VoiceOrbStage
+                os={os}
+                state={renderedState}
+                level={leaving ? 0 : level}
+                warming={!leaving && warming}
+                warmupMs={warmupMs}
+                message={renderedMessage}
+              />
             </div>
-            <div className="ol-siri-capsule-stack">
-              {showLiveTranscript && !splitTranscriptRail && (
-                <CapsuleTranscriptRail
-                  text={liveTranscript}
-                  fontSize={transcriptFontSize}
-                  tone="frost"
-                  stageWidth={hostMetrics.width}
-                  maxWidth={hostMetrics.width - 24}
-                  height={getCapsuleTranscriptRailHeight('siri')}
-                />
-              )}
-              <div
-                style={{
-                  opacity: 1,
-                  transition: 'opacity .28s var(--ol-motion-soft)',
-                }}
-              >
-                <VoiceOrbStage
-                  os={os}
-                  state={renderedState}
-                  level={leaving ? 0 : level}
-                  warming={!leaving && warming}
-                  warmupMs={warmupMs}
-                  message={renderedMessage}
-                />
-              </div>
-            </div>
-          </>
+          </div>
         ))}
       {renderedSelectionPolish && (
         <SelectionPolishNotice state={renderedState} message={renderedMessage} />

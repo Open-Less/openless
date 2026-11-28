@@ -47,6 +47,7 @@ function compileStandalone(relativePath) {
 }
 const auxiliaryEventsCode = compileStandalone('../src/runtime/windows/auxiliaryEvents.ts');
 const dictationEventsCode = compileStandalone('../src/api/dictation.ts');
+const outputStyleCode = compileStandalone('../src/features/capsule/capsuleOutputStyle.ts');
 
 function bindNativeAdapter(scope, tauri = true) {
   const runtime = {
@@ -71,6 +72,8 @@ vm.runInNewContext(
   compile(readFileSync(new URL('../src/lib/backendEvent.ts', import.meta.url), 'utf8')),
   backend,
 );
+const outputStyle = { exports: {} };
+vm.runInNewContext(outputStyleCode, outputStyle);
 const effectCode = compile(`globalThis.replayEffect = (${effect});`);
 const railSource = readFileSync(
   new URL('../src/features/capsule/LiveTranscriptPill.tsx', import.meta.url),
@@ -178,10 +181,11 @@ function mount({
   const writes = [];
   const warnings = [];
   const traceCalls = [];
-  const values = { setState: 'idle', setLocalAsrText: '' };
+  const values = { setState: 'idle', setLocalAsrText: '', setOutputStyle: null };
   let requests = 0;
   const scope = {
     ...backend.exports,
+    ...outputStyle.exports,
     isTauri: true,
     isTauriHost: () => true,
     capsuleStateFirstLogged: true,
@@ -250,6 +254,7 @@ function mount({
     'setMessage',
     'setLocalAsrText',
     'setTranslation',
+    'setOutputStyle',
     'setWarming',
     'setSelectionPolish',
     'setQa',
@@ -261,7 +266,8 @@ function mount({
     'setEnabled',
     'setFontSize',
   ]) {
-    scope[name] = (value) => {
+    scope[name] = (update) => {
+      const value = typeof update === 'function' ? update(values[name]) : update;
       values[name] = value;
       writes.push([name, value]);
     };
@@ -305,10 +311,16 @@ function transcript(view, sequence, text, sessionId = 'session') {
 
 // A lazy mirror replays a session whose starting event already happened.
 {
-  const view = mount({ snapshot: () => frame() });
-  await until(() => view.values.setState === 'recording');
+  const style = { skipAutoStyle: true, stylePackId: 'builtin.formal', stylePackName: 'Formal' };
+  const view = mount({ snapshot: () => frame(style) });
+  await until(
+    () => view.values.setOutputStyle?.packId === style.stylePackId || view.warnings.length > 0,
+  );
+  assert.equal(view.warnings.length, 0, view.warnings.map(([, error]) => String(error)).join('\n'));
+  assert.equal(view.values.setState, 'recording');
+  assert.equal(view.values.setOutputStyle.name, 'Formal');
   assert.equal(view.values.setLocalAsrText, 'existing text');
-  view.emit('capsule:state', { state: 'recording', sessionId: 'session' });
+  view.emit('capsule:state', { ...style, state: 'recording', sessionId: 'session' });
   assert.equal(view.values.setLocalAsrText, 'existing text');
   transcript(view, 11, 'updated text');
   assert.equal(view.values.setLocalAsrText, 'updated text');
@@ -319,6 +331,7 @@ function transcript(view, sequence, text, sessionId = 'session') {
   });
   view.emit('capsule:state', { state: 'done', sessionId: 'session' });
   assert.equal(view.values.setLocalAsrText, '');
+  assert.equal(view.values.setOutputStyle, null);
   release(view);
 }
 

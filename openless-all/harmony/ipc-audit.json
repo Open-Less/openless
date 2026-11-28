@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 190,
+  "total": 195,
   "wired": 112,
-  "missing": 78,
+  "missing": 83,
   "commands": [
     {
       "name": "accept_pending_correction",
@@ -467,6 +467,13 @@
       "implementation": "unimplemented"
     },
     {
+      "name": "get_capsule_style_menu_request",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "get_credentials",
       "calledFrom": [
         "src/lib/ipc/asr-credentials.ts"
@@ -479,6 +486,13 @@
         "src/lib/ipc/settings.ts"
       ],
       "implementation": "rust"
+    },
+    {
+      "name": "get_dictation_style_target",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "get_dictation_translation_target",
@@ -1048,6 +1062,13 @@
       "implementation": "unimplemented"
     },
     {
+      "name": "set_capsule_style_menu",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
       "name": "set_capsule_transcript_visible",
       "calledFrom": [
         "src/lib/ipc/dictation.ts"
@@ -1140,6 +1161,13 @@
     },
     {
       "name": "set_shortcut_recording_active",
+      "calledFrom": [
+        "src/lib/ipc/hotkeys.ts"
+      ],
+      "implementation": "unimplemented"
+    },
+    {
+      "name": "set_skip_auto_style_hotkey",
       "calledFrom": [
         "src/lib/ipc/hotkeys.ts"
       ],
@@ -1285,6 +1313,13 @@
         "src/lib/ipc/permissions.ts"
       ],
       "implementation": "arkts"
+    },
+    {
+      "name": "update_dictation_style",
+      "calledFrom": [
+        "src/lib/ipc/dictation.ts"
+      ],
+      "implementation": "unimplemented"
     },
     {
       "name": "update_setting_fields",

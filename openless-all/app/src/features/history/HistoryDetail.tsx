@@ -17,6 +17,7 @@ import { AudioRecordingPlayer } from './AudioRecordingPlayer';
 import { HistoryActionMenu } from './HistoryActionMenu';
 import { RepolishPanel, HistoryResultCard } from './RepolishPanel';
 import { formatDuration, formatStepDuration, TRUNCATED_PILL_STYLE } from './presentation';
+import { hasSelectionOriginal } from './selectionOriginals';
 import { useHistoryEntryActions } from './useHistoryEntryActions';
 import './history.css';
 
@@ -76,6 +77,8 @@ export function HistoryDetail({
   const hasRaw = Boolean(item.rawTranscript);
   const activeView = hasRaw ? contentView : 'polished';
   const showingRaw = activeView === 'raw';
+  const copyingSelectionOriginal = showingRaw && hasSelectionOriginal(item);
+  const copyLabel = copyingSelectionOriginal ? t('history.copyOriginal') : t('common.copy');
   const activeCopied = showingRaw ? justCopiedRaw : justCopied;
   const hasAsr = Boolean(item.asrProvider || item.asrMs != null);
   const hasPolish = Boolean(item.llmProvider || item.llmModel || item.polishMs != null);
@@ -234,13 +237,17 @@ export function HistoryDetail({
         </div>
         <div className="ol-history-content-footer">
           <Btn
-            className="ol-history-copy-btn"
+            className={
+              copyingSelectionOriginal
+                ? 'ol-history-copy-btn ol-history-copy-btn--original'
+                : 'ol-history-copy-btn'
+            }
             icon={activeCopied ? 'check' : 'copy'}
             variant="ghost"
             size="sm"
             onClick={() => void onCopy(showingRaw)}
           >
-            {activeCopied ? t('common.copied') : t('common.copy')}
+            {activeCopied ? t('common.copied') : copyLabel}
           </Btn>
         </div>
       </div>

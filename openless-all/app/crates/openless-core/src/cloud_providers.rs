@@ -1527,7 +1527,13 @@ async fn run_cloud_polish(
     if let Some(error) = stream.take_error() {
         return Err(error);
     }
-    let polished = result.map_err(map_polish_error)?;
+    let polished = result.map_err(|error| {
+        if context.polish.selection_input {
+            map_selection_provider_error(error)
+        } else {
+            map_polish_error(error)
+        }
+    })?;
     if cancellation.is_cancelled() {
         return Err(cancelled_provider_error());
     }
@@ -1549,6 +1555,8 @@ async fn run_cloud_polish(
                     "[cloud-provider] polish+translate response missing markers; using plain translation"
                 );
                 // No target section was published, so fallback starts at offset zero.
+                #[cfg(test)]
+                let _intent_fallback = crate::polish::live_acceptance::intent_fallback();
                 let stream = PolishStreamPublisher::new(
                     Arc::clone(&partials),
                     Arc::clone(&cancellation),
@@ -1972,6 +1980,34 @@ fn map_polish_error(error: crate::polish::LLMError) -> BackendError {
         crate::polish::LLMError::Network(_) | crate::polish::LLMError::Timeout
     );
     map_llm_error(error).retryable(transient)
+}
+
+/// The full selection is already durable before reaching a provider. A channel
+/// capacity failure must stay explicit; never retry with a shortened original.
+fn map_selection_provider_error(error: crate::polish::LLMError) -> BackendError {
+    let input_too_large = match &error {
+        crate::polish::LLMError::InvalidResponse { status, body }
+            if matches!(status, 400 | 413 | 422) =>
+        {
+            let body = body.to_ascii_lowercase();
+            *status == 413 || [
+                "context_length_exceeded",
+                "maximum context length",
+                "context window",
+                "input too long",
+                "input_too_long",
+                "input token count exceeds",
+                "request_too_large",
+            ].iter().any(|marker| body.contains(marker))
+        }
+        _ => false,
+    };
+    if input_too_large {
+        let mut error = BackendError::new(BackendErrorCode::Provider, "selectionInputTooLarge");
+        error.details = Some(serde_json::json!({"original_saved": true}));
+        return error;
+    }
+    map_polish_error(error)
 }
 
 pub struct SharedAuxiliaryTextPolisher {
@@ -2418,7 +2454,13 @@ pub(crate) async fn polish_with_omni_text(
     let polished = provider
         .complete(&system_prompt, &user_prompt, None)
         .await
-        .map_err(map_omni_error)?;
+        .map_err(|error| {
+            if context.polish.selection_input {
+                map_selection_provider_error(error)
+            } else {
+                map_omni_error(error)
+            }
+        })?;
     let cleaned = crate::output_cleaning::clean_polish_output(&polished);
     let text = if context.polish.translation_active {
         crate::split_polish_translate_output(&cleaned)

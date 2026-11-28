@@ -12,6 +12,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
+import { withCargoFixtureCleanup } from './ci-cargo-fixture-cleanup.mjs';
+import { createCargoFixtureRunner } from './ci-cargo-fixture-command.mjs';
 
 const workflow = (name) =>
   load(readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8'));
@@ -99,7 +101,7 @@ assert.equal(
 // macOS exposes /private/var through /var. Use one canonical path for relative
 // and absolute manifests so Cargo does not fingerprint two names for one source.
 const cargoScratch = realpathSync(mkdtempSync(join(tmpdir(), 'openless-cargo-reuse-')));
-try {
+withCargoFixtureCleanup(cargoScratch, () => {
   for (const path of ['host/src', 'shared/src', 'backend/src']) {
     mkdirSync(join(cargoScratch, path), { recursive: true });
   }
@@ -144,13 +146,7 @@ ci-shared = { path = "../shared" }
     CARGO_PROFILE_TEST_DEBUG: '0',
     CARGO_TARGET_DIR: join(cargoScratch, 'host/target'),
   };
-  const cargo = (args) =>
-    spawnSync('cargo', [...args, '--offline'], {
-      cwd: cargoScratch,
-      env: cargoEnv,
-      encoding: 'utf8',
-      timeout: 30_000,
-    });
+  const cargo = createCargoFixtureRunner(cargoScratch, cargoEnv);
   const expectSuccess = (result) => {
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -205,9 +201,7 @@ ci-shared = { path = "../shared" }
   assert.ifError(broken.error);
   assert.notEqual(broken.status, 0);
   assert.match(broken.stderr, /production diagnostics checked/);
-} finally {
-  rmSync(cargoScratch, { recursive: true, force: true });
-}
+});
 
 // Run the real Windows build shell with only npm stubbed. Check artifact-flow
 // decisions, not the spelling of the commands: one compile, optional rebundle,

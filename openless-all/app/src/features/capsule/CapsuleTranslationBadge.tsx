@@ -9,23 +9,31 @@ import {
   createCapsuleSubscriptions,
   getDictationTranslationTarget,
   selectDictationTranslationTarget,
+  setCapsuleLanguageMenu,
   type DictationTranslationTarget,
 } from '../../api/dictation';
 import { localizedLanguages, nativeLanguageName } from '../../lib/languageCatalog';
 import { isTranslationTargetRedundant } from '../../lib/translationTarget';
-import { useCapsuleLanguageMenu } from './useCapsuleLanguageMenu';
+import { CapsulePickerMenu, type CapsulePickerDeps } from './capsulePickerMenu';
+import { useCapsulePickerMenu } from './useCapsulePickerMenu';
 import './CapsuleStyles.css';
+
+const setNativeMenu: CapsulePickerDeps['setNativeMenu'] = (open, { sessionId }) =>
+  setCapsuleLanguageMenu(open, sessionId);
 
 /** The same Base UI menu as settings, with temporary native headroom above the capsule. */
 export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
+  pickerController,
   visible = true,
   processing = false,
 }: {
+  pickerController?: CapsulePickerMenu;
   visible?: boolean;
   processing?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const reduced = useReducedMotion();
+  const [standalonePicker] = useState(() => pickerController ?? new CapsulePickerMenu());
   const [snapshot, setSnapshot] = useState<DictationTranslationTarget | null>(null);
   const [savedTarget, setSavedTarget] = useState('');
   const [busy, setBusy] = useState(false);
@@ -112,7 +120,10 @@ export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
     setError(false);
   }, [snapshot?.sessionId]);
 
-  const menu = useCapsuleLanguageMenu({
+  const menu = useCapsulePickerMenu({
+    controller: pickerController ?? standalonePicker,
+    kind: 'language',
+    setNativeMenu,
     anchor,
     target: snapshot,
     visible: visible && !processing,
@@ -189,7 +200,7 @@ export const CapsuleTranslationBadge = memo(function CapsuleTranslationBadge({
               onChange={(value) => void change(value)}
               side="top"
               popupStyle={{ width: 240 }}
-              popupClassName="ol-capsule-language-popup"
+              popupClassName="ol-capsule-picker-popup ol-capsule-language-popup"
             />
           </div>
         </div>

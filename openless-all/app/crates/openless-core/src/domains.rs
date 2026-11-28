@@ -337,12 +337,70 @@ pub struct SelectionCapture {
     pub source_app: Option<String>,
 }
 
+/// Core-issued authority for one capture request. Revocation survives a delayed
+/// host call: an old request owns its own marker, not a bounded tombstone entry
+/// or the host's current generation. It carries no native target or user text.
+#[derive(Debug, Clone)]
+pub struct SelectionCaptureAuthorization {
+    session_id: SessionId,
+    revoked: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SelectionCaptureAuthorization {
+    pub(crate) fn new(session_id: SessionId) -> Self {
+        Self {
+            session_id,
+            revoked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn allows(&self, session_id: SessionId) -> bool {
+        self.session_id == session_id
+            && !self.revoked.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Only Core revokes this marker, before publishing a terminal state or a
+    /// successor. No host code, callbacks, I/O or host locks run at this boundary.
+    pub(crate) fn revoke(&self) {
+        self.revoked.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Platform seam for capturing and replacing the current selection.
 ///
 /// The core owns the session and preview state. Implementations may retain an
 /// opaque platform target internally, keyed by `SessionId`, but must never
 /// expose native handles through this Interface.
 pub trait SelectionRuntimeAdapter: Send + Sync {
+    /// Hosts with shared target registration must check this authority *inside*
+    /// their reservation lock, before invalidating another session or mutating
+    /// the registry. Do not call back into Core from that critical section.
+    /// The default preserves supplied-text/legacy hosts; it checks cancellation
+    /// around capture but does not claim to fence a host's shared registry.
+    fn capture_authorized(
+        &self,
+        session_id: SessionId,
+        supplied_text: Option<String>,
+        authorization: SelectionCaptureAuthorization,
+    ) -> BoxFuture<'static, Result<SelectionCapture, BackendError>> {
+        if !authorization.allows(session_id) {
+            return Box::pin(async {
+                Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture revoked"))
+            });
+        }
+        let capture = self.capture(session_id, supplied_text);
+        Box::pin(async move {
+            if !authorization.allows(session_id) {
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture revoked"));
+            }
+            let result = capture.await;
+            if !authorization.allows(session_id) {
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture revoked"));
+            }
+            result
+        })
+    }
+
     fn capture(
         &self,
         session_id: SessionId,

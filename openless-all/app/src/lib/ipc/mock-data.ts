@@ -18,6 +18,7 @@ import type {
 import { OL_DATA } from '../mockData';
 import { publishPreviewChange } from '../../preview/events';
 import { readPreviewThemePreference } from '../../preview/preferences';
+import { getShortcutPlatform } from '../../runtime/environment';
 import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
@@ -94,6 +95,11 @@ export let mockSettings: UserPreferences = {
   outputLanguagePreference: 'auto',
   qaSaveHistory: false,
   customComboHotkey: null,
+  skipAutoStyleHotkey: {
+    primary: getShortcutPlatform().isMac ? 'LeftCommand' : '',
+    modifiers: [],
+  },
+  skipAutoStylePickerEnabled: false,
   translationHotkey: { primary: 'Shift', modifiers: [] },
   switchStyleHotkey: {
     primary: 'S',

@@ -1,7 +1,8 @@
 /* Shared by the recording pill and its translation badge in every host. */
 .ol-default-capsule,
 .ol-processing-satellite,
-.ol-classic-translation {
+.ol-classic-translation,
+.ol-capsule-style-badge {
   --ol-pill-scheme: light;
   --ol-pill-fill: rgb(255 255 255 / 92%);
   --ol-pill-border: rgb(79 91 115 / 24%);
@@ -26,7 +27,8 @@
 }
 [data-ol-theme='dark'] .ol-default-capsule,
 [data-ol-theme='dark'] .ol-processing-satellite,
-[data-ol-theme='dark'] .ol-classic-translation {
+[data-ol-theme='dark'] .ol-classic-translation,
+[data-ol-theme='dark'] .ol-capsule-style-badge {
   --ol-pill-scheme: dark;
   --ol-pill-fill: rgb(32 39 52 / 92%);
   --ol-pill-border: rgb(218 231 255 / 26%);
@@ -97,9 +99,24 @@
   gap: 8px;
 }
 
-.ol-classic-translation {
+.ol-capsule-status-lane {
+  position: absolute;
+  inset-inline: 8px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.ol-capsule-status-lane[data-with-style='true'][data-translating='false']
+  > :is(.ol-classic-translation, .ol-siri-translation-badge) {
+  position: absolute;
+}
+.ol-classic-translation,
+.ol-capsule-style-badge {
   display: inline-flex;
-  flex: 0 0 28px;
+  flex: 0 1 auto;
+  min-width: 0;
   height: 28px;
   box-sizing: border-box;
   align-items: center;
@@ -118,13 +135,67 @@
   white-space: nowrap;
   transform-origin: center bottom;
   will-change: transform, opacity;
+}
+.ol-classic-translation {
   transition: padding-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ol-capsule-style-badge {
+  flex: 0 0 auto;
+  gap: 5px;
+  height: auto;
+  min-height: 28px;
+  max-width: 100%;
+  font-size: 0.6875rem;
+  font-weight: var(--ol-font-weight-medium);
+}
+.ol-capsule-status-lane[data-translating='true'] .ol-capsule-style-badge {
+  max-width: max(42%, calc(100% - 250px));
+}
+.ol-capsule-style-badge > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ol-capsule-style-badge[data-error='true'] {
+  color: var(--ol-pill-error);
+}
+.ol-siri-translation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: var(--ol-font-weight-semibold);
+  color: var(--ol-capsule-center-ink);
+  background: var(--ol-capsule-badge-bg);
+  border: 1px solid var(--ol-capsule-pill-border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transform-origin: center bottom;
+  transition: opacity 0.24s ease-out, transform 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+.ol-siri-translation-badge[aria-hidden='true'] {
+  opacity: 0;
+  transform: translateY(40px) scale(0.88);
+}
+.ol-siri-translation-badge > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgb(150 185 255 / 95%);
+  box-shadow: 0 0 8px rgb(90 140 255 / 90%);
 }
 .ol-classic-translation[data-picker-open='true'] {
   padding-right: 4px;
 }
 .ol-classic-translation-label {
   flex: 0 0 auto;
+}
+.ol-capsule-status-lane[data-with-style='true'] .ol-classic-translation-label {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Pure CSS grid-template-columns 0fr -> 1fr avoids Framer Motion width:'auto' JS
    layout measurement stalls on first Shift press and after long idle. */
@@ -145,6 +216,10 @@
   margin-left: 6px;
   opacity: 1;
 }
+.ol-capsule-status-lane[data-with-style='true'] .ol-translation-language-collapse {
+  flex: 0 1 auto;
+  min-width: 0;
+}
 @media (prefers-reduced-motion: reduce) {
   .ol-translation-language-collapse {
     transition: none;
@@ -162,14 +237,40 @@
   width: max-content;
   max-width: 174px;
 }
-.ol-select-popup.ol-capsule-language-popup {
+.ol-select-popup.ol-capsule-picker-popup {
   background: var(--ol-select-popover-bg);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   transition: none;
 }
-.ol-capsule-language-popup[data-ending-style] {
+.ol-capsule-picker-popup[data-ending-style] {
   pointer-events: none;
+}
+.ol-select-popup.ol-capsule-style-popup {
+  width: 19rem;
+  font-size: 0.8125rem;
+}
+.ol-select-item.ol-capsule-style-option {
+  width: 100%;
+  min-height: 2rem;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  grid-template-columns: minmax(0, 1fr) 12px;
+}
+.ol-select-item.ol-capsule-style-option > :first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.ol-capsule-style-option .ol-select-check {
+  grid-column: 2;
+}
+.ol-capsule-style-error {
+  padding: 6px 10px;
+  color: var(--ol-err);
+  overflow-wrap: anywhere;
 }
 .ol-translation-language .ol-select-trigger {
   height: 22px;

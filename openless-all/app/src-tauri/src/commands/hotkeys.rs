@@ -45,6 +45,17 @@ pub fn set_translation_hotkey(
     super::settings::persist_strict_settings(&coord, prefs)
 }
 
+#[tauri::command]
+pub fn set_skip_auto_style_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: Option<ShortcutBinding>,
+) -> Result<(), String> {
+    let mut prefs = coord.backend().get_preferences();
+    prefs.skip_auto_style_hotkey = binding.unwrap_or_else(ShortcutBinding::unassigned);
+    reject_hotkey_collisions(&prefs)?;
+    super::settings::persist_strict_settings(&coord, prefs)
+}
+
 /// Sets the "switch style" global hotkey. `binding == None` (frontend passes null) = disable:
 /// clears the binding and unregisters the global key.
 #[tauri::command]

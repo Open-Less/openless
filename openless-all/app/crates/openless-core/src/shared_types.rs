@@ -646,6 +646,10 @@ pub struct UserPreferences {
     pub custom_combo_hotkey: Option<ComboBinding>,
     #[serde(default = "default_translation_hotkey")]
     pub translation_hotkey: ShortcutBinding,
+    #[serde(default = "default_skip_auto_style_hotkey")]
+    pub skip_auto_style_hotkey: ShortcutBinding,
+    #[serde(default)]
+    pub skip_auto_style_picker_enabled: bool,
     /// "Switch style" global hotkey. `None` = disabled (no global key
     /// registered); `Some(...)` = registered. Defaults to `Some(default key)`
     /// — zero behavior change for existing users, only newly clearable
@@ -1187,6 +1191,9 @@ struct UserPreferencesWire {
     qa_save_history: bool,
     custom_combo_hotkey: Option<ComboBinding>,
     translation_hotkey: Option<ShortcutBinding>,
+    skip_auto_style_hotkey: Option<ShortcutBinding>,
+    #[serde(default)]
+    skip_auto_style_picker_enabled: bool,
     switch_style_hotkey: Option<ShortcutBinding>,
     open_app_hotkey: Option<ShortcutBinding>,
     #[serde(default)]
@@ -1442,6 +1449,8 @@ impl Default for UserPreferencesWire {
             qa_save_history: prefs.qa_save_history,
             custom_combo_hotkey: prefs.custom_combo_hotkey,
             translation_hotkey: None,
+            skip_auto_style_hotkey: None,
+            skip_auto_style_picker_enabled: prefs.skip_auto_style_picker_enabled,
             // Carry the default key (Some) so a missing field still means enabled; None exclusively means "user disabled".
             switch_style_hotkey: prefs.switch_style_hotkey,
             open_app_hotkey: prefs.open_app_hotkey,
@@ -1594,6 +1603,28 @@ impl<'de> Deserialize<'de> for UserPreferences {
                     right: AndroidOverlayGestureAction::None,
                 });
 
+        let skip_auto_style_hotkey = wire.skip_auto_style_hotkey.clone().unwrap_or_else(|| {
+            let proposed = default_skip_auto_style_hotkey();
+            // A newly introduced default must never steal an existing user's key.
+            let occupied = [
+                Some(&dictation_hotkey), wire.translation_hotkey.as_ref(), wire.qa_hotkey.as_ref(),
+                wire.switch_style_hotkey.as_ref(), wire.open_app_hotkey.as_ref(),
+                wire.quick_note_hotkey.as_ref(), wire.coding_agent_voice_hotkey.as_ref(),
+                wire.coding_agent_panel_hotkey.as_ref(), wire.coding_agent_quick_hotkey.as_ref(),
+                selection_polish_hotkey.as_ref(),
+            ].into_iter().flatten().any(|other| crate::shortcut_types::bindings_overlap(&proposed, other));
+            if occupied { ShortcutBinding::unassigned() } else { proposed }
+        });
+        // Older previews assigned bare Alt on Windows. Until a paired,
+        // menu-safe native implementation is verified, migrate modifier taps
+        // to unassigned; custom global combinations remain available.
+        #[cfg(target_os = "windows")]
+        let skip_auto_style_hotkey =
+            if crate::shortcut_types::legacy_modifier_trigger(&skip_auto_style_hotkey).is_some() {
+                ShortcutBinding::unassigned()
+            } else {
+                skip_auto_style_hotkey
+            };
         Ok(Self {
             hotkey: wire.hotkey,
             dictation_hotkey,
@@ -1702,6 +1733,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_hotkey: wire
                 .translation_hotkey
                 .unwrap_or_else(default_translation_hotkey),
+            skip_auto_style_hotkey,
+            skip_auto_style_picker_enabled: wire.skip_auto_style_picker_enabled,
             // Pass the Option through: None = user disabled — no
             // unwrap_or_else collapse back to the default key (the root
             // cause of #576 "can't disable"). A missing field falls to the
@@ -1972,6 +2005,16 @@ fn default_translation_hotkey() -> ShortcutBinding {
     }
 }
 
+pub(crate) fn default_skip_auto_style_hotkey() -> ShortcutBinding {
+    if cfg!(target_os = "windows") {
+        return ShortcutBinding::unassigned();
+    }
+    ShortcutBinding {
+        primary: if cfg!(target_os = "macos") { "LeftCommand" } else { "LeftAlt" }.into(),
+        modifiers: Vec::new(),
+    }
+}
+
 fn default_switch_style_hotkey() -> Option<ShortcutBinding> {
     Some(ShortcutBinding {
         primary: "S".into(),
@@ -2102,6 +2145,8 @@ impl Default for UserPreferences {
             qa_save_history: false,
             custom_combo_hotkey: None,
             translation_hotkey: default_translation_hotkey(),
+            skip_auto_style_hotkey: default_skip_auto_style_hotkey(),
+            skip_auto_style_picker_enabled: false,
             switch_style_hotkey: default_switch_style_hotkey(),
             open_app_hotkey: default_open_app_hotkey(),
             style_pack_hotkeys: Vec::new(),
@@ -2938,6 +2983,12 @@ pub struct CapsulePayload {
     /// user immediately knows this output goes through the translation
     /// pipeline. See issue #4.
     pub translation: bool,
+    #[serde(default)]
+    pub skip_auto_style: bool,
+    #[serde(default)]
+    pub style_pack_id: Option<String>,
+    #[serde(default)]
+    pub style_pack_name: Option<String>,
     /// Whether this is a Less Computer (voice agent controlling the
     /// computer) session. The frontend switches the processing label from
     /// "thinking" to "using" — the agent is operating the computer, not

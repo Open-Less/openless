@@ -29,6 +29,8 @@ mod capsule_focus;
 #[path = "coordinator/dictation_core.rs"]
 mod dictation;
 mod hotkey_loops;
+#[cfg(not(mobile))]
+mod style_menu;
 mod native_dictation_key;
 mod restore_runtime;
 #[cfg(all(not(mobile), target_os = "windows"))]
@@ -43,6 +45,8 @@ pub(crate) use capsule_focus::{
     restore_focus_target_if_possible,
 };
 use hotkey_loops::*;
+#[cfg(not(mobile))]
+use style_menu::*;
 use native_dictation_key::try_install_mouse_dictation;
 
 // Instance-local Less Computer replay source used by the compatibility command.
@@ -616,6 +620,7 @@ struct Inner {
     /// Mouse4/Mouse5 听写监听（WH_MOUSE_LL）；与 combo / side-aware 互斥。
     mouse_dictation: Mutex<Option<crate::mouse_dictation::MouseDictationMonitor>>,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    skip_auto_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     quick_note_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -803,6 +808,7 @@ impl Coordinator {
                 side_aware_combo: Mutex::new(None),
                 mouse_dictation: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
+                skip_auto_style_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
                 quick_note_hotkey: Mutex::new(None),
@@ -830,6 +836,8 @@ impl Coordinator {
             });
             #[cfg(all(not(mobile), target_os = "windows"))]
             bind_qa_selection_voice_target(&qa_context, &inner.selection_voice_host);
+            #[cfg(not(mobile))]
+            configure_style_menu(&inner);
             Self { inner }
         }
     }
@@ -943,6 +951,7 @@ impl Coordinator {
             side_aware_combo: Mutex::new(None),
             mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
+                skip_auto_style_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
             quick_note_hotkey: Mutex::new(None),
@@ -967,6 +976,7 @@ impl Coordinator {
             shutdown: AtomicBool::new(false),
         });
         bind_qa_selection_voice_target(&qa_context, &selection_voice_host);
+        configure_style_menu(&inner);
         Self { inner }
     }
 
@@ -1314,6 +1324,12 @@ impl Coordinator {
                     coord.start_selection_polish_hotkey_listener();
                     coord.start_combo_hotkey_listener();
                     coord.start_translation_hotkey_listener();
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    {
+                        let style_inner = Arc::clone(&coord.inner);
+                        std::thread::Builder::new().name("openless-style-hotkey-supervisor".into())
+                            .spawn(move || skip_auto_style_hotkey_supervisor_loop(style_inner)).ok();
+                    }
                     coord.start_switch_style_hotkey_listener();
                     coord.start_open_app_hotkey_listener();
                     coord.start_quick_note_hotkey_listener();
@@ -1409,6 +1425,15 @@ impl Coordinator {
 
     pub fn stop_translation_hotkey_listener(&self) {
         take_translation_hotkey_on_main_thread(&self.inner);
+    }
+
+    pub fn stop_skip_auto_style_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        if self.inner.host.run_on_main_thread(move || {
+            inner.skip_auto_style_hotkey.lock().take();
+        }).is_err() {
+            self.inner.skip_auto_style_hotkey.lock().take();
+        }
     }
 
     pub fn start_switch_style_hotkey_listener(&self) {
@@ -1613,6 +1638,8 @@ impl Coordinator {
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
+                #[cfg(not(mobile))]
+                configure_shift_translation(&self.inner, &monitor);
                 let adapter = monitor.kind();
                 let inner_clone = Arc::clone(&self.inner);
                 std::thread::Builder::new()
@@ -1667,6 +1694,10 @@ impl Coordinator {
         let previous = &change.previous;
         let next = &change.next;
         *self.inner.hotkey_runtime_target.lock() = next.clone();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if previous.skip_auto_style != next.skip_auto_style {
+            try_update_skip_auto_style_hotkey_binding(&self.inner)?;
+        }
         if previous.translation != next.translation {
             self.try_update_translation_hotkey_binding()?;
         }
