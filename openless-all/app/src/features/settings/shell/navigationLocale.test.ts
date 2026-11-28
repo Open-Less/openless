@@ -53,7 +53,10 @@ for (const [locale, translation] of Object.entries({
     'shiftTranslation.scope',
     ...ADVANCED_PAGES.flatMap((page) => [
       page.titleKey,
-      page.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${page.id}`,
+      // The references entry intentionally has no description (tabs.tsx).
+      ...(page.id === 'dictationReferences' ? [] : [
+        page.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${page.id}`,
+      ]),
     ]),
   ]) {
     if (!i18n.exists(key)) throw new Error(`${locale}: missing advanced navigation label ${key}`);

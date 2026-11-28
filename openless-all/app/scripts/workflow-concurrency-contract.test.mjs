@@ -29,9 +29,9 @@ assert.ok(
 );
 assert.ok(
   workflows.tauriRelease.includes(
-    "group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}-{3}', github.ref, inputs.platform, inputs.windows_hang_diagnostics, inputs.macos_smoke_sha) || format('{0}-{1}', github.ref, github.run_id) }}",
+    "group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/') && inputs.release_tag == '' && format('{0}-{1}-{2}-{3}-{4}', github.ref, inputs.platform, inputs.windows_hang_diagnostics, inputs.macos_smoke_sha, inputs.dev_build) || format('{0}-{1}', github.ref, github.run_id) }}",
   ),
-  'equivalent Tauri branch builds share a group; different platform, diagnostic, and exact-SHA smoke requests are independent',
+  'equivalent Tauri branch builds share a group; different platform, diagnostic, exact-SHA smoke, and Dev requests are independent',
 );
 assert.ok(
   workflows.tauriRelease.includes(
