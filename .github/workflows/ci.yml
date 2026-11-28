@@ -1082,6 +1082,11 @@ jobs:
           cargo test --locked -p openless-core --target-dir src-tauri/target --lib long_recording
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test clipboard_delivery
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test material_delivery
+
+      - name: Run selection style and protected delivery regressions
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        timeout-minutes: 15
+        run: |
           cargo test --locked -p openless-core --target-dir src-tauri/target --lib selection_prompt_preserves_explicit_and_legacy_imported_authorship
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test selection_bound_native --test selection_direct_delivery --test selection_recovery_notice --test selection_value_outcome
 
