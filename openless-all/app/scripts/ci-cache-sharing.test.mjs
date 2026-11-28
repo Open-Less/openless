@@ -24,7 +24,10 @@ const releaseHarmony = read('release-harmony.yml');
 const sharedKeys = (yaml) =>
   [...yaml.matchAll(/shared-key:\s*([^\s#]+)/g)].map((match) => match[1].trim());
 
-// Every write path must be gated on the beta branch. An ungated `actions/cache`
+// Shared CI write paths must be gated on the beta branch. Explicit branch-only
+// Dev package dispatches also retain their own dependency cache for repeated
+// trials; the weekly beta Dev build seeds the baseline for new branches.
+// An ungated `actions/cache`
 // writes one copy per pull request scope (`refs/pull/<n>/merge`), and those
 // copies are never restored again - they just occupy the 10 GB budget and evict
 // the branch trees. The HarmonyOS toolchain cache (1.77 GB) and the Rime NDK
