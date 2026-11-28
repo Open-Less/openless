@@ -8,6 +8,7 @@ import { canRetranscribeHistoryEntry } from '../../lib/history-retranscribe';
 import { formatHistoryTime } from '../../lib/localeFormat';
 import { useReducedMotion } from '../../lib/motion';
 import { getRuntimeOS } from '../../runtime/environment';
+import { isDesktop } from '../../lib/platform';
 import { useHotkeySettings } from '../../data/preferences';
 import { Button as Btn } from '../../ui/controls/Button';
 import { Segmented } from '../../ui/controls/Segmented';
@@ -19,6 +20,7 @@ import { RepolishPanel, HistoryResultCard } from './RepolishPanel';
 import { formatDuration, formatStepDuration, TRUNCATED_PILL_STYLE } from './presentation';
 import { hasSelectionOriginal } from './selectionOriginals';
 import { useHistoryEntryActions } from './useHistoryEntryActions';
+import { useHistoryLearning } from './HistoryLearning';
 import './history.css';
 
 interface Props {
@@ -48,6 +50,13 @@ export function HistoryDetail({
   const locale = i18n.resolvedLanguage || i18n.language;
   const os = getRuntimeOS();
   const { prefs } = useHotkeySettings();
+  const vocabulary = prefs?.vocabularyLearningEnabled === true;
+  const expression = prefs?.expressionLearningEnabled === true;
+  const openHistoryLearning = useHistoryLearning(item.id, { vocabulary, expression });
+  const canLearn =
+    isDesktop() && !quickNotesOnly && item.source === 'voice' &&
+    item.errorCode == null && !item.translationActive && item.polishSource !== 'translation' &&
+    Boolean(item.finalText.trim()) && (vocabulary || expression);
   const [contentView, setContentView] = useState<'polished' | 'raw'>(
     !item.finalText && ['selection_polish', 'selection_voice_edit'].includes(item.source ?? '')
       ? 'raw'
@@ -140,6 +149,7 @@ export function HistoryDetail({
           onRetranscribe={() => void onRetranscribe()}
           onDelete={onDelete}
           onRepolish={() => setRepolishOpen(true)}
+          onLearn={canLearn ? () => void openHistoryLearning() : undefined}
           onChooseSaveDirectory={() => void onChooseExportDirectory()}
           onResetSaveDirectory={() => void onResetExportDirectory()}
         />

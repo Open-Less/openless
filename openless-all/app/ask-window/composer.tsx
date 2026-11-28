@@ -1,7 +1,10 @@
 import { useCurrentAskNotice, useClearAskNotice, useAskNotice } from './notices';
 import { PromptBox, type PromptEffort } from '@/components/ui/prompt-box';
-import { Brain, Paperclip } from 'lucide-react';
+import { Brain, Paperclip, Quote, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useInteraction } from '../src/ui/overlays/InteractionProvider';
+import { askReferenceLabels } from '../src/i18n/askTurnReference';
+import { openTurnReferenceEditor, openTurnReferencePreview } from './turn-reference';
 import { AttachmentDeck } from './attachments';
 import {
   askLocale,
@@ -9,6 +12,7 @@ import {
   askErrorLabel,
   newRequestId,
   requestFingerprint,
+  requiresNewAskConversation,
   type AskClient,
   type AskFocus,
   type AskSnapshot,
@@ -80,6 +84,11 @@ export function useComposer({
   expanded,
   result,
   captureSubmitReceipt,
+  referenceBusy,
+  referenceText,
+  seedDraft,
+  setReference,
+  removeReference,
 }: {
   client: AskClient;
   snapshot: AskSnapshot;
@@ -91,8 +100,14 @@ export function useComposer({
   expanded: boolean;
   result?: ReactNode;
   captureSubmitReceipt: () => (turnId: string) => void;
+  referenceBusy: boolean;
+  referenceText?: string;
+  seedDraft?: string;
+  setReference: (text: string, draft: string) => void;
+  removeReference: () => void;
 }) {
-  const { conversationId, attachments } = snapshot;
+  const { conversationId, attachments, turnReference } = snapshot;
+  const { openDialog } = useInteraction(connected ? conversationId : undefined);
   const notice = useAskNotice();
   const clearNotice = useClearAskNotice();
   const currentNotice = useCurrentAskNotice();
@@ -103,7 +118,8 @@ export function useComposer({
     return () => { lifetime.current = false; };
   }, []);
   const editor = useRef<HTMLTextAreaElement>(null);
-  const draftRef = useRef('');
+  const draftRef = useRef(seedDraft ?? '');
+  const seeded = useRef(seedDraft !== undefined);
   const lastClear = useRef<Draft>();
   const sentDraft = useRef<{ turnId: string; draft: Draft }>();
   const [recoverDraft, setRecoverDraft] = useState<Draft>();
@@ -120,7 +136,7 @@ export function useComposer({
   const editorFingerprint = useRef('');
   const focusSeen = useRef('');
 
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(seedDraft ?? '');
   const [deepThinking, setDeepThinking] = useState(false);
   const [pending, setPending] = useState(false);
   const [acknowledgedTurn, setAcknowledgedTurn] = useState<string>();
@@ -130,6 +146,7 @@ export function useComposer({
   const [removing, setRemoving] = useState<ReadonlySet<string>>(new Set());
   const [cancelling, setCancelling] = useState<string>();
   const [isComposing, setIsComposing] = useState(false);
+  const [referenceRejected, setReferenceRejected] = useState(false);
 
   const turnId =
     snapshot.activeTurnId ??
@@ -139,8 +156,12 @@ export function useComposer({
       ? acknowledgedTurn
       : undefined);
   const attachmentsReady = attachments.every((item) => item.state === 'ready');
-  const cannotSubmit = !connected || pending || adding || removing.size > 0 || !attachmentsReady;
   const submission = snapshot.submission;
+  const referenceUsed = !!turnReference && (referenceRejected || turnReference.active === true ||
+    !!submission || !!acknowledgedTurn || snapshot.turns.length > 0);
+  const referenceLabels = askReferenceLabels(language);
+  const cannotSubmit = !connected || pending || adding || removing.size > 0 || !attachmentsReady ||
+    referenceBusy || referenceUsed;
   const current = submission?.currentTurnId === snapshot.activeTurnId ? submission : undefined;
   const showPolish = current?.route === 'edit' && current.status === 'polishing';
   const showWorking = current && (!current.route || current.route === 'write' || current.route === 'edit')
@@ -189,6 +210,14 @@ export function useComposer({
     if (!draftRef.current) replaceDraft(draft.text, draft.selection);
     else setRecoverDraft(draft);
   }
+
+  useLayoutEffect(() => {
+    if (seedDraft === undefined || seeded.current) return;
+    seeded.current = true;
+    if (draftRef.current || sentDraft.current || pendingRef.current) return;
+    draftRef.current = seedDraft;
+    setDraft(seedDraft);
+  }, [seedDraft]);
 
   useLayoutEffect(() => {
     const sent = sentDraft.current;
@@ -291,6 +320,8 @@ export function useComposer({
     const blocked =
       !connected ||
       pendingRef.current ||
+      referenceBusy ||
+      referenceUsed ||
       !!turnId ||
       adding ||
       request.attachmentIds.some((attachmentId) => !attachmentIds.has(attachmentId));
@@ -331,6 +362,7 @@ export function useComposer({
           ['busy', 'invalid_argument', 'cancelled'].includes(String(cause.code));
         const severity = recoverable ? 'warning' : 'error';
         if (restore) restoreDraft(restore);
+        if (requiresNewAskConversation(cause)) setReferenceRejected(true);
         notice(cause, severity, 'ask-send');
       })
       .finally(() => {
@@ -471,6 +503,41 @@ export function useComposer({
     }
   }, [connected]);
 
+  async function addReference() {
+    const text = await openTurnReferenceEditor(
+      openDialog,
+      referenceLabels,
+      !!submission || snapshot.turns.length > 0 || attachments.length > 0,
+    );
+    if (text !== undefined && lifetime.current && !pendingRef.current) setReference(text, draftRef.current);
+  }
+
+  async function previewReference() {
+    if (!turnReference) return;
+    try {
+      const validated = await client.snapshot(conversationId);
+      const reference = validated.turnReference;
+      if (!reference || reference.source !== turnReference.source || validated.conversationId !== conversationId) {
+        if (lifetime.current) notice({ code: 'askReferenceUnavailable' }, 'warning');
+        check();
+        return;
+      }
+      if (lifetime.current) {
+        await openTurnReferencePreview(
+          openDialog,
+          referenceLabels,
+          referenceLabels[reference.source],
+          reference.text ?? referenceText,
+        );
+      }
+    } catch (error) {
+      if (lifetime.current) notice(error, 'warning');
+      check();
+    }
+  }
+
+  const noticeLabel = currentNotice && askErrorLabel(currentNotice.code, language);
+
   const box = (
     <div
       className="composer"
@@ -480,12 +547,12 @@ export function useComposer({
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes('Files')) return;
         event.preventDefault();
-        event.dataTransfer.dropEffect = connected && !adding && !pending ? 'copy' : 'none';
+        event.dataTransfer.dropEffect = connected && !adding && !pending && !referenceBusy && !referenceUsed ? 'copy' : 'none';
       }}
       onDrop={(event) => {
         if (!event.dataTransfer.types.includes('Files')) return;
         event.preventDefault();
-        if (!connected || adding || pendingRef.current) return;
+        if (!connected || adding || pendingRef.current || referenceBusy || referenceUsed) return;
         const files = event.dataTransfer.files;
         if (files.length !== 1) {
           notice('Drop one PNG or JPEG image at a time.', 'warning', 'ask-attachment');
@@ -511,7 +578,7 @@ export function useComposer({
         inputProps={{
           'aria-label': idleLabel,
           'aria-describedby': attachments.length ? 'draft-references' : undefined,
-          readOnly: pending,
+          readOnly: pending || referenceBusy || referenceUsed,
           onKeyDown: (event) => {
             if (showDraftError && !['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) clearNotice();
             if (event.key === 'Escape' && !event.nativeEvent.isComposing && !composing.current && pendingRef.current) {
@@ -540,7 +607,7 @@ export function useComposer({
           },
         }}
         onValueChange={(value) => {
-          if (pendingRef.current) return;
+          if (pendingRef.current || referenceBusy || referenceUsed) return;
           lastClear.current =
             value === ''
               ? { text: draftRef.current, selection: selectionOf(editor.current) }
@@ -569,6 +636,30 @@ export function useComposer({
         }}
         beforeInput={<>
           {result}
+          {turnReference && (
+            <div className="ask-reference-row">
+              <button
+                type="button"
+                className="ask-reference-chip"
+                disabled={referenceBusy || !connected}
+                aria-label={`${referenceLabels.title} · ${referenceLabels[turnReference.source]}`}
+                onClick={() => void previewReference()}
+              >
+                <Quote size={14} aria-hidden="true" />
+                {referenceLabels[turnReference.source]}
+              </button>
+              <ActionButton label={referenceLabels.remove} disabled={referenceBusy || !connected}
+                onClick={removeReference}>
+                <X size={16} aria-hidden="true" />
+              </ActionButton>
+              {referenceUsed && !turnId && (
+                <button type="button" className="ask-reference-chip" disabled={referenceBusy || !connected}
+                  onClick={removeReference}>
+                  {referenceLabels.fresh}
+                </button>
+              )}
+            </div>
+          )}
           {recoverDraft && <details className="ask-inline-notice">
             <summary>Previous instruction</summary>
             <p className="result-text">{recoverDraft.text}</p>
@@ -601,8 +692,10 @@ export function useComposer({
           {showDraftError && currentNotice && (
             <div className="ask-draft-error-anchor" aria-hidden="true">
               <span className="ask-draft-error">
-                <span>{askErrorLabel(currentNotice.code, language).slice(0, -currentNotice.code.length)}</span>
-                <span>{currentNotice.code}</span>
+                {noticeLabel?.endsWith(currentNotice.code) ? <>
+                  <span>{noticeLabel.slice(0, -currentNotice.code.length)}</span>
+                  <span>{currentNotice.code}</span>
+                </> : <span>{noticeLabel}</span>}
               </span>
             </div>
           )}
@@ -611,11 +704,20 @@ export function useComposer({
           <>
             <ActionButton
               label="Attach a file"
-              disabled={adding || pending || !connected}
+              disabled={adding || pending || !connected || referenceBusy || referenceUsed}
               onClick={() => attach(() => client.addAttachment(conversationId))}
             >
               <Paperclip size={18} />
             </ActionButton>
+            {!turnReference && (
+              <ActionButton
+                label={referenceLabels.add}
+                disabled={referenceBusy || !!turnId || adding || pending || removing.size > 0 || !connected}
+                onClick={() => void addReference()}
+              >
+                <Quote size={18} />
+              </ActionButton>
+            )}
             <ActionButton
               label="Think deeply"
               pressed={deepThinking}

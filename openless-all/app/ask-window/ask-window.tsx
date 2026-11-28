@@ -2,7 +2,8 @@ import { AppViewport } from '../src/ui/layout/AppViewport';
 import { InteractionProvider } from '../src/ui/overlays/InteractionProvider';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { PromptBox } from '@/components/ui/prompt-box';
-import { askErrorLabel, type AskClient, type AskFocus, type AskSnapshot } from './client';
+import { askErrorLabel, askLocale, isAskReferenceUnavailable, type AskClient, type AskFocus, type AskSnapshot } from './client';
+import { askReferenceLabels } from '../src/i18n/askTurnReference';
 import { useComposer } from './composer';
 import { ConversationLayout, Sources, SubmissionResult } from './conversation';
 import { connectAskFeed } from './feed';
@@ -20,6 +21,11 @@ type SessionProps = {
   canDeliverVoice: () => boolean;
   expanded: boolean;
   captureSubmitReceipt: () => (turnId: string) => void;
+  referenceBusy: boolean;
+  referenceText?: string;
+  seedDraft?: string;
+  setReference: (text: string, draft: string) => void;
+  removeReference: () => void;
 };
 
 type Expansion = { width: number; height: number; bottom: number };
@@ -107,6 +113,12 @@ function AskScreen({ client }: { client: AskClient }) {
   const visibilityGeneration = useRef(0);
   const expanding = useRef<string>();
   const sessionId = useRef<string | null>();
+  const referencedConversation = useRef<string>();
+  const discardedReference = useRef<string>();
+  const referenceOperation = useRef(false);
+  const [referenceBusy, setReferenceBusy] = useState(false);
+  const [referenceRecovery, setReferenceRecovery] = useState(false);
+  const [manualReference, setManualReference] = useState<{ conversationId: string; text: string; draft: string }>();
   const [receipt, setReceipt] = useState<{ conversationId: string; turnId: string }>();
   const [expansion, setExpansion] = useState<Expansion>();
   const [snapshot, setSnapshot] = useState<AskSnapshot | null>();
@@ -121,6 +133,10 @@ function AskScreen({ client }: { client: AskClient }) {
     shown.current = false;
     feed.current?.disconnect();
     feed.current = undefined;
+    if (referencedConversation.current || referenceOperation.current) setSnapshot(null);
+    referencedConversation.current = undefined;
+    setManualReference(undefined);
+    setReferenceRecovery(false);
     setConnected(false);
   }, []);
 
@@ -197,6 +213,7 @@ function AskScreen({ client }: { client: AskClient }) {
           async current() {
             const current = await client.current();
             if (!destroyed && shown.current && attempt === connection) {
+              sessionId.current = current.conversationId;
               if (current.themeMode) theme.setTheme(current.themeMode);
               if (current.platform) setPlatform(current.platform);
               if (current.notice) notice(current.notice, 'warning', 'ask-window-notice');
@@ -206,15 +223,57 @@ function AskScreen({ client }: { client: AskClient }) {
           },
         },
         (view) => {
+          const lostReference = !!referencedConversation.current &&
+            (!view || (view.conversationId === referencedConversation.current && !view.turnReference));
+          if (lostReference) discardedReference.current = referencedConversation.current;
+          const discarded = !!view && view.conversationId === discardedReference.current;
           sessionId.current = view?.conversationId ?? null;
-          setSnapshot(view);
+          referencedConversation.current = !discarded && view?.turnReference ? view.conversationId : undefined;
+          setManualReference((current) =>
+            !discarded && view?.turnReference?.source === 'userProvided' && current?.conversationId === view.conversationId
+              ? current : undefined,
+          );
+          if (lostReference) {
+            clearPresentation();
+            notice({ code: 'askReferenceUnavailable' }, 'warning');
+            setReferenceRecovery(true);
+          } else if (view && !discarded) {
+            discardedReference.current = undefined;
+            setReferenceRecovery(false);
+          }
+          setSnapshot(lostReference || discarded ? null : view);
           setConnected(true);
         },
         (cause) => {
+          if (isAskReferenceUnavailable(cause)) {
+            invalidateReference(sessionId.current);
+            return;
+          }
+          if (referencedConversation.current) {
+            referencedConversation.current = undefined;
+            setManualReference(undefined);
+            setSnapshot(null);
+            setReferenceRecovery(true);
+            // Fetch a fresh native snapshot before showing the reference again.
+            feed.current?.disconnect();
+            feed.current = undefined;
+          }
           notice(cause, 'error', 'ask-connection');
           setConnected(false);
         },
       );
+    }
+    function invalidateReference(invalidatedId?: string | null) {
+      if (!shown.current || !invalidatedId || sessionId.current !== invalidatedId) return;
+      discardedReference.current = invalidatedId;
+      sessionId.current = null;
+      referencedConversation.current = undefined;
+      clearPresentation();
+      setManualReference(undefined);
+      setSnapshot(null);
+      setReferenceRecovery(true);
+      notice({ code: 'askReferenceUnavailable' }, 'warning');
+      connect();
     }
     reconnect.current = connect;
     const resume = () => {
@@ -242,12 +301,17 @@ function AskScreen({ client }: { client: AskClient }) {
           clearPresentation();
           suspend();
         }
+        if (event.type === 'referenceInvalidated') invalidateReference(event.conversationId);
         if (event.type === 'activated' || event.type === 'sessionChanged') {
           updateFocus(event);
           if (event.type === 'sessionChanged' && event.conversationId !== sessionId.current) {
+            if (!event.conversationId && referencedConversation.current) setReferenceRecovery(true);
             sessionId.current = event.conversationId;
             clearPresentation();
-            clearNotice();
+            referencedConversation.current = undefined;
+            setManualReference((current) =>
+              current?.conversationId === event.conversationId ? current : undefined,
+            );
             setSnapshot(null);
           }
           if (event.type === 'activated') {
@@ -304,6 +368,62 @@ function AskScreen({ client }: { client: AskClient }) {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [clearNotice, clearPresentation, client, notice, suspend]);
+
+  async function changeReference(run: () => Promise<void>) {
+    if (referenceOperation.current || !shown.current) return;
+    referenceOperation.current = true;
+    setReferenceBusy(true);
+    try {
+      await run();
+    } catch (error) {
+      if (shown.current) notice(error, 'warning');
+    } finally {
+      referenceOperation.current = false;
+      setReferenceBusy(false);
+    }
+  }
+
+  function setReference(conversationId: string, text: string, draft: string) {
+    void changeReference(async () => {
+      if (sessionId.current !== conversationId) return;
+      const reply = await client.setTurnReference(conversationId, text);
+      if (!shown.current || (sessionId.current !== conversationId && sessionId.current !== reply.conversationId)) return;
+      if (sessionId.current !== reply.conversationId) {
+        clearPresentation();
+        sessionId.current = reply.conversationId;
+        setSnapshot(null);
+      }
+      referencedConversation.current = reply.conversationId;
+      setManualReference({ conversationId: reply.conversationId, text, draft });
+      reconnect.current();
+    });
+  }
+
+  function startFresh(conversationId?: string) {
+    void changeReference(async () => {
+      if (conversationId) {
+        if (sessionId.current !== conversationId) return;
+        await client.revokeTurnReference(conversationId);
+      }
+      if (!shown.current) return;
+      const current = await client.current();
+      if (!shown.current) return;
+      if (current.conversationId && current.conversationId !== conversationId) {
+        reconnect.current();
+        return;
+      }
+      setReferenceRecovery(true);
+      const { conversationId: freshId } = await client.newConversation();
+      if (!shown.current) return;
+      if (sessionId.current !== freshId) {
+        clearPresentation();
+        setSnapshot(null);
+      }
+      referencedConversation.current = undefined;
+      setManualReference(undefined);
+      reconnect.current();
+    });
+  }
 
   const route = snapshot?.submission?.route;
   const routedTurn = snapshot?.submission?.currentTurnId;
@@ -366,6 +486,7 @@ function AskScreen({ client }: { client: AskClient }) {
       '--ask-start-height': `${expansion.height}px`,
       '--ask-start-bottom': `${Math.max(0, expansion.bottom)}px`,
     } as CSSProperties);
+  const manual = manualReference?.conversationId === snapshot?.conversationId ? manualReference : undefined;
   return (
     <div
       className="ask-presentation"
@@ -404,6 +525,11 @@ function AskScreen({ client }: { client: AskClient }) {
           activation={activation}
           expanded={Boolean(expansion)}
           captureSubmitReceipt={captureSubmitReceipt}
+          referenceBusy={referenceBusy}
+          referenceText={manual?.text}
+          seedDraft={manual?.draft}
+          setReference={(text, draft) => setReference(snapshot.conversationId, text, draft)}
+          removeReference={() => startFresh(snapshot.conversationId)}
           canDeliverVoice={() =>
             shown.current &&
             windowFocused &&
@@ -415,6 +541,13 @@ function AskScreen({ client }: { client: AskClient }) {
       ) : (
         <div className="composer-surface">
           <div className="ask-layout-column"><div className="composer-content">
+            {referenceRecovery && (
+              <button type="button" className="ask-reference-chip" disabled={referenceBusy}
+                onClick={() => startFresh(sessionId.current ?? undefined)}>
+                {askReferenceLabels(askLocale()).fresh}
+              </button>
+            )}
+            {referenceRecovery && currentNotice && <span role="alert" className="sr-only">{currentNotice.message}</span>}
             <PromptBox
               className="w-full"
               placeholder={currentNotice ? askErrorLabel(currentNotice.code) : snapshot === null ? 'No active conversation.' : 'Connecting…'}

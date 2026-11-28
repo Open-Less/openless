@@ -1,23 +1,35 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageSkeleton } from '../../../components/ui/PageSkeleton';
+import type { AskReadPermissions } from '../../../api/ask-turn-reference';
 import { useHotkeySettings } from '../../../data/preferences';
 import { isDesktop } from '../../../lib/platform';
 import { invokeOrPreview } from '../../../runtime/transport';
+import { getRuntimeOS, isPreviewHost } from '../../../runtime/environment';
 import { SettingRow, Toggle } from '../../../ui/controls/SettingRow';
 import { Card } from '../../../ui/layout/Card';
 import { useInteraction } from '../../../ui/overlays/InteractionProvider';
 
-type ReadPermissions = { browserTab: boolean; voiceHistory: boolean };
+const DEFAULT_READ_PERMISSIONS: AskReadPermissions = {
+  browserTab: false,
+  browserSelection: false,
+  voiceHistory: false,
+};
+
+function readAskPermissions() {
+  return invokeOrPreview('ask_get_read_permissions', undefined, () => DEFAULT_READ_PERMISSIONS);
+}
 
 export function AskHistorySection({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const { notify } = useInteraction();
   const { prefs, updatePrefs } = useHotkeySettings();
+  const supportsOriginalSelection = getRuntimeOS() === 'mac' &&
+    (isPreviewHost() || /Macintosh|Mac OS X/i.test(navigator.userAgent));
   const [contextAllowed, setContextAllowed] = useState<boolean>();
   const [contextSaving, setContextSaving] = useState(false);
-  const [readPermissions, setReadPermissions] = useState<ReadPermissions>();
-  const [readSaving, setReadSaving] = useState<keyof ReadPermissions>();
+  const [readPermissions, setReadPermissions] = useState<AskReadPermissions>();
+  const [readSaving, setReadSaving] = useState<keyof AskReadPermissions>();
   const readPending = useRef(false);
   useEffect(() => {
     if (!isDesktop()) return;
@@ -31,7 +43,7 @@ export function AskHistorySection({ compact = false }: { compact?: boolean }) {
           notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') });
         }
       });
-    void invokeOrPreview<ReadPermissions>('ask_get_read_permissions', undefined, () => ({ browserTab: false, voiceHistory: false }))
+    void readAskPermissions()
       .then((permissions) => { if (!cancelled) setReadPermissions(permissions); })
       .catch(() => { if (!cancelled) notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') }); });
     return () => {
@@ -67,35 +79,58 @@ export function AskHistorySection({ compact = false }: { compact?: boolean }) {
         >
           <Toggle
             on={contextAllowed}
-            disabled={contextSaving}
+            disabled={contextSaving || readSaving !== undefined}
             onToggle={(allowed) => {
+              if (readPending.current) return;
+              readPending.current = true;
               setContextSaving(true);
               void invokeOrPreview('ask_set_context_permission', { allowed }, () => undefined)
-                .then(() => setContextAllowed(allowed))
-                .catch(() =>
-                  notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') }),
-                )
-                .finally(() => setContextSaving(false));
+                .then(() => {
+                  setContextAllowed(allowed);
+                  if (!allowed) setReadPermissions((current) => current && { ...current, browserSelection: false });
+                })
+                .catch(async () => {
+                  notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') });
+                  // Revocation may take effect in memory even if persistence fails.
+                  const [context, permissions] = await Promise.allSettled([
+                    invokeOrPreview('ask_get_context_permission', undefined, () => contextAllowed),
+                    readAskPermissions(),
+                  ]);
+                  if (context.status === 'fulfilled') setContextAllowed(context.value);
+                  if (permissions.status === 'fulfilled') setReadPermissions(permissions.value);
+                })
+                .finally(() => {
+                  readPending.current = false;
+                  setContextSaving(false);
+                });
             }}
           />
         </SettingRow>
       )}
-      {readPermissions && (['browserTab', 'voiceHistory'] as const).map((permission) => (
+      {readPermissions && (['browserTab', 'browserSelection', 'voiceHistory'] as const)
+        .filter((permission) => permission !== 'browserSelection' || supportsOriginalSelection)
+        .map((permission) => (
         <SettingRow key={permission}
-          label={t(`askEntrySettings.${permission}`)}
-          desc={t(`askEntrySettings.${permission}Hint`)}
+          label={t(permission === 'browserSelection' ? 'askTurnReference.originalInputAccessibility' : `askEntrySettings.${permission}`)}
+          desc={t(permission === 'browserSelection' ? 'askTurnReference.permissionHint' : `askEntrySettings.${permission}Hint`)}
           descriptionPlacement="hint"
         >
           <Toggle
-            on={readPermissions[permission]}
-            disabled={readSaving === permission}
+            on={Boolean(readPermissions[permission])}
+            disabled={contextSaving || readSaving !== undefined ||
+              (permission === 'browserSelection' && (!contextAllowed || !readPermissions.browserTab))}
             onToggle={(allowed) => {
               if (readPending.current) return;
               readPending.current = true;
               setReadSaving(permission);
-              void invokeOrPreview<ReadPermissions>('ask_set_read_permissions', { permissions: { ...readPermissions, [permission]: allowed } }, () => ({ ...readPermissions, [permission]: allowed }))
+              const permissions = { ...readPermissions, [permission]: allowed };
+              if (!permissions.browserTab || !contextAllowed) permissions.browserSelection = false;
+              void invokeOrPreview<AskReadPermissions>('ask_set_read_permissions', { permissions }, () => permissions)
                 .then(setReadPermissions)
-                .catch(() => notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') }))
+                .catch(async () => {
+                  notify({ state: 'failed', message: t('selectionAsk.desktopContext.saveFailed') });
+                  await readAskPermissions().then(setReadPermissions).catch(() => {});
+                })
                 .finally(() => { readPending.current = false; setReadSaving(undefined); });
             }}
           />

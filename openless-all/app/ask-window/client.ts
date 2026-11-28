@@ -1,3 +1,6 @@
+import type { AskReferenceInvalidated, AskTurnReference, AskTurnReferenceReply } from '../src/api/ask-turn-reference';
+import { askReferenceLabels } from '../src/i18n/askTurnReference';
+
 export type AskError = { code: string; message: string; reason?: string };
 export type AttachmentKind = 'image' | 'pdf' | 'selection';
 
@@ -87,6 +90,7 @@ export type AskSnapshot = {
   activeTurnId: string | null;
   turns: AskTurn[];
   attachments: AttachmentInfo[];
+  turnReference: AskTurnReference | null;
   submission?: AskSubmission | null;
 };
 
@@ -134,7 +138,8 @@ export type AskWindowEvent =
   | ({ type: 'activated' | 'sessionChanged'; conversationId?: string | null } & Partial<AskFocus>)
   | { type: 'hidden' }
   | { type: 'themeChanged'; themeMode: AskTheme }
-  | { type: 'notice'; error: AskError };
+  | { type: 'notice'; error: AskError }
+  | ({ type: 'referenceInvalidated' } & AskReferenceInvalidated);
 export type AskVoiceEvent = Omit<AskEditor, 'editable'> & {
   recordingId: string;
   focusEpoch: number;
@@ -152,6 +157,8 @@ export interface AskClient {
     }
   >;
   newConversation(): Promise<{ conversationId: string }>;
+  setTurnReference(conversationId: string, text: string): Promise<AskTurnReferenceReply>;
+  revokeTurnReference(conversationId: string): Promise<void>;
   endConversation(conversationId: string): Promise<void>;
   snapshot(conversationId: string): Promise<AskSnapshot>;
   events(conversationId: string, afterSequence: number): Promise<AskReplay>;
@@ -179,7 +186,16 @@ export interface AskClient {
 }
 
 // Public codes are deliberately independent of provider messages and internal error text.
+const REFERENCE_ERROR_CODES = {
+  askReferenceEmpty: 'ASK-1501',
+  askReferenceLimit: 'ASK-1502',
+  askReferenceNewConversationRequired: 'ASK-1503',
+  askReferenceUnavailable: 'ASK-1504',
+  askSessionChanged: 'ASK-1505',
+} as const;
+
 const ERROR_CODES: Record<string, string> = {
+  ...REFERENCE_ERROR_CODES,
   not_configured: 'ASK-1001', busy: 'ASK-1002', invalid_argument: 'ASK-1003',
   askImageUnsupported: 'ASK-1101', askDraftUnusable: 'ASK-1102',
   askAnswerUnusable: 'ASK-1102', askDraftReviewUnavailable: 'ASK-1103',
@@ -216,6 +232,8 @@ export function askErrorCode(error: unknown, operation?: string): string {
 }
 
 export function askErrorLabel(code: string, locale = askLocale()): string {
+  const referenceError = Object.entries(REFERENCE_ERROR_CODES).find(([, value]) => value === code);
+  if (referenceError) return askReferenceLabels(locale)[referenceError[0] as keyof typeof REFERENCE_ERROR_CODES];
   const label = /^zh-(TW|HK|Hant)\b/i.test(locale) ? '出現了一點錯誤'
     : /^zh\b/i.test(locale) ? '出现了一点错误'
     : /^de\b/i.test(locale) ? 'Ein Fehler ist aufgetreten'
@@ -227,10 +245,19 @@ export function errorMessage(error: unknown, _fallback?: string): string {
   return askErrorLabel(askErrorCode(error));
 }
 
+export function isAskReferenceUnavailable(error: unknown) {
+  return askErrorCode(error) === REFERENCE_ERROR_CODES.askReferenceUnavailable;
+}
+
+export function requiresNewAskConversation(error: unknown) {
+  return askErrorCode(error) === REFERENCE_ERROR_CODES.askReferenceNewConversationRequired;
+}
+
 export function askLocale() {
   let language = navigator.language;
   try {
-    language = window.localStorage.getItem('ol.locale') ?? language;
+    const saved = window.localStorage.getItem('ol.locale');
+    if (saved && saved !== 'system') language = saved;
   } catch {}
   return language;
 }

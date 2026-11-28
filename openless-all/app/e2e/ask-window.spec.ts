@@ -11,6 +11,68 @@ test.beforeEach(async ({ page }) => {
 
 const promptInput = '[data-slot="prompt-box-input"]';
 
+test('manual Ask reference follows the new session and revocation clears its answer', async ({ page }) => {
+  const prompt = page.locator(promptInput);
+  await prompt.fill('What is the deadline?');
+  await page.getByRole('button', { name: 'Add a reference' }).click();
+  const edit = page.getByRole('dialog', { name: 'Add a reference' });
+  await expect(edit.getByRole('button', { name: 'Attach', exact: true })).toBeDisabled();
+  await edit.getByRole('textbox').fill('📅'.repeat(4001));
+  await expect(edit.getByRole('alert')).toHaveText('Reference too long.');
+  await edit.getByRole('textbox').press('Escape');
+  await expect(edit).toHaveCount(0);
+  expect(await page.evaluate(() => window.askFixture.referenceWrites)).toHaveLength(0);
+  expect(await page.evaluate(() => window.askFixture.hideCount)).toBe(0);
+
+  await page.getByRole('button', { name: 'Add a reference' }).click();
+  await edit.getByRole('textbox').fill('Synthetic meeting notes. Deadline Friday.');
+  await edit.getByRole('button', { name: 'Attach', exact: true }).click();
+  const reference = page.getByRole('button', { name: 'This turn reference · Provided by you' });
+  await expect(reference).toBeVisible();
+  await expect(prompt).toHaveValue('What is the deadline?');
+  await prompt.press('Enter');
+  await expect(page.locator('.user-bubble')).toHaveText('What is the deadline?');
+  const reads = await page.evaluate(() => {
+    const fixture = window.askFixture;
+    fixture.push({ type: 'turnFinished', turnId: fixture.active(), status: 'completed', text: 'Friday.' });
+    fixture.truncate = true;
+    fixture.activate(); // Reconcile a snapshot in which the consumed reference contains metadata only.
+    return fixture.snapshotReads;
+  });
+  await expect.poll(() => page.evaluate(() => window.askFixture.snapshotReads)).toBeGreaterThan(reads);
+  await page.evaluate(() => { window.askFixture.truncate = false; });
+  await expect(page.getByRole('button', { name: 'New conversation' })).toBeVisible();
+  await expect(prompt).toHaveAttribute('readonly', '');
+  await reference.click();
+  const preview = page.getByRole('dialog', { name: 'This turn reference' });
+  await expect(preview.locator('pre')).toHaveText('Synthetic meeting notes. Deadline Friday.');
+  await preview.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('button', { name: 'Remove reference' }).click();
+  await expect(reference).toHaveCount(0);
+  await expect(page.getByText('Friday.', { exact: true })).toHaveCount(0);
+  await expect(prompt).toBeEditable();
+  const receipt = await page.evaluate(() => ({
+    revoked: window.askFixture.referenceRevocations,
+    ids: window.askFixture.submits.map((request) => request.conversationId),
+  }));
+  expect(receipt).toEqual({ revoked: ['manual-reference'], ids: ['manual-reference'] });
+});
+
+test('original page reference invalidation closes an open preview and permits a fresh Ask', async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 300 });
+  await page.evaluate(() => window.askFixture.originalPageReference('Synthetic original selection.'));
+  const reference = page.getByRole('button', { name: 'This turn reference · Original page selection' });
+  await reference.click();
+  const preview = page.getByRole('dialog', { name: 'This turn reference' });
+  await expect(preview.locator('pre')).toHaveText('Synthetic original selection.');
+  await page.evaluate(() => window.askFixture.expireReference());
+  await expect(preview).toHaveCount(0);
+  await expect(reference).toHaveCount(0);
+  await expect(page.locator(promptInput)).toHaveAttribute('placeholder', 'Reference unavailable.');
+  await page.getByRole('button', { name: 'New conversation' }).click();
+  await expect(page.getByRole('textbox', { name: 'Ask anything' })).toBeEditable();
+});
+
 test('a recovered question route expands one frame without replacing the editor', async ({
   page,
 }) => {

@@ -46,6 +46,7 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
 
   const visible = suggestions.filter((s) => !resolved.has(s.id));
   if (visible.length === 0) return null;
+  const fromObservedEdit = visible.every((suggestion) => suggestion.observationId != null);
 
   // Accept and reject share one optimistic update: hide locally first, restore on
   // failure so the user can retry.
@@ -53,7 +54,11 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
     setResolved((prev) => new Set(prev).add(id));
     try {
       await commit(id);
-    } catch {
+    } catch (error) {
+      if (error === 'learningSourceExpired') {
+        void rejectPendingCorrection(id).catch(() => {});
+        return;
+      }
       setResolved((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -104,51 +109,73 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
             letterSpacing: 0.2,
           }}
         >
-          {t('vocabCard.title')}
+          {t(fromObservedEdit ? 'historyLearning.observed' : 'vocabCard.title')}
         </div>
 
         <div style={{ display: 'grid', gap: 8 }}>
           {visible.map((s) => (
-            <div
+            <VocabCorrectionRow
               key={s.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                minWidth: 0,
-                height: 28,
-              }}
-            >
-              <span
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontSize: 12.5,
-                  fontFamily: 'var(--ol-font-mono)',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-                title={`${s.pattern} → ${s.replacement}`}
-              >
-                <span style={{ opacity: 0.4 }}>{s.pattern}</span>
-                <span style={{ opacity: 0.3, margin: '0 5px' }}>→</span>
-                {s.replacement}
-              </span>
-              <CardButton
-                kind="accept"
-                label={t('vocabCard.accept')}
-                onClick={() => void resolve(s.id, acceptPendingCorrection)}
-              />
-              <CardButton
-                kind="reject"
-                label={t('vocabCard.reject')}
-                onClick={() => void resolve(s.id, rejectPendingCorrection)}
-              />
-            </div>
+              suggestion={s}
+              onAccept={() => void resolve(s.id, acceptPendingCorrection)}
+              onReject={() => void resolve(s.id, rejectPendingCorrection)}
+            />
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+export function VocabCorrectionRow({
+  suggestion,
+  onAccept,
+  onReject,
+  disabled,
+  inline = false,
+}: {
+  suggestion: Pick<PendingCorrection, 'pattern' | 'replacement'>;
+  onAccept: () => void;
+  onReject: () => void;
+  disabled?: boolean;
+  inline?: boolean;
+}) {
+  const { t } = useTranslation();
+  const { pattern, replacement } = suggestion;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        minWidth: 0,
+        minHeight: 28,
+        flexWrap: inline ? 'wrap' : undefined,
+      }}
+    >
+      <span
+        style={{
+          flex: inline ? '1 1 12ch' : 1,
+          minWidth: 0,
+          fontSize: 12.5,
+          fontFamily: 'var(--ol-font-mono)',
+          whiteSpace: inline ? 'pre-wrap' : 'nowrap',
+          overflowWrap: inline ? 'anywhere' : undefined,
+          overflow: inline ? undefined : 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+        title={`${pattern} → ${replacement}`}
+      >
+        <span style={{ opacity: inline ? 0.65 : 0.4 }}>{pattern}</span>
+        <span style={{ opacity: inline ? 0.55 : 0.3, margin: '0 5px' }}>→</span>
+        {replacement}
+      </span>
+      <span style={{ display: 'inline-flex', gap: 8 }}>
+        <CardButton kind="accept" label={t(inline ? 'historyLearning.acceptWord' : 'vocabCard.accept')}
+          onClick={onAccept} inline={inline} disabled={disabled} />
+        <CardButton kind="reject" label={t(inline ? 'historyLearning.ignoreWord' : 'vocabCard.reject')}
+          onClick={onReject} inline={inline} disabled={disabled} />
+      </span>
     </div>
   );
 }
@@ -159,17 +186,23 @@ function CardButton({
   kind,
   label,
   onClick,
+  inline,
+  disabled,
 }: {
   kind: 'accept' | 'reject';
   label: string;
   onClick: () => void;
+  inline: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
+      disabled={disabled}
       // The card floats over another app; pressing must not steal focus from where
       // the user is typing.
-      onMouseDown={(event) => {
+      onMouseDown={inline ? undefined : (event) => {
         event.preventDefault();
         event.stopPropagation();
       }}

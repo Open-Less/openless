@@ -179,6 +179,84 @@ body,
   overflow-y: auto;
 }
 
+.ask-reference-row,
+.ask-reference-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ask-reference-row {
+  padding: 4px 12px 0;
+}
+
+.ask-reference-actions {
+  justify-content: flex-end;
+}
+
+.ask-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--ol-control-radius);
+  background: var(--ol-surface-2);
+  color: var(--ol-ink-2);
+  font-size: 0.9em;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.ask-reference-chip svg {
+  flex: none;
+}
+
+.ask-reference-chip:disabled {
+  opacity: 0.55;
+}
+
+.ask-viewport :is(.ask-reference-chip, .ask-reference-dialog :is(button, textarea, pre)):focus-visible {
+  outline: 2px solid var(--ol-blue);
+  outline-offset: 2px;
+}
+
+.composer [data-slot='prompt-box-actions'] {
+  flex-wrap: wrap;
+}
+
+.ask-reference-dialog {
+  display: grid;
+  gap: 8px;
+}
+
+.ask-reference-dialog :is(textarea, pre) {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-control-radius);
+  background: var(--ol-surface-2);
+  color: var(--ol-ink);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ask-reference-dialog textarea {
+  resize: vertical;
+}
+
+.ask-reference-dialog pre {
+  max-height: min(30dvh, 14em);
+  overflow: auto;
+}
+
+.ask-reference-error {
+  color: var(--ol-err);
+}
+
 .ask-draft-error-anchor {
   position: relative;
   z-index: 20;

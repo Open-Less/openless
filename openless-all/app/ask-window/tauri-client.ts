@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import type { AskReferenceInvalidated } from '../src/api/ask-turn-reference';
 import type { AskClient, AskEvent, AskVoiceEvent, AskWindowEvent } from './client';
 
 async function onWindowMessage<Payload>(event: string, handler: (payload: Payload) => void) {
@@ -9,6 +10,9 @@ async function onWindowMessage<Payload>(event: string, handler: (payload: Payloa
 export const tauriAskClient: AskClient = {
   current: () => invoke('ask_current'),
   newConversation: () => invoke('ask_new_conversation'),
+  // The isolated Ask window cannot call the main window's startup handshake.
+  setTurnReference: (conversationId, text) => invoke('ask_set_turn_reference', { conversationId, text }),
+  revokeTurnReference: (conversationId) => invoke('ask_revoke_turn_reference', { conversationId }),
   endConversation: (conversationId) => invoke('ask_end_conversation', { conversationId }),
   snapshot: (conversationId) => invoke('ask_snapshot', { conversationId }),
   events: (conversationId, afterSequence) =>
@@ -29,6 +33,21 @@ export const tauriAskClient: AskClient = {
   syncEditor: (focus, editor) => invoke('ask_sync_editor', { ...focus, editor }),
   acknowledgeVoice: (recordingId) => invoke('ask_ack_voice', { recordingId }),
   onEvent: (handler) => onWindowMessage<AskEvent>('ask:event', handler),
-  onWindowEvent: (handler) => onWindowMessage<AskWindowEvent>('ask:window', handler),
+  async onWindowEvent(handler) {
+    const stopWindow = await onWindowMessage<AskWindowEvent>('ask:window', handler);
+    try {
+      const stopReference = await onWindowMessage<AskReferenceInvalidated>(
+        'ask-reference-invalidated',
+        (event) => handler({ ...event, type: 'referenceInvalidated' }),
+      );
+      return () => {
+        stopWindow();
+        stopReference();
+      };
+    } catch (error) {
+      stopWindow();
+      throw error;
+    }
+  },
   onVoiceEvent: (handler) => onWindowMessage<AskVoiceEvent>('ask:voice', handler),
 };

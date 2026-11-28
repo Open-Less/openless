@@ -20,6 +20,7 @@ interface HistoryActionMenuProps {
   onRetranscribe: () => void;
   onDelete: () => void | Promise<void>;
   onRepolish: () => void;
+  onLearn?: () => void;
   onChooseSaveDirectory: () => void;
   onResetSaveDirectory: () => void;
 }
@@ -39,6 +40,7 @@ export function HistoryActionMenu({
   onRetranscribe,
   onDelete,
   onRepolish,
+  onLearn,
   onChooseSaveDirectory,
   onResetSaveDirectory,
 }: HistoryActionMenuProps) {
@@ -119,6 +121,13 @@ export function HistoryActionMenu({
               disabled={!canRepolish}
               onClick={() => run(onRepolish)}
             />
+            {onLearn && (
+              <HistoryActionMenuItem
+                icon="pencil"
+                label={t('historyLearning.title')}
+                onClick={() => run(onLearn)}
+              />
+            )}
             <HistoryActionMenuItem
               icon="trash"
               label={t('common.delete')}

@@ -8,6 +8,8 @@ import { zhCN } from './zh-CN';
 import { withDeletionMessages } from './deletionMessages';
 import { appStyleMessages } from './appStyleMessages';
 import { modelDownloadMessages } from './modelDownloads';
+import { historyLearningMessages } from './historyLearning';
+import { askTurnReferenceMessages } from './askTurnReference';
 import { setRemoteLocale } from '../lib/ipc';
 
 export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'] as const;
@@ -60,6 +62,8 @@ function localeResources(messages: typeof zhCN, lng: SupportedLocale) {
     ...withDeletionMessages(messages, lng),
     modelDownloads: modelDownloadMessages[lng],
     appStyles: appStyleMessages[lng],
+    historyLearning: historyLearningMessages[lng],
+    askTurnReference: askTurnReferenceMessages[lng],
   };
 }
 

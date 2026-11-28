@@ -62,6 +62,7 @@ let current: AskSnapshot = {
   turns: [],
   attachments: [],
   activeTurnId: null,
+  turnReference: null,
 };
 let events: AskEvent[] = [];
 let focus: AskFocus = { focusEpoch: 1, focusRequest: 1 };
@@ -101,8 +102,13 @@ function resolveRoute(route: AskRoute, request: SubmitAsk, live = true) {
 }
 
 function reset(id: string) {
-  current = { conversationId: id, sequence: 0, turns: [], attachments: [], activeTurnId: null };
+  current = { conversationId: id, sequence: 0, turns: [], attachments: [], activeTurnId: null, turnReference: null };
   events = [];
+}
+
+function publishSession(conversationId: string | null) {
+  focus = { ...focus, focusEpoch: focus.focusEpoch + 1 };
+  handlers.window.forEach((listener) => listener({ type: 'sessionChanged', conversationId, ...focus }));
 }
 
 function subscribe<Event>(listeners: Set<(event: Event) => void>, receive: (event: Event) => void) {
@@ -121,6 +127,8 @@ const fixture = {
   hideCount: 0,
   expandCount: 0,
   snapshotReads: 0,
+  referenceWrites: [] as { conversationId: string; text: string }[],
+  referenceRevocations: [] as string[],
   rejectNext: false,
   deferSubmit: false,
   releaseSubmit: () => {},
@@ -141,6 +149,18 @@ const fixture = {
     push({ type: 'attachmentChanged', attachment: image });
     push({ type: 'attachmentChanged', attachment: pdf });
     push({ type: 'attachmentChanged', attachment: excerpt });
+  },
+  originalPageReference(text: string) {
+    reset('original-page');
+    current.turnReference = { source: 'originalInputAccessibility', temporary: true, text };
+    publishSession(current.conversationId);
+  },
+  expireReference() {
+    const conversationId = current.conversationId;
+    reset('');
+    handlers.window.forEach((listener) => listener({
+      type: 'referenceInvalidated', conversationId, reason: 'askReferenceUnavailable',
+    }));
   },
   activate() {
     focus = { ...focus, focusRequest: focus.focusRequest + 1 };
@@ -179,11 +199,25 @@ const accepted = new Map<string, string>();
 let attachmentArchive: AttachmentInfo[] = [];
 const client: AskClient = {
   async current() {
-    return { conversationId: current.conversationId, ...focus };
+    return { conversationId: current.conversationId || null, ...focus };
   },
   async newConversation() {
     reset('conversation-2');
+    publishSession(current.conversationId);
     return { conversationId: current.conversationId };
+  },
+  async setTurnReference(conversationId, text) {
+    fixture.referenceWrites.push({ conversationId, text });
+    reset('manual-reference');
+    current.turnReference = { source: 'userProvided', temporary: true, text };
+    publishSession(current.conversationId);
+    return { conversationId: current.conversationId, source: 'userProvided', temporary: true };
+  },
+  async revokeTurnReference(conversationId) {
+    fixture.referenceRevocations.push(conversationId);
+    if (current.conversationId !== conversationId) return;
+    reset('');
+    publishSession(null);
   },
   async endConversation() {},
   async snapshot() {
@@ -198,6 +232,9 @@ const client: AskClient = {
     };
   },
   async submit(request) {
+    if (current.turnReference?.active) {
+      throw { code: 'invalid_state', message: 'askReferenceNewConversationRequired' };
+    }
     fixture.submits.push(request);
     if (fixture.deferSubmit) await new Promise<void>((resolve) => { fixture.releaseSubmit = resolve; });
     if (fixture.rejectNext) {
@@ -206,6 +243,9 @@ const client: AskClient = {
     }
     const previous = accepted.get(request.clientRequestId);
     if (previous) return { turnId: previous };
+    if (current.turnReference?.source === 'userProvided') {
+      current.turnReference = { source: 'userProvided', temporary: true, active: true };
+    }
     const turnId = `turn-${fixture.submits.length}`;
     const submission: AskSubmission = {
       clientRequestId: request.clientRequestId,

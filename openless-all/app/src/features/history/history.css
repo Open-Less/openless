@@ -386,3 +386,50 @@
     animation: none;
   }
 }
+.ol-history-learning,
+.ol-history-learning-review,
+.ol-history-learning-field {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ol-history-learning-field {
+  gap: 4px;
+}
+
+.ol-history-learning-original,
+.ol-history-learning textarea {
+  box-sizing: border-box;
+  background: var(--ol-surface-2);
+  color: var(--ol-ink);
+  border: 1px solid var(--ol-line);
+  border-radius: var(--ol-control-radius);
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  padding: 8px;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ol-history-learning-original {
+  max-height: 6em;
+  overflow: auto;
+}
+
+.ol-history-learning textarea {
+  resize: vertical;
+}
+
+.ol-history-learning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ol-history-learning-error {
+  color: var(--ol-err);
+}
