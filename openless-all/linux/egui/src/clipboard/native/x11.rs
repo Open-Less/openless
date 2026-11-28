@@ -1,11 +1,14 @@
 use super::*;
-use std::time::{Duration, Instant};
+use std::{time::{Duration, Instant}, collections::HashMap, sync::Arc};
 use x11rb::{connection::Connection, protocol::{Event, xproto::{self, ConnectionExt, AtomEnum, EventMask, PropMode, SelectionNotifyEvent, WindowClass}}, wrapper::ConnectionExt as _};
+use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEventMask};
 pub(super) struct Clipboard {
     connection: x11rb::rust_connection::RustConnection, window: u32,
     selection: u32, property: u32, targets: u32, timestamp: u32, utf8: u32,
-    own: u32, mime: u32, bytes: Vec<u8>, revision: u64, last: Option<(u32, u32)>,
+    own: u32, mime: u32, bytes: Arc<Vec<u8>>, revision: u64, incr: u32,
+    transfers: HashMap<(u32, u32), Transfer>,
 }
+struct Transfer { bytes: Arc<Vec<u8>>, offset: usize, target: u32 }
 impl Clipboard {
     pub fn connect() -> Option<Self> {
         let (connection, screen) = x11rb::connect(None).ok()?;
@@ -17,10 +20,32 @@ impl Clipboard {
         let selection = atom(b"CLIPBOARD")?; let property = atom(b"OPENLESS_CAPTURE")?;
         let targets = atom(b"TARGETS")?; let timestamp = atom(b"TIMESTAMP")?;
         let utf8 = atom(b"UTF8_STRING")?; let own = atom(b"application/x-openless-clipboard")?;
+        let incr = atom(b"INCR")?;
+        connection.xfixes_query_version(5, 0).ok()?.reply().ok()?;
+        connection.xfixes_select_selection_input(window, selection, SelectionEventMask::SET_SELECTION_OWNER
+            | SelectionEventMask::SELECTION_WINDOW_DESTROY | SelectionEventMask::SELECTION_CLIENT_CLOSE).ok()?.check().ok()?;
         Some(Self { connection, window, selection, property, targets, timestamp, utf8, own,
-            mime: utf8, bytes: Vec::new(), revision: 0, last: None })
+            mime: utf8, bytes: Arc::new(Vec::new()), revision: 1, incr, transfers: HashMap::new() })
     }
     fn event(&mut self, event: Event) {
+        if let Event::XfixesSelectionNotify(notify) = &event {
+            if notify.selection == self.selection { self.revision = self.revision.wrapping_add(1); }
+        }
+        if let Event::PropertyNotify(notify) = &event {
+            if notify.state == xproto::Property::DELETE {
+                let key = (notify.window, notify.atom);
+                if let Some(transfer) = self.transfers.get_mut(&key) {
+                    let end = (transfer.offset + 65536).min(transfer.bytes.len());
+                    let _ = self.connection.change_property8(PropMode::REPLACE, notify.window, notify.atom,
+                        transfer.target, &transfer.bytes[transfer.offset..end]);
+                    let complete = transfer.offset == end;
+                    transfer.offset = end;
+                    if complete { self.transfers.remove(&key); }
+                    let _ = self.connection.flush();
+                    return;
+                }
+            }
+        }
         if let Event::SelectionRequest(request) = event {
             let property = if request.property == 0 { request.target } else { request.property };
             let valid = if request.target == self.targets {
@@ -30,7 +55,14 @@ impl Clipboard {
                 self.connection.change_property32(PropMode::REPLACE, request.requestor, property, AtomEnum::INTEGER, &[0]).is_ok()
             } else if request.target == self.mime || request.target == self.own {
                 let bytes = if request.target == self.own { b"OpenLess".as_slice() } else { self.bytes.as_slice() };
-                self.connection.change_property8(PropMode::REPLACE, request.requestor, property, request.target, bytes).is_ok()
+                if bytes.len() > 65536 && self.transfers.len() < 8 {
+                    let _ = self.connection.change_window_attributes(request.requestor,
+                        &xproto::ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE));
+                    self.transfers.insert((request.requestor, property), Transfer { bytes: self.bytes.clone(), offset: 0, target: request.target });
+                    self.connection.change_property32(PropMode::REPLACE, request.requestor, property, self.incr, &[bytes.len() as u32]).is_ok()
+                } else if bytes.len() <= 65536 {
+                    self.connection.change_property8(PropMode::REPLACE, request.requestor, property, request.target, bytes).is_ok()
+                } else { false }
             } else { false };
             let notify = SelectionNotifyEvent { response_type: xproto::SELECTION_NOTIFY_EVENT, sequence: 0,
                 time: request.time, requestor: request.requestor, selection: request.selection,
@@ -44,7 +76,7 @@ impl Clipboard {
         self.connection.delete_property(self.window, self.property).ok()?;
         self.connection.convert_selection(self.window, self.selection, target, self.property, x11rb::CURRENT_TIME).ok()?;
         self.connection.flush().ok()?;
-        let deadline = Instant::now() + Duration::from_millis(150);
+        let deadline = Instant::now() + Duration::from_millis(300);
         while Instant::now() < deadline {
             if let Some(event) = self.connection.poll_for_event().ok()? {
                 if let Event::SelectionNotify(notify) = &event {
@@ -52,6 +84,10 @@ impl Clipboard {
                         if notify.property == 0 { return None; }
                         let reply = self.connection.get_property(true, self.window, self.property, AtomEnum::ANY, 0,
                             (openless_core::dictation_references::MAX_BYTES / 4 + 1) as u32).ok()?.reply().ok()?;
+                        if reply.type_ == self.incr {
+                            self.connection.flush().ok()?;
+                            return self.receive_incremental(deadline);
+                        }
                         if reply.bytes_after > 0 { return Some(vec![0; openless_core::dictation_references::MAX_BYTES as usize + 1]); }
                         return Some(reply.value);
                     }
@@ -61,14 +97,31 @@ impl Clipboard {
         }
         None
     }
+    fn receive_incremental(&mut self, deadline: Instant) -> Option<Vec<u8>> {
+        let mut bytes = Vec::new();
+        while Instant::now() < deadline {
+            if let Some(event) = self.connection.poll_for_event().ok()? {
+                if let Event::PropertyNotify(notify) = &event {
+                    if notify.window == self.window && notify.atom == self.property && notify.state == xproto::Property::NEW_VALUE {
+                        let reply = self.connection.get_property(true, self.window, self.property, AtomEnum::ANY, 0,
+                            (openless_core::dictation_references::MAX_BYTES / 4 + 1) as u32).ok()?.reply().ok()?;
+                        if reply.type_ == 0 { continue; }
+                        if reply.value.is_empty() { return Some(bytes); }
+                        bytes.extend_from_slice(&reply.value);
+                        self.connection.flush().ok()?;
+                        if bytes.len() as u64 > openless_core::dictation_references::MAX_BYTES { return Some(bytes); }
+                        continue;
+                    }
+                }
+                self.event(event);
+            } else { std::thread::sleep(Duration::from_millis(2)); }
+        }
+        None
+    }
     pub fn read(&mut self) -> Option<Snapshot> {
+        self.pump();
         let owner = self.connection.get_selection_owner(self.selection).ok()?.reply().ok()?.owner;
-        let timestamp = if owner == self.window || owner == 0 { 0 } else {
-            let bytes = self.receive(self.timestamp)?;
-            u32::from_ne_bytes(bytes.get(..4)?.try_into().ok()?)
-        };
-        let key = (owner, timestamp);
-        if self.last != Some(key) { self.revision = self.revision.wrapping_add(1); self.last = Some(key); }
+        self.pump();
         let revision = self.revision;
         if owner == self.window || owner == 0 { return Some(Snapshot { revision, own: owner == self.window, content: None }); }
         let available = self.receive(self.targets)?;
@@ -79,13 +132,12 @@ impl Clipboard {
             let atom = self.connection.intern_atom(false, mime.as_bytes()).ok()?.reply().ok()?.atom;
             if atoms.contains(&atom) { selected = Some((mime, atom)); break; }
         }
-        let (mime, atom) = selected?;
+        let Some((mime, atom)) = selected else { return Some(Snapshot { revision, own: false, content: None }); };
         let bytes = self.receive(atom)?;
         let current = self.connection.get_selection_owner(self.selection).ok()?.reply().ok()?.owner;
         if current != owner { return None; }
-        // TIMESTAMP must still match after delayed selection rendering.
-        let after = self.receive(self.timestamp)?;
-        if after.get(..4)? != timestamp.to_ne_bytes() { return None; }
+        self.pump();
+        if self.revision != revision { return None; }
         Some(Snapshot { revision, own: false, content: super::content(mime, bytes) })
     }
     pub fn write(&mut self, text: String) -> bool {
@@ -95,7 +147,68 @@ impl Clipboard {
         let Ok(cookie) = self.connection.intern_atom(false, mime.as_bytes()) else { return false; };
         let Ok(reply) = cookie.reply() else { return false; };
         self.mime = reply.atom;
-        self.bytes = bytes;
+        self.bytes = Arc::new(bytes);
         self.connection.set_selection_owner(self.window, self.selection, x11rb::CURRENT_TIME).is_ok() && self.connection.flush().is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{io::Write, process::{Child, Command, Stdio}, sync::mpsc};
+    struct UserCopy(Child);
+    impl Drop for UserCopy { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
+    fn user_copy(mime: &str, bytes: &[u8]) -> UserCopy {
+        let mut child = Command::new("xclip").args(["-selection", "clipboard", "-in", "-quiet", "-t", mime])
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        UserCopy(child)
+    }
+    fn wait_external(board: &mut Clipboard) -> Snapshot {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(snapshot) = board.read().filter(|s| !s.own && s.content.is_some()) { return snapshot; }
+            assert!(Instant::now() < deadline, "external clipboard offer did not arrive");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    #[test]
+    #[ignore = "requires the dedicated Xvfb and xclip cloud fixture"]
+    fn references_x11_external_copies_and_app_owned_transfers_are_distinct() {
+        let mut board = Clipboard::connect().expect("Xvfb provides CLIPBOARD and XFixes");
+        // Exercise real INCR reception, including full copied text/newlines.
+        let text = format!("{}\nsecond line 🙂", "user material ".repeat(30000));
+        let user = user_copy("UTF8_STRING", text.as_bytes());
+        let first = wait_external(&mut board);
+        assert!(matches!(first.content, Some(ClipboardContent::Text(ref body)) if body == &text));
+        assert!(board.write(text.clone()));
+        board.pump();
+        assert!(board.read().unwrap().own);
+        drop(user);
+        // A later identical real user copy has a new native ownership event,
+        // and is never excluded merely because its bytes equal an app write.
+        let user_again = user_copy("UTF8_STRING", text.as_bytes());
+        let second = wait_external(&mut board);
+        assert_ne!(second.revision, first.revision);
+        assert!(matches!(second.content, Some(ClipboardContent::Text(ref body)) if body == &text));
+        drop(user_again);
+        // Exercise native image output, including INCR serving to a separate
+        // X11 client, rather than only verifying a mocked paste command.
+        let image = (0..1_000_000u32).map(|n| n.wrapping_mul(113).wrapping_add(n >> 8) as u8).collect::<Vec<_>>();
+        assert!(board.write_bytes("image/png", image.clone()));
+        let (send, receive) = mpsc::channel();
+        std::thread::spawn(move || {
+            let output = Command::new("xclip").args(["-selection", "clipboard", "-out", "-t", "image/png"]).output().unwrap();
+            send.send(output).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let output = loop {
+            board.pump();
+            if let Ok(output) = receive.try_recv() { break output; }
+            assert!(Instant::now() < deadline, "native INCR image transfer timed out");
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        assert!(output.status.success());
+        assert_eq!(output.stdout, image);
     }
 }

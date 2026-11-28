@@ -420,6 +420,17 @@ public:
         return dictationTargets_.erase(ticket) > 0;
     }
 
+    bool pasteDictationTarget(const std::string &ticket) {
+        const auto found = dictationTargets_.find(ticket);
+        if (found == dictationTargets_.end() || !found->second->hasFocus()) return false;
+        // Forward only to the exact captured InputContext. This acknowledges
+        // dispatch; the host always appends a path because consumption is unknown.
+        const Key paste(FcitxKey_v, KeyState::Ctrl);
+        found->second->forwardKey(paste, false);
+        found->second->forwardKey(paste, true);
+        return true;
+    }
+
     bool applySelectionTarget(const std::string &ticket,
                               const std::string &source,
                               const std::string &replacement) {
@@ -721,6 +732,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(captureDictationTarget, "CaptureDictationTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(commitDictationTarget, "CommitDictationTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelDictationTarget, "CancelDictationTarget", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(pasteDictationTarget, "PasteDictationTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(captureSelectionTarget, "CaptureSelectionTarget", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(applySelectionTarget, "ApplySelectionTarget", "sss", "b");
     FCITX_OBJECT_VTABLE_METHOD(revertSelectionTarget, "RevertSelectionTarget", "s", "b");

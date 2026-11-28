@@ -810,6 +810,11 @@ jobs:
           cargo test --locked -p openless-core --lib references_
           cargo test --locked -p openless-linux-egui --lib
           cargo check --locked -p openless-linux-egui --bins
+      - name: Exercise real X11 clipboard ownership and incremental transfers
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb xauth xclip
+          xvfb-run -a cargo test --locked -p openless-linux-egui --lib references_x11_external_copies_and_app_owned_transfers_are_distinct -- --ignored --test-threads=1
       - name: Build and test the Fcitx5 plugin
         run: |
           cmake -S ../linux/fcitx5-plugin -B ../linux/fcitx5-plugin/build

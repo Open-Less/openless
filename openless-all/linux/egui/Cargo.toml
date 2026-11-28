@@ -48,7 +48,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 resvg = { version = "=0.48.1", default-features = false, features = ["text", "system-fonts"] }
 roxmltree = "0.21.1"
 libc = "0.2"
-x11rb = { version = "0.14.0", optional = true, features = ["randr"] }
+x11rb = { version = "0.14.0", optional = true, features = ["randr", "xfixes"] }
 axum = { version = "0.8.9", default-features = false, features = ["ws", "http1", "tokio"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server", "http1"] }
 local-ip-address = "0.6"

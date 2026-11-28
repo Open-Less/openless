@@ -1,5 +1,5 @@
 use super::*;
-use std::{collections::HashMap, io::{Read, Write}, os::{fd::{AsFd, AsRawFd}, unix::net::UnixStream}};
+use std::{collections::HashMap, io::{Read, Write}, os::{fd::{AsFd, AsRawFd}, unix::net::UnixStream}, sync::Arc, time::{Duration, Instant}};
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, Proxy, globals::{registry_queue_init, GlobalListContents}, protocol::{wl_registry, wl_seat}};
 use wayland_protocols_wlr::data_control::v1::client::{zwlr_data_control_manager_v1 as manager, zwlr_data_control_device_v1 as device, zwlr_data_control_offer_v1 as offer, zwlr_data_control_source_v1 as source};
 const OWN: &str = "application/x-openless-clipboard";
@@ -9,7 +9,6 @@ struct State {
     revision: u64,
     selected: Option<offer::ZwlrDataControlOfferV1>,
     mimes: HashMap<wayland_client::backend::ObjectId, Vec<String>>,
-    bytes: Vec<u8>,
     finished: bool,
 }
 pub(super) struct Clipboard {
@@ -44,14 +43,28 @@ impl Clipboard {
         let Some(offer) = self.state.selected.clone() else { return Some(Snapshot { revision, own: false, content: None }); };
         let mimes = self.state.mimes.get(&offer.id())?;
         if mimes.iter().any(|m| m == OWN) { return Some(Snapshot { revision, own: true, content: None }); }
-        let mime = ["text/uri-list", "image/png", TEXT, "text/plain"].into_iter().find(|mime| mimes.iter().any(|m| m == mime))?;
-        let (reader, writer) = UnixStream::pair().ok()?;
-        reader.set_read_timeout(Some(std::time::Duration::from_millis(150))).ok()?;
+        let mime = ["text/uri-list", "image/png", TEXT, "text/plain"].into_iter().find(|mime| mimes.iter().any(|m| m == mime));
+        let Some(mime) = mime else { return Some(Snapshot { revision, own: false, content: None }); };
+        let (mut reader, writer) = UnixStream::pair().ok()?;
+        reader.set_nonblocking(true).ok()?;
         offer.receive(mime.into(), writer.as_fd());
         self.connection.flush().ok()?;
         drop(writer);
         let mut bytes = Vec::new();
-        reader.take(openless_core::dictation_references::MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
+        let deadline = Instant::now() + Duration::from_millis(150);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+            if remaining == 0 { return None; }
+            let mut fd = libc::pollfd { fd: reader.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            if unsafe { libc::poll(&mut fd, 1, remaining as i32) } <= 0 { return None; }
+            let mut chunk = [0; 65536];
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => { bytes.extend_from_slice(&chunk[..n]); if bytes.len() as u64 > openless_core::dictation_references::MAX_BYTES { break; } }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(_) => return None,
+            }
+        }
         self.queue.roundtrip(&mut self.state).ok()?;
         if self.state.revision != revision { return None; }
         Some(Snapshot { revision, own: false, content: super::content(mime, bytes) })
@@ -62,11 +75,10 @@ impl Clipboard {
     pub fn write_bytes(&mut self, mime: &str, bytes: Vec<u8>) -> bool {
         if self.state.finished { return false; }
         let qh = self.queue.handle();
-        let source = self.manager.create_data_source(&qh, ());
+        let source = self.manager.create_data_source(&qh, Arc::new(bytes));
         source.offer(mime.into());
         if mime == TEXT { source.offer("text/plain".into()); }
         source.offer(OWN.into());
-        self.state.bytes = bytes;
         self.device.set_selection(Some(&source));
         if let Some(old) = self.source.replace(source) { old.destroy(); }
         self.queue.roundtrip(&mut self.state).is_ok()
@@ -96,13 +108,20 @@ impl Dispatch<offer::ZwlrDataControlOfferV1, ()> for State {
         if let offer::Event::Offer { mime_type } = event { state.mimes.entry(proxy.id()).or_default().push(mime_type); }
     }
 }
-impl Dispatch<source::ZwlrDataControlSourceV1, ()> for State {
-    fn event(state: &mut Self, _: &source::ZwlrDataControlSourceV1, event: source::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+impl Dispatch<source::ZwlrDataControlSourceV1, Arc<Vec<u8>>> for State {
+    fn event(_: &mut Self, _: &source::ZwlrDataControlSourceV1, event: source::Event, data: &Arc<Vec<u8>>, _: &Connection, _: &QueueHandle<Self>) {
         if let source::Event::Send { mime_type, fd } = event {
-            let bytes = if mime_type == OWN { b"OpenLess".as_slice() } else { state.bytes.as_slice() };
+            let mut bytes = if mime_type == OWN { b"OpenLess".as_slice() } else { data.as_slice() };
             let mut file = std::fs::File::from(fd);
-            // Source transfers run on the clipboard worker, never the UI/audio thread.
-            let _ = file.write_all(bytes);
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 { return; }
+            let deadline = Instant::now() + Duration::from_millis(750);
+            while !bytes.is_empty() && Instant::now() < deadline {
+                let mut fd = libc::pollfd { fd: file.as_raw_fd(), events: libc::POLLOUT, revents: 0 };
+                let remaining = deadline.saturating_duration_since(Instant::now()).as_millis() as i32;
+                if unsafe { libc::poll(&mut fd, 1, remaining) } <= 0 { break; }
+                match file.write(bytes) { Ok(0) => break, Ok(n) => bytes = &bytes[n..], Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}, Err(_) => break }
+            }
         }
     }
 }
