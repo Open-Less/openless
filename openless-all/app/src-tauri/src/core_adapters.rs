@@ -5775,7 +5775,7 @@ mod mac_insertion_lifecycle_tests {
         ).unwrap());
         let mut prefs = backend.get_preferences();
         prefs.cursor_context_enabled = true;
-        backend.set_preferences(prefs.clone()).unwrap();
+        backend.set_preferences_validated(prefs.clone()).unwrap();
         let slot = backend_slot();
         *slot.lock() = Some(Arc::downgrade(&backend));
         let target = crate::selection::capture_selection_insertion_target();
@@ -5786,7 +5786,7 @@ mod mac_insertion_lifecycle_tests {
         assert!(document.selection == "P6_SELECTED");
         assert!(document.after.strip_prefix(" P6_AFTER").is_some());
         prefs.cursor_context_enabled = false;
-        backend.set_preferences(prefs).unwrap();
+        backend.set_preferences_validated(prefs).unwrap();
         assert!(host.capture_document_context().await.is_none());
     }
 
