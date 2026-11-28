@@ -1020,6 +1020,15 @@ jobs:
         if: runner.os != 'Windows'
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --timings
 
+      - name: Run dictation reference regressions independently
+        # Preserve feature evidence after unrelated contracts fail, without
+        # masking that earlier failure or expanding the requested platform scope.
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        timeout-minutes: 30
+        run: |
+          cargo test --locked -p openless-core --target-dir src-tauri/target --lib references_
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib dictation_references:: --timings
+
       - name: Run input and official style integration contracts
         if: runner.os == 'macOS'
         timeout-minutes: 15
@@ -1058,7 +1067,6 @@ jobs:
           )
           cargo test --locked -p openless-core --target-dir src-tauri/target --test settings_field_updates
           cargo test --locked -p openless-core --target-dir src-tauri/target --lib long_recording
-          cargo test --locked -p openless-core --target-dir src-tauri/target --lib references_
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test clipboard_delivery
 
       - name: Compile Rust backend unit tests (Windows)
