@@ -43,13 +43,13 @@ pub(super) fn dib_to_png(bytes: &[u8]) -> ParseResult<Vec<u8>> {
     let height = signed_height.unsigned_abs();
     let bits = u16_at(bytes, 14)? as usize;
     let compression = u32_at(bytes, 16)?;
-    if width <= 0 || height == 0 || u16_at(bytes, 12)? != 1 || ![24, 32].contains(&bits) || ![0, 3, 6].contains(&compression) || (bits == 24 && compression != 0) { return Err("captureFailed"); }
+    if width <= 0 || height == 0 || u16_at(bytes, 12)? != 1 || ![1, 4, 8, 16, 24, 32].contains(&bits) || ![0, 3, 6].contains(&compression) || (compression != 0 && ![16, 32].contains(&bits)) { return Err("captureFailed"); }
     let width = width as usize;
     let decoded_len = width.checked_mul(height as usize).and_then(|n| n.checked_mul(4)).ok_or("tooLarge")?;
     if decoded_len as u64 > MAX_BYTES { return Err("tooLarge"); }
     let stride = (width * bits).div_ceil(32) * 4;
     let mut offset = header;
-    let mut masks = [0x00ff0000, 0x0000ff00, 0x000000ff, 0];
+    let mut masks = if bits == 16 { [0x7c00, 0x3e0, 0x1f, 0] } else { [0x00ff0000, 0x0000ff00, 0x000000ff, 0] };
     if compression != 0 {
         let count = if compression == 6 || header >= 56 { 4 } else { 3 };
         for (i, mask) in masks.iter_mut().enumerate().take(count) { *mask = u32_at(bytes, 40 + i * 4)?; }
@@ -57,15 +57,27 @@ pub(super) fn dib_to_png(bytes: &[u8]) -> ParseResult<Vec<u8>> {
         if masks[..3].contains(&0) { return Err("captureFailed"); }
         for a in 0..4 { for b in a + 1..4 { if masks[a] & masks[b] != 0 { return Err("captureFailed"); } } }
     }
-    let palette = u32_at(bytes, 32)? as usize;
-    offset = offset.checked_add(palette.checked_mul(4).ok_or("captureFailed")?).ok_or("captureFailed")?;
+    let colors = u32_at(bytes, 32)? as usize;
+    let colors = if colors == 0 && bits <= 8 { 1 << bits } else { colors };
+    if bits <= 8 && colors > 1 << bits { return Err("captureFailed"); }
+    let palette_end = offset.checked_add(colors.checked_mul(4).ok_or("captureFailed")?).ok_or("captureFailed")?;
+    let palette = bytes.get(offset..palette_end).ok_or("captureFailed")?;
+    offset = palette_end;
     let pixels = bytes.get(offset..offset.checked_add(stride * height as usize).ok_or("captureFailed")?).ok_or("captureFailed")?;
     let mut rgba = vec![0; decoded_len];
     for y in 0..height as usize {
         let source_y = if signed_height > 0 { height as usize - 1 - y } else { y };
         for x in 0..width {
+            if bits <= 8 {
+                let packed = pixels[source_y * stride + x * bits / 8];
+                let shift = 8 - bits - x * bits % 8;
+                let index = ((packed >> shift) & ((1u16 << bits) - 1) as u8) as usize;
+                let color = palette.get(index * 4..index * 4 + 4).ok_or("captureFailed")?;
+                rgba[(y * width + x) * 4..(y * width + x) * 4 + 4].copy_from_slice(&[color[2], color[1], color[0], 255]);
+                continue;
+            }
             let at = source_y * stride + x * (bits / 8);
-            let pixel = u32::from_le_bytes([pixels[at], pixels[at + 1], pixels[at + 2], if bits == 32 { pixels[at + 3] } else { 0 }]);
+            let pixel = u32::from_le_bytes([pixels[at], pixels[at + 1], if bits >= 24 { pixels[at + 2] } else { 0 }, if bits == 32 { pixels[at + 3] } else { 0 }]);
             for c in 0..4 { rgba[(y * width + x) * 4 + c] = channel(pixel, masks[c])?; }
         }
     }
@@ -110,5 +122,15 @@ pub(super) mod tests {
         assert!(dib_to_png(&b[..47]).is_err());
         let mut huge = b; huge[4..8].copy_from_slice(&i32::MAX.to_le_bytes()); assert_eq!(dib_to_png(&huge), Err("tooLarge"));
         huge[4..8].copy_from_slice(&(-1i32).to_le_bytes()); assert_eq!(dib_to_png(&huge), Err("captureFailed"));
+    }
+    #[test]
+    fn references_windows_dib_palette_and_rgb565() {
+        let mut b = dib24(); b.truncate(40); b[8..12].copy_from_slice(&1u32.to_le_bytes()); b[14..16].copy_from_slice(&1u16.to_le_bytes());
+        b.extend([0, 0, 0, 0, 0, 0, 255, 0, 0x80, 0, 0, 0]);
+        assert_eq!(image::load_from_memory(&dib_to_png(&b).unwrap()).unwrap().to_rgba8().get_pixel(0, 0).0, [255, 0, 0, 255]);
+        b.truncate(40); b[14..16].copy_from_slice(&16u16.to_le_bytes()); b[16..20].copy_from_slice(&3u32.to_le_bytes());
+        for mask in [0xf800u32, 0x7e0, 0x1f] { b.extend(mask.to_le_bytes()); }
+        b.extend([0xe0, 0x07, 0, 0]);
+        assert_eq!(image::load_from_memory(&dib_to_png(&b).unwrap()).unwrap().to_rgba8().get_pixel(0, 0).0, [0, 255, 0, 255]);
     }
 }

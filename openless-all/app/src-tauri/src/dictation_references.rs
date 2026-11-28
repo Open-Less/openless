@@ -100,6 +100,7 @@ pub(crate) fn start(id: SessionId, backend: &Arc<openless_core::OpenLessBackend>
         while s.collecting.load(Ordering::Acquire) {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let Some(backend) = weak.upgrade() else { break; };
+            if !backend.get_preferences().dictation_references_enabled { break; }
             let live = backend.snapshot().dictation;
             if live.session_id != Some(id) || !matches!(live.phase, openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording) { break; }
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -209,7 +210,13 @@ fn poll_revision(session: &Session, revision: u64, stopped: bool) {
     match content {
         Ok(Some(content)) => collect(&mut s, revision, content),
         Ok(None) => { s.filter.observe(revision, 0, 0, false); }
-        Err(notice) => { s.notice = Some(notice.into()); } // Retry on the next recording-only tick.
+        Err("tooLarge") => collect(&mut s, revision, Content::TooLarge),
+        Err(notice) => {
+            // Native contention already received short bounded retries. Do not
+            // repeatedly decode the same malformed payload every 100ms.
+            s.filter.observe(revision, 0, 0, false);
+            s.notice = Some(notice.into());
+        }
     }
     *session.feedback.lock() = (s.collector.references.len() as u32, s.notice.clone());
 }
@@ -313,6 +320,14 @@ mod tests {
         collect(&mut s, 15, Content::TooLarge);
         assert_eq!(s.notice.as_deref(), Some("tooLarge"));
         assert_eq!(s.collector.references.len(), 4);
+        let mut full = collection(s.dir.clone());
+        for _ in 0..5 {
+            let mut reference = s.collector.references[1].clone(); reference.size = MAX_BYTES;
+            full.collector.push(reference).unwrap();
+        }
+        collect(&mut full, 11, Content::Text("session byte overflow".into()));
+        assert_eq!(full.collector.references.len(), 5);
+        assert_eq!(full.notice.as_deref(), Some("tooLarge"));
         for i in 4..MAX_REFERENCES { collect(&mut s, 16 + i as u64, Content::Text(format!("item {i}"))); }
         collect(&mut s, 100, Content::Text("overflow".into()));
         assert_eq!(s.collector.references.len(), MAX_REFERENCES);
