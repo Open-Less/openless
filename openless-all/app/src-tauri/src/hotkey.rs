@@ -1032,16 +1032,6 @@ pub(crate) mod platform {
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         let flags = unsafe { CGEventGetFlags(event) };
         let hardware = unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } == 0;
-        if matches!(event_type, KEY_DOWN | KEY_UP | FLAGS_CHANGED) {
-            let down = if event_type == FLAGS_CHANGED {
-                if keycode == 63 { flags & FLAG_MASK_SECONDARY_FN != 0 }
-                else { device_modifier_pressed(keycode, flags).unwrap_or(false) }
-            } else { event_type == KEY_DOWN };
-            if crate::dictation_references::key_event(keycode, flags, down, hardware) {
-                return std::ptr::null_mut();
-            }
-            if keycode == ESC_KEYCODE && crate::dictation_references::capture_in_progress() { return event; }
-        }
         if hardware && matches!(event_type, KEY_DOWN | KEY_UP) {
             let key = match keycode {
                 126 => Some(crate::capsule_style_menu::Key::ArrowUp),
@@ -1623,7 +1613,6 @@ pub(crate) mod platform {
     /// keys count. OS auto-repeat and "several keys pressed while holding the trigger" are
     /// collapsed into one abort by the companion latch.
     fn note_companion_key_down(ctx: &CallbackContext) {
-        if crate::dictation_references::collecting() { return; }
         if !ctx.shared.trigger_held.load(Ordering::SeqCst) {
             return;
         }

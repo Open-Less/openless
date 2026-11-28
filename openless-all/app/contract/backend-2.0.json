@@ -1,12 +1,11 @@
 {
   "contractVersion": "2.0.0",
   "dictationReferences": {
-    "hosts": ["macos"],
-    "preferences": { "dictationReferencesEnabled": false, "dictationReferenceKey": "S" },
-    "capsule": { "referenceCount": 0, "referenceNotice": [null, "screenPermission", "tooLarge", "captureFailed"] },
+    "hosts": ["macos", "windows"],
+    "preferences": { "dictationReferencesEnabled": false },
+    "capsule": { "referenceCount": 0, "referenceNotice": [null, "tooLarge", "captureFailed"] },
     "commands": {
-      "get_dictation_references_status": { "scope": "desktop", "args": {}, "result": { "supported": "boolean", "screenCapture": ["granted", "denied", "unknown"] } },
-      "open_dictation_references_permission_settings": { "scope": "desktop", "args": {}, "result": "void" }
+      "get_dictation_references_status": { "scope": "desktop", "args": {}, "result": { "supported": "boolean" } }
     },
     "retentionDays": 7,
     "delivery": "named local references; no native attachments; local access is not guaranteed"

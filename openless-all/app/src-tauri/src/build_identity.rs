@@ -33,3 +33,16 @@ pub(crate) fn platform_capabilities() -> openless_core::PlatformCapabilities {
     capabilities.supports_auto_update &= UPDATES_ENABLED;
     capabilities
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ask_anything_is_reopened_for_release_dev_and_legacy_metadata() {
+        for (prerelease, build) in [
+            ("dev.noask.1", ""), ("Beta.2", "build.noask.20261123"),
+            ("", ""), ("Dev.1", ""), ("dev.1", ""), ("Beta.2", "build.20261123"),
+        ] {
+            assert!(super::ask_anything_available_for_version(prerelease, build));
+        }
+    }
+}

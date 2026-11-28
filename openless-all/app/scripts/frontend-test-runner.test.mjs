@@ -16,7 +16,7 @@ for (const expected of [
   'src/lib/hotkeySideModifiers.test.ts',
   'src/lib/windowHotkeyFallback.test.ts',
   'src/features/capsule/referenceBadgeView.test.ts',
-  'src/features/settings/sections/dictationReferenceKey.test.ts',
+  'src/i18n/dictationReferences.test.ts',
   'src/features/settings/shell/navigation.test.ts',
   'src/lib/ipc/mock-data.test.ts',
   'scripts/dictation-references-contract.test.mjs',

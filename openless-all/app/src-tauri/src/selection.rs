@@ -1251,6 +1251,7 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
 /// and keeps these internal markers out of the user's clipboard history.
 #[cfg(target_os = "windows")]
 fn windows_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
+    let _own_write = crate::dictation_references::self_write();
     let Some(_delivery) = crate::insertion::clipboard_delivery::try_lock() else {
         return Err(SelectionCaptureMissReason::ClipboardReadFailed);
     };

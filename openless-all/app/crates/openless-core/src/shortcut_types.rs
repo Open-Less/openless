@@ -794,7 +794,6 @@ pub fn reconcile_hotkey_collisions(
 }
 
 pub fn reject_hotkey_collisions(preferences: &UserPreferences) -> Result<(), String> {
-    reject_reference_hotkey_collisions(preferences)?;
     validate_skip_auto_style_hotkey(&preferences.skip_auto_style_hotkey)?;
     let skip = &preferences.skip_auto_style_hotkey;
     for other in [
@@ -921,42 +920,6 @@ pub fn reject_hotkey_collisions(preferences: &UserPreferences) -> Result<(), Str
         reject_selection_polish_hotkey_collisions(binding, preferences)?;
     }
     reject_style_pack_hotkey_conflicts(&preferences.style_pack_hotkeys, preferences)
-}
-
-fn reject_reference_hotkey_collisions(p: &UserPreferences) -> Result<(), String> {
-    if !p.dictation_references_enabled { return Ok(()); }
-    let key = p.dictation_reference_key.trim();
-    if key.is_empty() || key.eq_ignore_ascii_case(&p.qa_companion_key) {
-        return Err("dictation reference auxiliary key conflicts with Ask".into());
-    }
-    let mut chord = p.dictation_hotkey.clone();
-    if chord.primary.eq_ignore_ascii_case("ModifierChord") {
-        chord.primary = key.into();
-    } else {
-        if chord.primary.eq_ignore_ascii_case(key) || chord.modifiers.iter().any(|v| v.eq_ignore_ascii_case(key)) {
-            return Err("dictation reference auxiliary key overlaps recording key".into());
-        }
-        chord.modifiers.push(match legacy_modifier_trigger(&p.dictation_hotkey) {
-            Some(HotkeyTrigger::LeftOption | HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt) => "alt".into(),
-            Some(HotkeyTrigger::LeftControl | HotkeyTrigger::RightControl) => "ctrl".into(),
-            Some(HotkeyTrigger::LeftCommand | HotkeyTrigger::RightCommand) => "cmd".into(),
-            Some(HotkeyTrigger::LeftShift | HotkeyTrigger::RightShift) => "shift".into(),
-            _ => chord.primary.clone(),
-        });
-        chord.primary = key.into();
-    }
-    // The chord allows the same physical primary vocabulary as the native companion route.
-    validate_shortcut_binding(&ShortcutBinding { primary: key.into(), modifiers: vec![] }).map_err(|e| e.to_string())?;
-    for other in [Some(&p.translation_hotkey), p.qa_hotkey.as_ref(), p.quick_note_hotkey.as_ref(),
-        p.coding_agent_voice_hotkey.as_ref(), p.coding_agent_panel_hotkey.as_ref(), p.coding_agent_quick_hotkey.as_ref(),
-        p.switch_style_hotkey.as_ref(), p.open_app_hotkey.as_ref(), p.selection_polish_hotkey.as_ref(), Some(&p.skip_auto_style_hotkey)]
-        .into_iter().flatten() {
-        reject_overlap(&chord, other, "dictation reference shortcut conflict")?;
-    }
-    for hotkey in &p.style_pack_hotkeys {
-        reject_overlap(&chord, &hotkey.binding, "dictation reference style shortcut conflict")?;
-    }
-    Ok(())
 }
 
 pub fn validate_skip_auto_style_hotkey(binding: &ShortcutBinding) -> Result<(), String> {

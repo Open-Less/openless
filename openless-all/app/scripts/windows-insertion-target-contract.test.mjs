@@ -36,7 +36,10 @@ const ordinaryInserter = adapters.match(
 assert.ok(ordinaryInserter);
 assert.match(ordinaryInserter,
   /fn defer_preparation_until_stop\(&self\) -> bool\s*\{\s*true\s*\}/);
-const captureTarget = ordinaryInserter.match(/fn capture_target\([\s\S]*?(?=\n    fn begin)/)?.[0];
+const captureRoute = ordinaryInserter.match(/fn capture_target\([\s\S]*?(?=\n    fn begin)/)?.[0];
+assert.match(captureRoute ?? '', /fn capture_target\(&self\)[\s\S]*?self\.capture_bound_target\(None\)/);
+assert.match(captureRoute ?? '', /fn capture_target_for_session\([\s\S]*?self\.capture_bound_target\(Some\(session_id\)\)/);
+const captureTarget = adapters.match(/fn capture_bound_target\([\s\S]*?(?=\nimpl CoreTextInserter)/)?.[0];
 assert.match(captureTarget ?? '', /insertion_target: Some\(insertion_target.clone\(\)\)/);
 assert.match(captureTarget ?? '', /capture_ime_submit_target/);
 assert.doesNotMatch(captureTarget ?? '', /capture_dictation_insertion_target/);

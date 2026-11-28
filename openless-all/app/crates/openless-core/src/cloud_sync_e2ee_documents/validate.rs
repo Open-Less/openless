@@ -654,6 +654,8 @@ fn validate_profile(doc: &LogicalDocument) -> DocumentResult<()> {
         .as_object()
         .ok_or(DocumentError::InvalidDocument)?
     {
+        // Ignore the retired screenshot shortcut in old encrypted profiles.
+        if key == "dictationReferenceKey" { continue; }
         let field = preference_field(key).ok_or(DocumentError::Unsupported)?;
         if field.class != PreferenceClass::DeviceProfile {
             return Err(DocumentError::ExcludedField);

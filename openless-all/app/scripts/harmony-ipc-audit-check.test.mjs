@@ -43,6 +43,16 @@ try {
   assert.notEqual(stale.status, 0, 'stale IPC reports must fail the gate');
   assert.match(stale.stderr, /Harmony IPC audit is stale/);
   assert.equal(readFileSync(report, 'utf8'), '{}\n', 'stale check must remain read-only');
+  // A coordinated frontend removal must remove the retired permission command
+  // from the generated audit, without pretending Harmony implements it.
+  const referenceApi = join(scratch, 'app/src/api/dictationReferences.ts');
+  writeFileSync(referenceApi, "invoke('get_dictation_references_status');\n");
+  const refreshed = spawnSync(process.execPath, [join(scratch, 'harmony/scripts/audit-harmony-ipc.mjs')], { encoding: 'utf8' });
+  assert.equal(refreshed.status, 0, refreshed.stderr);
+  const commands = JSON.parse(readFileSync(report, 'utf8')).commands;
+  assert.equal(commands.some(command => command.name === 'open_dictation_references_permission_settings'), false);
+  assert.equal(commands.find(command => command.name === 'get_dictation_references_status').implementation, 'unimplemented');
+  assert.equal(check().status, 0);
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

@@ -425,13 +425,6 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "device_bound",
     },
     PreferenceField {
-        rust_name: "dictation_reference_key",
-        key: "dictationReferenceKey",
-        class: PreferenceClass::DeviceProfile,
-        shape: PreferenceShape::Text,
-        reason: "device_bound",
-    },
-    PreferenceField {
         rust_name: "qa_shortcut_behavior",
         key: "qaShortcutBehavior",
         class: PreferenceClass::DeviceProfile,
