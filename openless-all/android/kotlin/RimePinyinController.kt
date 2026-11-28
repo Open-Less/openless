@@ -27,9 +27,7 @@ internal class RimePinyinController(context: Context) {
     private var pending = ""
     private var pendingLiteral = ""
     private var commit: (String) -> Boolean = { false }
-    private val confirmedText = StringBuilder()
-    val associationLearning = TypedContinuationHistory()
-    private var associationEpoch = 0L
+    @Volatile private var predictionContext = ""
     fun bindCommit(handler: (String) -> Boolean) { commit = handler }
     fun currentEncoding(): String = encoding
     fun isEmpty(): Boolean = encoding.isEmpty()
@@ -113,11 +111,17 @@ internal class RimePinyinController(context: Context) {
                 val input = state.optString("input")
                 val rows = state.optJSONArray("candidates")
                 val result = if (rows == null) emptyList() else (0 until rows.length()).map { rows.getString(it) }
+                val contextForPrediction = predictionContext
+                val ranked = if (input.isNotEmpty() && learning &&
+                    OpenLessAndroidPreferences.strokeAssociationEnabled(context)) {
+                    RimePrediction.rank(result, contextForPrediction)
+                } else result
                 main.post {
                     if (epoch != generation || revision != requestId) return@post
+                    val displayed = if (predictionContext == contextForPrediction) ranked else result
                     encoding = input; candidates = result; cloudChoices = emptySet()
-                    candidateRevision = state.optLong("revision"); update(result)
-                    scheduleCloud(input, result, epoch, revision, update)
+                    candidateRevision = state.optLong("revision"); update(displayed)
+                    scheduleCloud(input, displayed, epoch, revision, update)
                 }
             } catch (error: Throwable) {
                 Log.e("OpenLessRime", "engine request failed: ${error.javaClass.simpleName}")
@@ -187,18 +191,8 @@ internal class RimePinyinController(context: Context) {
         }, 180)
     }
     fun recordCommittedText(text: String) {
-        if (!learning) return
-        confirmedText.append(text)
-        if (confirmedText.length > StrokeInputController.MAX_ASSOCIATION_CONTEXT)
-            confirmedText.delete(0, confirmedText.length - StrokeInputController.MAX_ASSOCIATION_CONTEXT)
+        if (learning) predictionContext = RimePrediction.append(predictionContext, text)
     }
-    /** What was committed just before the next commit, for StrokePhraseRepository.recordTypedContinuation(). */
-    fun associationContext(): String = confirmedText.toString()
-    fun resetAssociationContext() { confirmedText.clear(); associationLearning.reset(); associationEpoch++ }
-    fun queryAssociations(repository: StrokePhraseRepository, update: (List<StrokePhraseRepository.Candidate>) -> Unit) {
-        val text = confirmedText.toString()
-        if (text.isEmpty()) { update(emptyList()); return }
-        val epoch = ++associationEpoch
-        repository.searchAsync(text) { result -> if (epoch == associationEpoch) update(result) }
-    }
+    fun associationContext(): String = predictionContext
+    fun resetAssociationContext() { predictionContext = "" }
 }

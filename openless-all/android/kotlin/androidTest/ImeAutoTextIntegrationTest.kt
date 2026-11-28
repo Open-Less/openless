@@ -48,24 +48,6 @@ class ImeAutoTextIntegrationTest {
         assertEquals("one  two  ", edit.text.toString())
     }
 
-    @Test fun splitAssociationLearningRetainsTheOriginalPrefix() {
-        val lookup: (String) -> List<StrokePhraseRepository.Candidate> = { prefix ->
-            listOf("天气", "天气预报").filter { it.startsWith(prefix) }
-                .map { StrokePhraseRepository.Candidate(it, 1, prefix) }
-        }
-        val history = TypedContinuationHistory()
-        assertEquals(emptyList<StrokePhraseRepository.Candidate>(), history.advance("天气", "预").mapNotNull {
-            typedContinuation(it.contextBefore, it.word, lookup)
-        })
-        val completed = history.advance("天气预", "报").mapNotNull {
-            typedContinuation(it.contextBefore, it.word, lookup)
-        }
-        val missesOriginalPrefix = completed.none { it.matchedPrefix == "天气" }
-        probe("P3", "H3", missesOriginalPrefix)
-        assertFalse(missesOriginalPrefix)
-        assertEquals(listOf("天气", "天气预"), completed.map { it.matchedPrefix })
-    }
-
     @Test fun candidatePunctuationAndOwnSelectionUpdatesStillWork() = instrumentation.runOnMainSync {
         val (service, edit) = editor("word ")
         armCandidateSpace(service)
@@ -127,7 +109,6 @@ class ImeAutoTextIntegrationTest {
                 controllerCreated = true
                 controller.setLearningAllowed(true)
                 controller.recordCommittedText("天气")
-                controller.associationLearning.advance("天气", "预")
                 controller.recordCommittedText("预")
                 setField(service, "draftConnection", object : InputConnectionWrapper(connection(edit, true), false) {
                     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
@@ -142,13 +123,6 @@ class ImeAutoTextIntegrationTest {
             instrumentation.runOnMainSync {
                 assertEquals("天气", edit.text.toString())
                 assertEquals("", controller.associationContext())
-                val lookup: (String) -> List<StrokePhraseRepository.Candidate> = { prefix ->
-                    listOf("天气预报").filter { it.startsWith(prefix) }
-                        .map { StrokePhraseRepository.Candidate(it, 1, prefix) }
-                }
-                val learned = controller.associationLearning.advance(controller.associationContext(), "报")
-                    .mapNotNull { typedContinuation(it.contextBefore, it.word, lookup) }
-                assertEquals(emptyList<StrokePhraseRepository.Candidate>(), learned)
             }
         } finally {
             instrumentation.runOnMainSync { if (controllerCreated) controller.shutdown() }

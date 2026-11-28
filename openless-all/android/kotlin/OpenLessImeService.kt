@@ -388,7 +388,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     private var englishUi = false
     private val simplifiedToTraditional by lazy { Transliterator.getInstance("Hans-Hant") }
     // Packaged as an asset (not a drawable resource) so it survives the
-    // gen/android scaffolding copy step the same way the stroke dictionaries do.
+    // gen/android scaffolding copy step the same way the Rime assets do.
     private val brandLogoBitmap: android.graphics.Bitmap? by lazy {
         try {
             assets.open("openless_wordmark.png").use { android.graphics.BitmapFactory.decodeStream(it) }
@@ -630,11 +630,9 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         OpenLessOverlayBridge.imeListener = this
         OpenLessOverlayBridge.imeSessionListener = ::onImeSessionEvent
         startRuntimeService()
-        // Load the offline stroke dictionary and the (much larger, ~220k-
-        // phrase) association dictionary while the IME is idle — the latter
-        // used to load lazily on whichever word's commit was the first to
-        // ever need an association, which is exactly the moment a user is
-        // sitting there waiting for the candidate row to update.
+        // Warm Rime's stroke session and the phrase association index while the
+        // IME is idle: both used to load lazily on the first keystroke, which is
+        // exactly the moment a user is sitting there waiting for the row.
         strokeController.preloadAsync()
         clipboardManager.addPrimaryClipChangedListener(clipboardHistoryListener)
         backendHeartbeatHandler.post(backendHeartbeatRunnable)
@@ -3382,58 +3380,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
     }
 
     /**
-     * Post-commit "what word comes next" suggestions — reuses
-     * StrokeInputController's own phraseRepository instance (same ~220k-
-     * entry index, same user-frequency store Stroke mode already tunes) so
-     * a word committed via Pinyin can suggest a continuation the same way
-     * Stroke's own commits do, and vice versa. Gated by the same
-     * strokeAssociationEnabled preference Stroke's own refreshAssociations()
-     * checks — this is explicitly the same feature, not a parallel one.
-     */
-    private fun refreshPinyinAssociations() {
-        if (!personalizedLearningAllowed() || !OpenLessAndroidPreferences.strokeAssociationEnabled(this)) {
-            renderPinyinAssociations(emptyList())
-            return
-        }
-        rimePinyinController.queryAssociations(strokeController.phraseRepository) { results ->
-            // isEmpty(): guards against the case where the user already
-            // started typing a fresh encoding by the time this async result
-            // lands — associationEpoch alone only protects against a STALE
-            // association query, not against a completely different
-            // encoding query having taken over the candidate row since.
-            if (latinInputMode == LatinInputMode.PINYIN && rimePinyinController.isEmpty()) renderPinyinAssociations(results)
-        }
-    }
-
-    /** Same row/candidateItemView() machinery as renderPinyinCandidates(), but no encoding label (there's no in-progress encoding here) and suffix-based commit (see selectPinyinAssociation()) instead of committing the whole label — mirrors StrokeInputController.refreshAssociations() exactly. */
-    private fun renderPinyinAssociations(candidates: List<StrokePhraseRepository.Candidate>) {
-        populateLatinCandidateRow(
-            candidates.map { candidate -> LatinCandidate(outputScript(candidate.text), longPress = null) { selectPinyinAssociation(candidate) } },
-        )
-    }
-
-    /**
-     * Only the part of the association candidate not already on screen gets
-     * committed — matches StrokeInputController.commitAssociation() exactly
-     * (same StrokePhraseRepository.Candidate type). candidate.matchedPrefix
-     * is always populated by StrokePhraseRepository.find() before a
-     * candidate is ever returned from searchAsync(), so it's trusted
-     * directly here rather than re-deriving the query context.
-     */
-    private fun selectPinyinAssociation(candidate: StrokePhraseRepository.Candidate) {
-        if (isSensitiveField(currentInputEditorInfo) || !candidate.text.startsWith(candidate.matchedPrefix)) return
-        val suffix = candidate.text.removePrefix(candidate.matchedPrefix)
-        val connection = currentInputConnection ?: return
-        if (suffix.isNotEmpty() && !connection.commitText(outputScript(suffix), 1)) return
-        if (personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
-            strokeController.phraseRepository.recordUsage(candidate.matchedPrefix, candidate.text)
-        }
-        rimePinyinController.recordCommittedText(suffix)
-        performKeyHaptic()
-        refreshPinyinAssociations()
-    }
-
-    /**
      * Backspace, everywhere it's wired up in this service. deleteSurroundingText()
      * alone only ever removes characters relative to the cursor position — it does
      * not reliably consume an active selection (behavior varies by target app), so
@@ -3494,14 +3440,6 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         rimePinyinController.bindCommit { text ->
             if (ImeLearningPolicy.isPassword(currentInputEditorInfo?.inputType ?: 0)) false
             else if (currentInputConnection?.commitText(text, 1) == true) {
-                // Typing an offered association out by hand counts as picking it.
-                if (personalizedLearningAllowed() && OpenLessAndroidPreferences.strokeUsageEnabled(this)) {
-                    strokeController.phraseRepository.recordTypedContinuation(
-                        rimePinyinController.associationLearning.advance(rimePinyinController.associationContext(), text),
-                    )
-                } else {
-                    rimePinyinController.associationLearning.reset()
-                }
                 rimePinyinController.recordCommittedText(text)
                 performKeyHaptic()
                 true
@@ -3647,7 +3585,7 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
         rimePinyinController.resetAssociationContext()
         if (inputMode != InputMode.ENGLISH) return
         if (latinInputMode == LatinInputMode.PINYIN) {
-            if (rimePinyinController.isEmpty()) renderPinyinAssociations(emptyList())
+            if (rimePinyinController.isEmpty()) renderPinyinCandidates(emptyList())
         } else if (englishComposingWord.isNotEmpty()) {
             englishComposingWord.clear()
             updateEnglishCandidates()

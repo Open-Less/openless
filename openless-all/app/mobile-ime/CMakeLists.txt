@@ -15,6 +15,11 @@ target_link_libraries(openless_rime_engine PUBLIC
   ${OPENLESS_RIME_PREFIX}/lib/libopencc.a
   ${OPENLESS_RIME_PREFIX}/lib/libmarisa.a)
 if(ANDROID)
+  target_sources(openless_rime_engine PRIVATE ${OPENLESS_PREDICT_SOURCE}/src/predict_db.cc)
+  target_compile_definitions(openless_rime_engine PRIVATE OPENLESS_PREDICT=1)
+  target_include_directories(openless_rime_engine PRIVATE ${OPENLESS_PREDICT_SOURCE}/src
+    ${OPENLESS_RIME_SOURCE}/include ${OPENLESS_RIME_SOURCE}/src ${OPENLESS_RIME_BUILD}/src
+    ${OPENLESS_BOOST_SOURCE})
   add_library(openless_rime SHARED android_jni.cpp)
   target_link_libraries(openless_rime PRIVATE openless_rime_engine)
 endif()
