@@ -44,6 +44,13 @@ fn matches(required: &str, physical: &str) -> bool {
         || matches!(required, "cmd" | "ctrl" | "alt" | "shift") && physical.starts_with(required)
 }
 impl ChordState {
+    fn sync_fn(&mut self, pressed: bool) {
+        if pressed {
+            self.held.insert("fn".into());
+        } else {
+            self.held.remove("fn");
+        }
+    }
     fn event(&mut self, physical: &str, pressed: bool) -> (bool, bool) {
         let physical = key(physical);
         let auxiliary = key(&self.auxiliary);
@@ -92,7 +99,24 @@ impl ChordState {
         (complete, complete)
     }
 }
+// Keep this in sync with the frontend's version-flavor check.
+pub(crate) fn ask_anything_available() -> bool {
+    ask_anything_available_for_version(
+        env!("CARGO_PKG_VERSION_PRE"),
+        env!("CARGO_PKG_VERSION")
+            .split_once('+')
+            .map_or("", |(_, build)| build),
+    )
+}
+
+fn ask_anything_available_for_version(prerelease: &str, build: &str) -> bool {
+    !prerelease.starts_with("dev.noask.") && !build.starts_with("build.noask.")
+}
+
 pub(crate) fn configure(recording: ShortcutBinding, auxiliary: String) {
+    if !ask_anything_available() {
+        return;
+    }
     let mut route = route().lock().unwrap();
     route.state = ChordState {
         recording: Some(recording),
@@ -113,6 +137,11 @@ pub(crate) fn reset_held() {
     let mut route = route().lock().unwrap();
     route.state.held.clear();
     route.state.consumed = false;
+}
+/// Reconcile Fn from the current keyboard event, even if its modifier edge was missed.
+pub(crate) fn sync_fn(pressed: bool) {
+    let mut route = route().lock().unwrap();
+    route.state.sync_fn(pressed);
 }
 pub(crate) fn claimed() -> bool {
     route().lock().unwrap().state.consumed
@@ -135,6 +164,22 @@ pub(crate) fn event(physical: &str, pressed: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ask_anything_release_variants_preserve_the_noask_gate() {
+        for (prerelease, build, available) in [
+            ("dev.noask.1", "", false),
+            ("Beta.2", "build.noask.20261123", false),
+            ("", "", true),
+            ("dev.1", "", true),
+            ("Beta.2", "build.20261123", true),
+        ] {
+            assert_eq!(
+                super::ask_anything_available_for_version(prerelease, build),
+                available
+            );
+        }
+    }
+
     use super::*;
     fn state(primary: &str, modifiers: &[&str]) -> ChordState {
         ChordState {
@@ -145,6 +190,17 @@ mod tests {
             auxiliary: "Space".into(),
             ..Default::default()
         }
+    }
+    #[test]
+    fn event_snapshot_consumes_fn_space_but_not_a_standalone_space() {
+        let mut s = state("Fn", &[]);
+        s.sync_fn(true);
+        assert_eq!(s.event("Space", true), (true, true));
+        s.sync_fn(false);
+        assert_eq!(s.event("Space", false), (true, false));
+        s.held.insert("fn".into());
+        s.sync_fn(false);
+        assert_eq!(s.event("Space", true), (false, false));
     }
     #[test]
     fn side_specific_recording_is_the_only_anchor_and_repeats_are_suppressed() {

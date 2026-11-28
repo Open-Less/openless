@@ -5,8 +5,15 @@
 //! semantic state changes through [`events`].
 
 pub mod activity;
+pub mod app_catalog;
+pub mod app_style_routing;
 pub mod android_types;
 pub mod api;
+pub mod main_dictation_trace;
+#[cfg(feature = "ask-attachments")]
+pub mod ask_attachment;
+pub mod ask_context;
+pub mod ask_search;
 pub mod asr;
 pub mod audio;
 pub mod audio_dsp;
@@ -20,15 +27,18 @@ pub mod cloud_sync_e2ee;
 pub mod cloud_sync_e2ee_documents;
 mod cloud_sync_e2ee_protocol;
 pub mod cloud_sync_e2ee_store;
+mod long_recording;
 mod cloud_sync_transaction;
 mod cloud_sync_types;
 mod cloud_sync_validation;
 pub mod coding_agent;
+mod correction_observation;
 pub mod coding_agent_guard;
 pub mod config;
 pub mod correction;
 pub mod credentials;
 pub mod credentials_legacy;
+pub mod deepseek_suite;
 pub mod dictation_context;
 pub mod dictation_engine;
 pub mod domains;
@@ -36,6 +46,7 @@ pub mod edit_plan;
 pub mod endpoint_security;
 pub mod errors;
 pub mod events;
+pub mod expression_observation;
 pub mod experimental_asr;
 pub mod external_audio;
 pub mod history;
@@ -53,17 +64,23 @@ pub mod omni;
 pub mod output_cleaning;
 mod persistence;
 pub mod polish;
+pub mod polish_strategy;
 pub mod ports;
 pub mod preferences;
+mod prompt_cache;
 pub mod prompt_compose;
 pub mod prompts;
 pub mod provider_registry;
 mod provider_resolution;
 pub mod provider_rules;
+pub mod web_search;
+pub mod deepseek_tts;
 mod provider_service;
 pub mod provider_transport;
 pub mod providers;
 mod qa_service;
+pub mod assistant_api;
+pub mod assistant;
 mod remote_input_service;
 mod selection_service;
 pub mod selection_voice_intent;
@@ -76,10 +93,14 @@ pub mod streaming_insert;
 mod style_pack_archive;
 pub mod style_pack_store;
 pub mod style_packs;
+#[cfg(test)]
+mod intent_style_tests;
 pub mod testing;
 pub mod types;
+pub mod usage_ledger;
 pub mod vocabulary;
 pub mod voice_activation;
+mod voice_activation_hotkey;
 pub mod voice_edit_session;
 mod voice_session;
 
@@ -90,8 +111,8 @@ mod shortcut_types;
 /// Version of the public host-facing DTO/event/lifecycle contract.
 ///
 /// This is independent from the application release version.  Increment the
-/// major component for a breaking host contract change and document the
-/// migration in `docs/linux-egui-backend-contract.md`.
+/// major component for a breaking host contract change and update
+/// `openless-all/app/contract/backend-2.0.json`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
 
 pub use cloud_sync::{
@@ -221,10 +242,10 @@ pub mod contract {
 pub use activity::{ActivityDay, ActivityStore, DayStats};
 pub use api::{
     AsrRoute, AsrUsage, BackendRepositories, BackendSnapshot, CliDispatchOutcome,
-    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget,
-    LessComputerHotkeyAction, LessComputerVoiceFinish,
-    LessComputerVoiceOptions, LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult,
-    QaVoiceCaptureSession, StartupSnapshot, VoiceTranscriptionSession,
+    DictationHotkeyDispatchOptions, DictationHotkeyEdge, DictationTranslationTarget, DictationStyleTarget,
+    LessComputerHotkeyAction, LessComputerVoiceFinish, LessComputerVoiceOptions,
+    LessComputerVoiceSession, OpenLessBackend, QaVoiceCaptureResult, QaVoiceCaptureSession,
+    StartupSnapshot, VoiceTranscriptionSession,
 };
 pub use audio::{
     encode_dictation_wav, pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue,
@@ -256,7 +277,7 @@ pub use credentials::{
 pub use dictation_context::{
     build_asr_prompt, eligible_polish_context_turns, DictationAudioSource, DictationContext,
     DictationInsertionContext, DictationOutputTarget, DictationPolishContext,
-    DictationStartOptions, DictationStopOptions, PolishHistoryTurn, ProviderInvocation,
+    DictationStartOptions, DictationStopOptions, DictationStyleSelection, PolishHistoryTurn, ProviderInvocation,
     RecordingPlan, ASR_PROMPT_CHAR_BUDGET,
 };
 pub use dictation_engine::{PipelineDictationEngine, PolishFailurePolicy};
@@ -298,6 +319,10 @@ pub use model_store::{
     ModelTransport, ModelTransportRequest, ModelTransportResponse, ReqwestModelTransport,
     MODEL_PARTIAL_INDEX, MODEL_READY_SENTINEL,
 };
+pub use polish_strategy::{
+    evaluate as evaluate_polish_strategy, PolishRequestOverrides, PolishStrategyConfig,
+    PolishStrategyDecision, PolishStrategyInput, ReasoningEffort,
+};
 pub use ports::PreparedTranscription;
 pub use ports::{
     ActiveRecording, AudioConsumer, AudioRecorder, CaptureStartRequest, CapturedTextTarget,
@@ -307,10 +332,10 @@ pub use ports::{
     InsertWriteResult, NoopEditObservationAdapter, NoopHostActions, NoopHostContextAdapter,
     PendingAudioCapture, PolishOutput, RecordingArchive, RecordingControlSink, RecordingEvent,
     RecordingProgressSink, ResourceResolver, TextInserter, TextInsertionSession, TextPolisher,
-    TextStreamChunk, TextStreamSink, TranscriptOutput, TranscriptionEngine, TranscriptionSession,
-    UnsupportedTextInserter, UnsupportedVoiceActivationRuntime, VoiceActivationError,
-    VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink, VoiceCapture,
-    VoiceDictationHandoff, VoiceDictationHandoffRequest,
+    TextStreamChunk, TextStreamSink, TranscriptMetadata, TranscriptOutput, TranscriptionEngine,
+    TranscriptionSession, UnsupportedTextInserter, UnsupportedVoiceActivationRuntime,
+    VoiceActivationError, VoiceActivationHandle, VoiceActivationRuntime, VoiceActivationSink,
+    VoiceCapture, VoiceDictationHandoff, VoiceDictationHandoffRequest,
 };
 pub use preferences::PreferencesStore;
 pub use prompt_compose::{
@@ -332,6 +357,7 @@ pub use providers::{
     OpenAiTranscriptionConfig,
 };
 pub use qa_service::QaService;
+pub use qa_service::standalone as ask;
 pub use remote_input_service::{
     constant_time_eq, finish_remote_input_connection, validate_pairing_pin, RemoteFrameCodec,
     RemoteInputService, RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES,

@@ -89,6 +89,7 @@ struct Context {
 }
 
 fn recover_disabled_tap(ctx: &mut Context, enable: impl FnOnce(*mut c_void)) {
+    crate::ask_window::hotkey::reset_physical_state();
     if ctx.state.held {
         let _ = ctx
             .tx
@@ -135,6 +136,12 @@ extern "C" fn callback(
     let edge = ctx
         .state
         .event(key, kind == 10, repeat, effective_flags(flags, fn_down));
+    if edge != Edge::Pass
+        && crate::ask_window::hotkey::keyboard_edge(key as u16, kind == 10, repeat, false)
+            != crate::ask_window::hotkey::Disposition::Stock
+    {
+        return std::ptr::null_mut();
+    }
     let message = match edge {
         Edge::Press => Some(ComboHotkeyEvent::Pressed { at: Instant::now() }),
         Edge::Release => Some(ComboHotkeyEvent::Released { at: Instant::now() }),

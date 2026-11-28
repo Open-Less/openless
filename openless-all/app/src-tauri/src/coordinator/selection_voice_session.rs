@@ -615,6 +615,9 @@ async fn continue_selection_voice_disposition(
     inner: &Arc<Inner>,
     disposition: SelectionVoiceDisposition,
 ) -> Result<EndWorkflowOutcome, String> {
+    if matches!(&disposition, SelectionVoiceDisposition::Question { .. }) {
+        return Err("随便问暂不可用，未更改选中的内容".into());
+    }
     let route = inner
         .backend
         .services()
@@ -791,9 +794,6 @@ impl Coordinator {
         let insertion_target = target_for_session(&self.inner, ticket.session_id)?;
         if !crate::selection::reactivate_selection_insertion_target(&insertion_target) {
             return Err("selectionVoiceTargetUnavailable".to_string());
-        }
-        if crate::selection::is_truncated_selection_stand_in(&ticket.source_text) {
-            return Err("selectionVoiceSelectionTooLong".to_string());
         }
         // Empty source_text = caret insert (Help me write). Skip Ctrl+C content
         // re-validation that assumes a non-empty selection (#1014).

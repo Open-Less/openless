@@ -29,6 +29,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 log = "0.4"
+uuid = { version = "1", features = ["v4"] }
 """ + "cpal = { version = \"=0.15.3\", path = " + json.dumps((recorder.parents[1] / "vendor/cpal").as_posix()) + " }\n"
         + "micyou-dsp = { path = " + json.dumps((recorder.parents[2] / "crates/micyou-dsp").as_posix()) + " }\n"
         + "[build-dependencies]\ncc = \"1\"\n[target.'cfg(target_os = \"macos\")'.dependencies]\ncoreaudio-sys = \"0.2\"\n")
@@ -42,7 +43,7 @@ log = "0.4"
     )
     (root / "src/lib.rs").write_text(
         "extern crate self as openless_core;\n"
-        "#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum BackendErrorCode { InvalidArgument }\n"
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum BackendErrorCode { InvalidArgument, Persistence }\n"
         "#[derive(Debug, Clone)] pub struct BackendError { pub code: BackendErrorCode, pub message: String }\n"
         "impl BackendError { pub fn new(code: BackendErrorCode, message: impl Into<String>) -> Self { Self { code, message: message.into() } } }\n"
         + "#[path = " + json.dumps(str(recorder.parents[2] / "crates/openless-core/src/audio_dsp.rs"), ensure_ascii=False) + "]\npub mod audio_dsp;\n"
@@ -50,6 +51,7 @@ log = "0.4"
         + "#[path = " + json.dumps(str(recorder.parents[2] / "crates/openless-core/src/audio.rs"), ensure_ascii=False) + "]\npub mod audio;\n"
         "pub use audio::{pcm_f32_to_i16_le, AudioProcessingConfig, AudioProcessor, FarEndQueue, ReferenceAudioBuffer};\n"
         "pub trait AudioConsumer: Send + Sync { fn consume_pcm_chunk(&self, pcm: &[u8]); }\n"
+        + "#[path = " + json.dumps(str(recorder.with_name("issue1266_debug.rs")), ensure_ascii=False) + "]\nmod issue1266_debug;\n"
         + "#[path = " + json.dumps(str(recorder), ensure_ascii=False) + "]\npub mod recorder;\n"
         + "#[path = " + json.dumps(str(recorder.with_name("native_audio_cue.rs")), ensure_ascii=False) + "]\npub mod native_audio_cue;\n"
     )

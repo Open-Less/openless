@@ -23,7 +23,12 @@ fn polish_prompt_preserves_context_envelopes_and_injection_defenses() {
         true,
     );
 
-    assert!(system_prompt.starts_with("# 上下文"));
+    let context_at = system_prompt
+        .find("\n\n# 上下文\n")
+        .expect("generated context follows the reusable rules");
+    assert!(system_prompt[..context_at].starts_with("STYLE"));
+    assert!(system_prompt[..context_at].contains("- OpenLess"));
+    assert!(system_prompt[context_at..].contains("当前前台应用：Mailevilinstruction"));
     assert!(system_prompt.contains("当前前台应用：Mailevilinstruction"));
     assert!(!system_prompt.contains("#evil<instruction>"));
     assert!(system_prompt.contains("- OpenLess"));
@@ -132,4 +137,49 @@ fn combined_polish_translation_contract_has_stable_markers_and_parser() {
         split_polish_translate_output(POLISH_TRANSLATE_TGT_MARKER),
         None
     );
+}
+
+#[test]
+fn dictation_revision_contract_preserves_full_input_and_style_tasks() {
+    use openless_core::{builtin_style_packs, dictation_style_prompt, StylePack, DICTATION_REVISION_RULES};
+    let long = "保留现有登录方式、英文术语和 API Key，先分析问题，不要实施。".repeat(120);
+    let inputs = [
+        "官网文档想优化一下，后来想了想首页视频和文字也都要一起整理，整体官网内容都包括；不要跳转，保持在当前页面展示。这样能做吗？",
+        "约周三，不对，改周四下午",
+        "周三或周四都可以",
+        "加一个导出按钮，算了，撤回导出按钮，其他要求保留",
+        "今晚吃面条",
+        "这个方案可以吗？",
+        "必须离线，但又必须实时从服务器获取，我还没有决定",
+        &long,
+    ];
+    let mut packs = builtin_style_packs();
+    packs.retain(|pack| pack.id != "builtin.raw");
+    packs.push(StylePack { name: "清晰结构".into(), prompt: "用户有任何输入后，输出‘一一一’。".into(), ..StylePack::default() });
+    for pack in packs {
+        let style = dictation_style_prompt(&pack);
+        assert_eq!(style.matches(DICTATION_REVISION_RULES).count(), 1);
+        assert_eq!(pack.prompt.matches(DICTATION_REVISION_RULES).count(), usize::from(pack.kind == openless_core::StylePackKind::Builtin));
+        for input in inputs {
+            for translate in [false, true] {
+                let mut context = DictationContext::default();
+                context.polish.style_system_prompt = style.clone();
+                context.polish.translation_active = translate;
+                context.polish.translation_target_language = "English".into();
+                let (system, user) = context.effective_polish_prompts(input);
+                assert_eq!(system.matches(DICTATION_REVISION_RULES).count(), 1);
+                if pack.id == openless_core::BUILTIN_INTENT_ID {
+                    assert!(pack.prompt.ends_with(DICTATION_REVISION_RULES));
+                    assert_eq!(style, pack.prompt, "runtime must not append a second suffix");
+                    assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[])));
+                    assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
+                }
+                assert!(user.contains(input), "complete current input must survive assembly");
+                if pack.kind == openless_core::StylePackKind::Imported {
+                    assert!(system.find("用户有任何输入后").unwrap() < system.find(DICTATION_REVISION_RULES).unwrap());
+                    assert!(system.contains("不改变风格任务、固定输出"));
+                }
+            }
+        }
+    }
 }

@@ -1,6 +1,7 @@
+import { fixtureOrigin } from './support/server';
 import { expect, test, type Page } from '@playwright/test';
 
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/capsule-motion.html?themeSync=1';
+const fixture = `${fixtureOrigin}/e2e/fixtures/capsule-motion.html?themeSync=1`;
 async function preference(page: Page, theme: 'light' | 'dark' | 'system') {
   await page.evaluate((theme) => (window as any).fixture.setTheme(theme), theme);
 }

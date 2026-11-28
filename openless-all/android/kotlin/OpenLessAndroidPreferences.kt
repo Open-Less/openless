@@ -1,0 +1,178 @@
+package com.openless.app
+
+import android.content.Context
+import android.util.Log
+import java.io.File
+import org.json.JSONObject
+
+/** Reads Android-visible preferences without depending on the Rust coordinator. */
+object OpenLessAndroidPreferences {
+    private const val TAG = "OpenLessAndroidPrefs"
+    private const val APP_DIR = "OpenLess"
+    private const val PREFERENCES_FILE = "preferences.json"
+    private const val KEY_OVERLAY_TRIGGER = "androidOverlayTrigger"
+    private const val KEY_OVERLAY_ACTIVATION_MODE = "androidOverlayActivationMode"
+    private const val KEY_OVERLAY_LEFT_SWIPE_ACTION = "androidOverlayLeftSwipeAction"
+    private const val KEY_OVERLAY_CANCEL_SWIPE_DIRECTION = "androidOverlayCancelSwipeDirection"
+    private const val KEY_OVERLAY_GESTURE_ACTIONS = "androidOverlayGestureActions"
+    private const val KEY_OVERLAY_SIZE_DP = "androidOverlaySizeDp"
+    private const val KEY_CHINESE_SCRIPT_PREFERENCE = "chineseScriptPreference"
+    private const val DEFAULT_OVERLAY_SIZE_DP = 72
+    private const val MIN_OVERLAY_SIZE_DP = 48
+    private const val MAX_OVERLAY_SIZE_DP = 120
+    private val VALID_OVERLAY_TRIGGERS = setOf("background", "always", "never")
+    private val VALID_OVERLAY_ACTIVATION_MODES = setOf("tap", "long_press")
+    private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
+    private val VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS = setOf("up", "down")
+    private val VALID_OVERLAY_GESTURE_ACTIONS =
+        setOf("none", "quick_note", "translation", "style_pack", "cancel", "voice_edit")
+
+    fun overlayTriggerMode(context: Context): String? {
+        val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
+        if (value == "keyboard") {
+            return "background"
+        }
+        return value.takeIf { it in VALID_OVERLAY_TRIGGERS }
+    }
+
+    fun overlayDisplayAllowed(context: Context): Boolean {
+        return shouldDisplayOverlay(overlayTriggerMode(context))
+    }
+
+    /** The `never` mode blocks every automatic overlay creation path. */
+    internal fun shouldDisplayOverlay(trigger: String?): Boolean = trigger != "never"
+
+    /** True when preferences still store legacy `"keyboard"` (before migration). */
+    fun isKeyboardOverlayTrigger(context: Context): Boolean {
+        return readPreferenceString(context, KEY_OVERLAY_TRIGGER) == "keyboard"
+    }
+
+    fun overlayActivationMode(context: Context): String {
+        return readPreferenceString(context, KEY_OVERLAY_ACTIVATION_MODE)?.takeIf {
+            it in VALID_OVERLAY_ACTIVATION_MODES
+        } ?: "tap"
+    }
+
+    fun overlayLeftSwipeAction(context: Context): String {
+        return readPreferenceString(context, KEY_OVERLAY_LEFT_SWIPE_ACTION)?.takeIf {
+            it in VALID_OVERLAY_LEFT_SWIPE_ACTIONS
+        } ?: "translation"
+    }
+
+    fun overlayCancelSwipeDirection(context: Context): String {
+        return readPreferenceString(context, KEY_OVERLAY_CANCEL_SWIPE_DIRECTION)?.takeIf {
+            it in VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS
+        } ?: "up"
+    }
+
+    fun overlayGestureAction(context: Context, direction: String): String {
+        for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {
+            if (!file.isFile) continue
+            try {
+                val actions = JSONObject(file.readText()).optJSONObject(KEY_OVERLAY_GESTURE_ACTIONS)
+                val stored = actions?.optString(direction, "")
+                if (stored == "qa") return "none"
+                val value = stored?.takeIf {
+                    it in VALID_OVERLAY_GESTURE_ACTIONS
+                }
+                if (value != null) return value
+            } catch (error: Throwable) {
+                Log.w(TAG, "read gesture actions ${file.absolutePath} failed", error)
+            }
+        }
+        val legacyLeft = overlayLeftSwipeAction(context)
+        val legacyCancel = overlayCancelSwipeDirection(context)
+        return when (direction) {
+            "up" -> if (legacyCancel == "up") "cancel" else "none"
+            "down" -> if (legacyCancel == "down") "cancel" else "none"
+            "left" -> legacyLeft
+            "right" -> "none"
+            else -> "none"
+        }
+    }
+
+    fun overlaySizeDp(context: Context): Int {
+        return readPreferenceInt(context, KEY_OVERLAY_SIZE_DP)
+            ?.coerceIn(MIN_OVERLAY_SIZE_DP, MAX_OVERLAY_SIZE_DP) ?: DEFAULT_OVERLAY_SIZE_DP
+    }
+
+    fun chineseScriptPreference(context: Context): String {
+        return readPreferenceString(context, KEY_CHINESE_SCRIPT_PREFERENCE)
+            ?.takeIf { it == "simplified" || it == "traditional" }
+            ?: "simplified"
+    }
+
+    fun strokeAssociationEnabled(context: Context): Boolean =
+        readPreferenceBoolean(context, "strokeAssociationEnabled") ?: true
+
+    fun strokeUsageEnabled(context: Context): Boolean =
+        readPreferenceBoolean(context, "strokeUsageEnabled") ?: true
+
+    fun cursorContextEnabled(context: Context): Boolean =
+        readPreferenceBoolean(context, "cursorContextEnabled") ?: true
+
+    private fun readPreferenceString(context: Context, key: String): String? {
+        for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {
+            if (!file.isFile) {
+                continue
+            }
+            val value =
+                try {
+                    JSONObject(file.readText()).optString(key, "")
+                } catch (error: Throwable) {
+                    Log.w(TAG, "read ${file.absolutePath} failed", error)
+                    ""
+                }
+            if (value.isNotBlank()) {
+                return value
+            }
+        }
+        return null
+    }
+
+    private fun readPreferenceInt(context: Context, key: String): Int? {
+        for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {
+            if (!file.isFile) {
+                continue
+            }
+            val value =
+                try {
+                    val json = JSONObject(file.readText())
+                    if (json.has(key)) json.optInt(key) else null
+                } catch (error: Throwable) {
+                    Log.w(TAG, "read ${file.absolutePath} failed", error)
+                    null
+                }
+            if (value != null) {
+                return value
+            }
+        }
+        return null
+    }
+
+    private fun readPreferenceBoolean(context: Context, key: String): Boolean? {
+        for (file in preferenceFiles(context).distinctBy { it.absolutePath }) {
+            if (!file.isFile) continue
+            try {
+                val json = JSONObject(file.readText())
+                if (json.has(key)) return json.optBoolean(key)
+            } catch (error: Throwable) {
+                Log.w(TAG, "read ${file.absolutePath} failed", error)
+            }
+        }
+        return null
+    }
+
+    private fun preferenceFiles(context: Context): List<File> {
+        val files = mutableListOf<File>()
+        // Prefer app-private filesDir (Rust data_dir); never rely on /data/local/tmp.
+        files += File(File(context.filesDir, APP_DIR), PREFERENCES_FILE)
+        val envDir = System.getenv("TAURI_ANDROID_APP_DATA_DIR")
+        if (!envDir.isNullOrBlank()) {
+            files += File(File(envDir), APP_DIR).resolve(PREFERENCES_FILE)
+        }
+        // Legacy probe only — some older builds may have written under cacheDir.
+        files += File(File(context.cacheDir, APP_DIR), PREFERENCES_FILE)
+        return files
+    }
+}

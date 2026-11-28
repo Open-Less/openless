@@ -47,7 +47,10 @@ const coordinatorRs =
   '\n' +
   (await readFile(new URL('../src-tauri/src/capsule_snapshot.rs', import.meta.url), 'utf-8')) +
   '\n' +
-  (await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8')) +
+  (await readFile(
+    new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url),
+    'utf-8',
+  )) +
   '\n' +
   capsuleHitTestRs;
 const tauriEventsRs = await readFile(
@@ -69,7 +72,7 @@ assertMatch(
   'WebView capsules must capture the shared foreground target once per recording session',
 );
 const capsuleTsx = await readFile(
-  new URL('../src/components/Capsule.tsx', import.meta.url),
+  new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
   'utf-8',
 );
 const capsuleLayoutTs = await readFile(
@@ -77,29 +80,28 @@ const capsuleLayoutTs = await readFile(
   'utf-8',
 );
 const capsuleStylesCss = await readFile(
-  new URL('../src/components/CapsuleStyles.css', import.meta.url),
+  new URL('../src/features/capsule/CapsuleStyles.css', import.meta.url),
   'utf-8',
 );
 const defaultCapsuleTsx = await readFile(
-  new URL('../src/components/OpenLessCapsule.tsx', import.meta.url),
+  new URL('../src/features/capsule/OpenLessCapsule.tsx', import.meta.url),
   'utf-8',
 );
 const liveTranscriptTsx = await readFile(
-  new URL('../src/components/LiveTranscriptPill.tsx', import.meta.url),
+  new URL('../src/features/capsule/LiveTranscriptPill.tsx', import.meta.url),
   'utf-8',
 );
 const backendEventTs = await readFile(
   new URL('../src/lib/backendEvent.ts', import.meta.url),
   'utf-8',
 );
-const appTsx = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf-8');
-const mainTsx = await readFile(new URL('../src/main.tsx', import.meta.url), 'utf-8');
+const routes = await readFile(new URL('../src/app/windowRoutes.tsx', import.meta.url), 'utf-8');
 const windowChromeTsx = await readFile(
-  new URL('../src/components/WindowChrome.tsx', import.meta.url),
+  new URL('../src/app/shell/WindowChrome.tsx', import.meta.url),
   'utf-8',
 );
 const floatingShellTsx = await readFile(
-  new URL('../src/components/FloatingShell.tsx', import.meta.url),
+  new URL('../src/app/shell/FloatingShell.tsx', import.meta.url),
   'utf-8',
 );
 const themeModeTs = await readFile(new URL('../src/lib/themeMode.ts', import.meta.url), 'utf-8');
@@ -215,8 +217,11 @@ assertEqual(
   26,
   'traffic lights should have an equal visual top inset',
 );
-assertEqual(mainWindow.width, 1300, 'main window should use the reviewed default width');
-assertEqual(mainWindow.height, 835, 'main window should use the reviewed default height');
+assertEqual(mainWindow.width, 1400, 'main window should use the reviewed default width');
+assertEqual(mainWindow.height, 900, 'main window should use the reviewed default height');
+assertEqual(mainWindow.minWidth, 980, 'main window should preserve its minimum width');
+assertEqual(mainWindow.minHeight, 640, 'main window should preserve its minimum height');
+assertEqual(mainWindow.preventOverflow, true, 'initial main window should fit the work area');
 assertEqual(mainWindow.resizable, true, 'users should still be able to resize the main window');
 assertMatch(
   libRs,
@@ -242,13 +247,23 @@ assertMatch(
 
 assertMatch(
   coordinatorRs,
-  /let visible = !matches!\(state,\s*CapsuleState::Idle\);/,
+  /fn capsule_window_action\([\s\S]*?else if show_capsule && !matches!\(state,\s*CapsuleState::Idle\) \{\s*CapsuleWindowAction::ShowCapsule\s*\} else \{\s*CapsuleWindowAction::HideCapsule/,
   'capsule should stay visible until the unified idle hide path runs',
 );
 assertMatch(
   coordinatorRs,
   /fn hide_capsule_window_if_present\(\)/,
   'windows capsule lifecycle should include an explicit native hide helper',
+);
+assertMatch(
+  coordinatorRs,
+  /fn capsule_cursor_update\([\s\S]*?CapsuleState::Done[\s\S]*?CapsuleState::Cancelled[\s\S]*?CapsuleState::Error[\s\S]*?CapsuleState::Idle[\s\S]*?SuspendHitsUntilInteractive/,
+  'closing the openless capsule must not enable passthrough while the undecorated window is visible',
+);
+assertMatch(
+  coordinatorRs,
+  /if action == CapsuleWindowAction::HideCapsule \{[\s\S]*?hide_capsule_window_if_present\(\);[\s\S]*?self\.hide\(\);[\s\S]*?self\.update_cursor_for_payload\(payload, style\);/,
+  'capsule hide must finish before any cursor or style change',
 );
 assertMatch(
   coordinatorRs,
@@ -343,7 +358,7 @@ assertMatch(
 );
 assertMatch(
   capsuleTsx,
-  /getClassicCapsuleGeometry\([\s\S]*?transcriptInSameWindow[\s\S]*?badgeBottomOffset/,
+  /getClassicCapsuleGeometry\([\s\S]*?!splitTranscriptRail,?\s*\)\.badgeBottomOffset/,
   'Classic external rail should use the shared badge/body geometry instead of bypassing offset',
 );
 assertMatch(
@@ -357,7 +372,7 @@ assertMatch(
   'typeless translation row should prevent badge overlap and clipping',
 );
 
-const conditionalReturn = capsuleTsx.indexOf('if (insertFallback)');
+const conditionalReturn = capsuleTsx.indexOf('if (insertFallback');
 const transcriptVisibilityHook = capsuleTsx.indexOf(
   'setCapsuleTranscriptVisible(transcriptVisible)',
 );
@@ -468,18 +483,13 @@ assertMatch(
   'direct dictation state events should reach the dedicated transcript rail',
 );
 assertMatch(
-  mainTsx,
-  /const isCapsuleRail = windowKind === 'capsule-rail'/,
-  'rail route should be selected',
-);
-assertMatch(
-  appTsx,
-  /isCapsuleRail[\s\S]*?CapsuleTranscriptOverlay/,
-  'rail route should render the overlay',
+  routes,
+  /case 'capsule-rail':\s*return <CapsuleTranscriptOverlay \/>/,
+  'rail URL must render the dedicated overlay',
 );
 assertMatch(
   liveTranscriptTsx,
-  /export function CapsuleTranscriptOverlay[\s\S]*?listen<CapsulePayload>\(\s*'capsule:state'[\s\S]*?listen<BackendEvent>\(\s*'backend:event'[\s\S]*?prefs:changed/,
+  /export function CapsuleTranscriptOverlay[\s\S]*?events\.state\([\s\S]*?events\.transcript\([\s\S]*?events\.preferences\(/,
   'rail should own state, transcript, and preference subscriptions',
 );
 assertMatch(

@@ -6,8 +6,17 @@ import '../../src/styles/global.css';
 import '../../src/styles/refinements.css';
 
 let prefs: typeof import('../../src/lib/ipc/mock-data').mockSettings;
-let mockHotkeyCapability: typeof import('../../src/lib/ipc/mock-data').mockHotkeyCapability;
+let mockHotkeyCapability: import('../../src/api/contracts').HotkeyCapability | null;
 let mockCredentialsStatus: typeof import('../../src/lib/ipc/mock-data').mockCredentialsStatus;
+const fixtureOS = new URLSearchParams(location.search).get('os') === 'win' ? 'win' : 'mac';
+Object.defineProperty(navigator, 'platform', {
+  configurable: true,
+  value: fixtureOS === 'win' ? 'Win32' : 'MacIntel',
+});
+Object.defineProperty(navigator, 'userAgent', {
+  configurable: true,
+  value: fixtureOS === 'win' ? 'Windows' : 'Macintosh',
+});
 const calls: string[] = [];
 const fixture = {
   microphone: 'denied',
@@ -60,7 +69,8 @@ Object.assign(window, {
 });
 const mocks = await import('../../src/lib/ipc/mock-data');
 prefs = structuredClone(mocks.mockSettings);
-mockHotkeyCapability = mocks.mockHotkeyCapability;
+const { getPreviewProfile } = await import('../../src/preview/profiles');
+mockHotkeyCapability = getPreviewProfile(fixtureOS).hotkeyCapability;
 mockCredentialsStatus = mocks.mockCredentialsStatus;
 const [{ DesktopOnboarding }, { HotkeySettingsProvider }, { i18nReady }] = await Promise.all([
   import('../../src/components/DesktopOnboarding'),

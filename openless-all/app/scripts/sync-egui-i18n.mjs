@@ -3,7 +3,7 @@
 //
 // The two UIs ship as one product and support the same five locales, but they
 // keep separate catalogs: the Tauri app uses `src/i18n/*.ts`, the egui host uses
-// the Rust table in `linux-egui/src/i18n.rs`. This script removes the duplicated
+// the Rust table in `../linux/egui/src/i18n.rs`. This script removes the duplicated
 // translation work: for every key the egui catalog shares with the Tauri one it
 // copies the five translations over, so translators only maintain the Tauri
 // files.
@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
-const CATALOG_PATH = resolve(APP_ROOT, 'linux-egui/src/i18n.rs');
+const CATALOG_PATH = resolve(APP_ROOT, '../linux/egui/src/i18n.rs');
 
 // Rust row order: [zh-CN, zh-TW, en, ja, ko].
 const LOCALES = [
@@ -99,14 +99,20 @@ async function loadTauriCatalog() {
 
 /** Convert a Tauri string into the Rust catalog form. */
 function toRustText(text) {
-  return text
-    // React markup used only for emphasis in the Tauri UI has no egui meaning.
-    .replace(/<\/?[a-zA-Z][^>]*>/g, '')
-    .replace(/\{\{\s*[^}]+?\s*\}\}/g, '{}');
+  return (
+    text
+      // React markup used only for emphasis in the Tauri UI has no egui meaning.
+      .replace(/<\/?[a-zA-Z][^>]*>/g, '')
+      .replace(/\{\{\s*[^}]+?\s*\}\}/g, '{}')
+  );
 }
 
 function rustEscape(text) {
-  return text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
 }
 
 function quote(text) {
@@ -221,7 +227,7 @@ function referencedKeys() {
       else if (entry.name.endsWith('.rs')) files.push(path);
     }
   };
-  walk(resolve(APP_ROOT, 'linux-egui/src'));
+  walk(resolve(APP_ROOT, '../linux/egui/src'));
   const pattern = /\b(?:tr_l10n|fmt_l10n)\(\s*[^,()]+,\s*"([^"]+)"/g;
   for (const file of files) {
     const source = readFileSync(file, 'utf8');
@@ -265,9 +271,7 @@ async function main() {
     // Never take a translation whose placeholders no longer line up with the
     // arguments the egui pages pass; that would render a literal `{}`.
     const expected = message.values.map(placeholderCount);
-    const mismatch = values.some(
-      (value, index) => placeholderCount(value) !== expected[index],
-    );
+    const mismatch = values.some((value, index) => placeholderCount(value) !== expected[index]);
     if (mismatch) {
       guarded += 1;
       if (check) console.log(`skipped (placeholder mismatch): ${message.key}`);
@@ -308,7 +312,12 @@ async function main() {
     if (known.has(key)) continue;
     const tauri = shared.get(normalizeKey(key));
     if (!tauri) continue;
-    additions.push(renderBlock(key, RUST_LOCALE_ORDER.map((tag) => toRustText(tauri[tag]))));
+    additions.push(
+      renderBlock(
+        key,
+        RUST_LOCALE_ORDER.map((tag) => toRustText(tauri[tag])),
+      ),
+    );
   }
   if (additions.length > 0) {
     const at = catalogInsertIndex(output);

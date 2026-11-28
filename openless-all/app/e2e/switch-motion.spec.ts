@@ -1,4 +1,4 @@
-import { settleNavigation } from './support/navigation';
+import { openMicrophoneSettings, settleNavigation } from './support/navigation';
 import { expect, test, type ElementHandle, type Locator, type Page } from '@playwright/test';
 
 // Every switch the user can reach in Settings (plus the services channel lists and the
@@ -59,8 +59,8 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
   await control.evaluate((element) => {
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
     const state = { finished: [] as number[], controlledXs: [] as number[] };
-    const onRun = (event: TransitionEvent) => {
-      if (event.target !== knob || event.propertyName !== 'transform') return;
+    const sampleTransition = () => {
+      if (state.controlledXs.length) return;
       const transition = knob
         .getAnimations()
         .find(
@@ -83,6 +83,9 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
       if (startTime !== null) transition.startTime = startTime;
       else transition.currentTime = currentTime;
     };
+    const onRun = (event: TransitionEvent) => {
+      if (event.target === knob && event.propertyName === 'transform') sampleTransition();
+    };
     const onEnd = (event: TransitionEvent) => {
       if (event.target === knob && event.propertyName === 'transform') {
         state.finished.push(event.elapsedTime);
@@ -90,6 +93,8 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
     };
     knob.addEventListener('transitionrun', onRun);
     knob.addEventListener('transitionend', onEnd);
+    const stateObserver = new MutationObserver(sampleTransition);
+    stateObserver.observe(element, { attributes: true, attributeFilter: ['aria-checked'] });
     const store = window as unknown as {
       __switchMotion?: WeakMap<Element, { state: typeof state; stop: () => void }>;
     };
@@ -99,14 +104,16 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
       stop: () => {
         knob.removeEventListener('transitionrun', onRun);
         knob.removeEventListener('transitionend', onEnd);
+        stateObserver.disconnect();
+        store.__switchMotion?.delete(element);
       },
     });
   });
   await page.mouse.down();
   await page.mouse.up();
-  // The frame loop starts *after* the click: 45 frames (~750ms) still covers the 180ms slide
-  // and settles, so `xs.at(-1)` is the resting position regardless of how long the click takes
-  // to arrive. Listening already started above, so a late click cannot lose the transition.
+  // Sampling starts after the click, but completion was already armed above.
+  // Follow the real transition, then require three stable frames to let channel
+  // rows settle. A wall-clock cap also bounds missing events or stalled RAFs.
   const { xs, controlledXs, finished } = await control.evaluate(async (element) => {
     const knob = element.querySelector<HTMLElement>('.ol-switch-thumb')!;
     const armed = (
@@ -118,12 +125,45 @@ async function flip(page: Page, control: ElementHandle<HTMLElement>): Promise<Sa
       }
     ).__switchMotion.get(element)!;
     const xs: number[] = [];
-    for (let frame = 0; frame < 45; frame++) {
-      await new Promise<number>(requestAnimationFrame);
-      // A remount would leave this node detached and frozen: count it as a jump.
-      xs.push(element.isConnected ? knob.getBoundingClientRect().left : Number.NaN);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let frame = 0;
+        let stableFrames = 0;
+        let previousX = Number.NaN;
+        const timeout = window.setTimeout(() => {
+          cancelAnimationFrame(frame);
+          reject(new Error('Switch transform did not finish and settle within 5 seconds'));
+        }, 5000);
+        const sample = () => {
+          // A remount would leave this node detached and frozen: count it as a jump.
+          const x = element.isConnected ? knob.getBoundingClientRect().left : Number.NaN;
+          xs.push(x);
+          const transforming = knob
+            .getAnimations()
+            .some(
+              (animation) =>
+                animation instanceof CSSTransition &&
+                animation.transitionProperty === 'transform' &&
+                animation.playState !== 'finished' &&
+                animation.playState !== 'idle',
+            );
+          stableFrames =
+            armed.state.finished.length > 0 && !transforming && Math.abs(x - previousX) < 0.05
+              ? stableFrames + 1
+              : 0;
+          previousX = x;
+          if (!element.isConnected || stableFrames >= 3) {
+            clearTimeout(timeout);
+            resolve();
+          } else {
+            frame = requestAnimationFrame(sample);
+          }
+        };
+        frame = requestAnimationFrame(sample);
+      });
+    } finally {
+      armed.stop();
     }
-    armed.stop();
     return { xs, controlledXs: armed.state.controlledXs, finished: armed.state.finished };
   });
   const after = (await control.getAttribute('aria-checked')) ?? '';
@@ -142,6 +182,10 @@ function expectAnimated(sample: Sample) {
   const low = Math.min(start, end) + 0.5;
   const high = Math.max(start, end) - 0.5;
   expect(controlledXs, `${name} exposed its transform transition`).toHaveLength(3);
+  expect(
+    new Set(controlledXs).size,
+    `${name} exposed distinct intermediate positions`,
+  ).toBeGreaterThan(1);
   expect(
     controlledXs.some((x) => x > low && x < high),
     `${name} knob passed through controlled intermediate positions (${start} → ${controlledXs.join(' ')} → ${end})`,
@@ -190,6 +234,39 @@ async function openSection(dialog: Locator, name: string) {
   await settleNavigation(dialog);
 }
 
+test('switch sampling does not depend on transitionrun delivery', async ({ page }) => {
+  await page.setContent(`
+    <style>
+      button { position: relative; width: 42px; height: 24px; }
+      .ol-switch-thumb {
+        position: absolute; left: 2px; top: 2px; width: 16px; height: 16px;
+        background: blue; transform: translateX(0); transition: transform 180ms ease-out;
+      }
+      [aria-checked="true"] .ol-switch-thumb { transform: translateX(20px); }
+    </style>
+    <button role="switch" aria-label="fixture switch" aria-checked="false">
+      <span class="ol-switch-thumb"></span>
+    </button>
+    <script>
+      const control = document.querySelector('[role="switch"]');
+      control.addEventListener('click', () => {
+        control.setAttribute('aria-checked', String(control.getAttribute('aria-checked') !== 'true'));
+      });
+      // A late transitionrun can arrive after getAnimations() no longer exposes
+      // the transition. Withhold it entirely to test the earlier observation seam.
+      window.addEventListener('transitionrun', (event) => event.stopImmediatePropagation(), true);
+    </script>
+  `);
+  const control = (await page.getByRole('switch', { name: 'fixture switch' }).elementHandle())!;
+  expectAnimated(await flip(page, control));
+  expectAnimated(await flip(page, control));
+  // The same fallback must follow a transition longer than the old 45-frame
+  // sampling window, in both directions.
+  await page.addStyleTag({ content: '.ol-switch-thumb { transition-duration: 900ms; }' });
+  expectAnimated(await flip(page, control));
+  expectAnimated(await flip(page, control));
+});
+
 test('every settings switch slides between on and off', async ({ page }) => {
   test.setTimeout(180_000);
   const dialog = await openSettings(page);
@@ -209,8 +286,9 @@ test('every settings switch slides between on and off', async ({ page }) => {
       await header.click();
       await expect(header).toHaveAttribute('aria-expanded', 'true');
     }
-    if (section === '实验与扩展') {
-      const entries = dialog.locator('[data-ol-advanced-entry]');
+    if (section === '高级功能') {
+      total += await exerciseVisibleSwitches(dialog, 'advanced:root');
+      const entries = dialog.locator('button[data-ol-advanced-entry]');
       const visibleEntries = () =>
         entries.evaluateAll((items) =>
           items
@@ -220,25 +298,34 @@ test('every settings switch slides between on and off', async ({ page }) => {
       const visit = async (id: string, inside?: () => Promise<void>) => {
         await dialog.locator(`[data-ol-advanced-entry="${id}"]`).click();
         await expect(dialog.locator('.ol-settings-back')).toBeVisible();
-        // Pages visited earlier stay mounted but hidden; only the open page is visible.
+        // Leaving a subpage releases its live controls and effects.
         total += await exerciseVisibleSwitches(dialog, `advanced:${id}`);
         await inside?.();
         await dialog.locator('.ol-settings-back').click();
         await expect(entries.first()).toBeVisible();
         await settleNavigation(dialog);
       };
-      for (const id of await visibleEntries()) {
-        await visit(id, async () => {
-          if (id !== 'testingFeatures') return;
-          // Testing pages are only listed while their switch is on.
-          const enable = dialog.getByRole('switch', { name: '启用正在测试中的功能' });
-          await enable.click();
-          await expect(enable).toHaveAttribute('aria-checked', 'true');
-          await expect(entries.first()).toBeVisible();
-          for (const testingId of await visibleEntries()) await visit(testingId);
-          await enable.click();
-          await expect(enable).toHaveAttribute('aria-checked', 'false');
-        });
+      for (const id of await visibleEntries()) await visit(id);
+      continue;
+    }
+    const categoryEntries = dialog.locator('.ol-settings-category-entry');
+    const categoryCount = await categoryEntries.count();
+    if (categoryCount > 0) {
+      for (let index = 0; index < categoryCount; index++) {
+        await categoryEntries.nth(index).click();
+        const back = dialog.locator('.ol-settings-back');
+        await expect(back).toBeVisible();
+        const subHeaders = dialog.locator('[data-ol-toggle-group] > button[aria-expanded]');
+        for (let headerIndex = 0; headerIndex < (await subHeaders.count()); headerIndex++) {
+          const header = subHeaders.nth(headerIndex);
+          if ((await header.getAttribute('aria-expanded')) !== 'false') continue;
+          await header.click();
+          await expect(header).toHaveAttribute('aria-expanded', 'true');
+        }
+        total += await exerciseVisibleSwitches(dialog, `${section}:${index}`);
+        await back.click();
+        await expect(categoryEntries.first()).toBeVisible();
+        await settleNavigation(dialog);
       }
       continue;
     }
@@ -249,7 +336,7 @@ test('every settings switch slides between on and off', async ({ page }) => {
 
 test('channel enable switches slide in every services list', async ({ page }) => {
   const dialog = await openSettings(page);
-  await openSection(dialog, 'AI 服务与模型');
+  await openSection(dialog, 'AI 与模型');
   let total = 0;
   for (const view of ['语言模型', '语音识别']) {
     await dialog
@@ -265,7 +352,7 @@ test('channel enable switches slide in every services list', async ({ page }) =>
 
 test('channel sorting waits for a slow knob transition to finish', async ({ page }) => {
   const dialog = await openSettings(page);
-  await openSection(dialog, 'AI 服务与模型');
+  await openSection(dialog, 'AI 与模型');
   await page.addStyleTag({
     content: '.ol-switch-thumb { transition-duration: 700ms !important; }',
   });
@@ -289,31 +376,39 @@ test('channel sorting waits for a slow knob transition to finish', async ({ page
   await expect(control).toHaveAttribute('data-test-slide', 'transitionend');
 });
 
-test('the Selection Ask history switch slides', async ({ page }) => {
-  await page.getByRole('button', { name: '工具', exact: true }).click();
-  await page.getByRole('button', { name: '问任何问题', exact: true }).click();
-  const main = page.locator('main');
-  await expect(main.getByRole('switch').first()).toBeVisible();
-  expect(await exerciseVisibleSwitches(main, 'selectionAsk')).toBeGreaterThan(0);
-});
-
-test('stacked switches ripple their neighbours in collapsible groups and channel lists', async ({
-  page,
-}) => {
+test('toggling a switch never moves its neighbours', async ({ page }) => {
   const dialog = await openSettings(page);
-  const neighbourMoves = async (group: Locator) => {
+  await openMicrophoneSettings(dialog);
+  // The reported regression: flipping one switch re-animated the whole group and
+  // nudged the sibling next to it. A sibling may never change position.
+  // Section handoffs and the dialog's own entrance keep animating for a few frames.
+  // Wait for every document animation to finish instead of trusting one frame.
+  const settleAnimations = () =>
+    page.evaluate(() =>
+      Promise.race([
+        Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]),
+    );
+  const neighbourShift = async (group: Locator) => {
     const switches = group.locator('[role="switch"]');
     await expect(switches.nth(1)).toBeVisible();
+    // The category handoff starts its entrance a frame or two after the heading mounts,
+    // so let it begin before waiting for it to finish.
+    await page.waitForTimeout(400);
+    await settleAnimations();
+    const before = await switches.nth(1).boundingBox();
     await switches.nth(0).click();
-    return switches.nth(1).evaluate((element) => element.getAnimations().length);
+    await settleAnimations();
+    await page.waitForTimeout(120);
+    const after = await switches.nth(1).boundingBox();
+    return Math.abs(after!.x - before!.x) + Math.abs(after!.y - before!.y);
   };
-  const startup = dialog.getByRole('button', { name: '启动', exact: true });
-  if ((await startup.getAttribute('aria-expanded')) === 'false') await startup.click();
-  // The collapsible's own root is its group: switches ripple only within that list.
-  const startupGroup = startup.locator('xpath=..');
-  await expect(startupGroup).toHaveAttribute('data-ol-toggle-group', '');
-  expect(await neighbourMoves(startupGroup)).toBeGreaterThan(0);
-  await openSection(dialog, 'AI 服务与模型');
-  const channels = dialog.locator('.ol-reorder-list[data-ol-toggle-group]');
-  expect(await neighbourMoves(channels)).toBeGreaterThan(0);
+  const recognition = dialog
+    .locator('[data-ol-toggle-group]')
+    .filter({ has: page.getByRole('switch', { name: '录音时静音', exact: true }) });
+  await expect(recognition).toBeVisible();
+  expect(await neighbourShift(recognition)).toBe(0);
+  // Channel lists are excluded on purpose: disabling a channel moves it to the end of
+  // the order, so its siblings shift by design.
 });

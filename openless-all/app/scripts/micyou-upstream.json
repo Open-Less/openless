@@ -1,10 +1,10 @@
 {
   "repository": "MicYou-Dev/MicYou",
-  "revision": "d821da032e2b72330ced09678dd127acd2714bef",
-  "patchSha256": "5fdacc4530a0a09f8c179bbb956f52b08636c88eeaa1f7226c1ac9cd6a990c72",
+  "revision": "692ecbb9cee1ac45da590cadb59b645f23c1ea65",
+  "patchSha256": "0fc70937f31790947f8e260b5209689b80c18a1187533e38f2d8951342f164db",
   "files": {
     "crates/micyou-dsp/src/lib.rs": {
-      "upstreamSha256": "9e3cb90b48c843554d75704188d4490d197f0134f57cf2fbc2f4a2aad1753d24",
+      "upstreamSha256": "5595c3078f9e66072711384c9d1376ec27503bafba27d26939f11e608dd37992",
       "localSha256": "6a366a2e5831f8fb9d68086f57a696f150855e094073e1fd6a8410bf10f2651e"
     },
     "crates/micyou-infer/src/lib.rs": {

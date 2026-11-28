@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 
-const serviceUrl = new URL('../android/kotlin/OpenLessAccessibilityService.kt', import.meta.url);
+const serviceUrl = new URL('../../android/kotlin/OpenLessAccessibilityService.kt', import.meta.url);
 const jniUrl = new URL('../src-tauri/src/android/jni.rs', import.meta.url);
 const panelUrl = new URL(
-  '../android/frontend/components/AndroidPermissionsPanel.tsx',
+  '../../android/frontend/components/AndroidPermissionsPanel.tsx',
   import.meta.url,
 );
 const accessibilityUrl = new URL('../src-tauri/src/android/accessibility.rs', import.meta.url);

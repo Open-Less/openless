@@ -36,6 +36,7 @@ video-materials/
 node_modules/
 dist/
 target/
+!/openless-all/app/src-tauri/src/ask_window/target/
 # 本地从 CI / Actions 下载的 APK 及解压目录（非源码）
 ci-artifacts/
 *.apk
@@ -69,11 +70,11 @@ tmp-run*/
 .cargo/git/
 
 # Windows TSF IME local build outputs
-openless-all/app/windows-ime/OpenLessIme/
-openless-all/app/windows-ime/x64/
-openless-all/app/windows-ime/Win32/
-openless-all/app/windows-ime/Release/
-openless-all/app/windows-ime/obj/
+openless-all/windows/ime/OpenLessIme/
+openless-all/windows/ime/x64/
+openless-all/windows/ime/Win32/
+openless-all/windows/ime/Release/
+openless-all/windows/ime/obj/
 
 # Planning docs are kept local only, not published to the public repo.
 docs/plans/

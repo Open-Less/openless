@@ -20,8 +20,8 @@ const repositoryReferences = [
   'openless-all/app/src-tauri/src/update_source.rs',
   'openless-all/app/src-tauri/tauri.conf.json',
   'openless-all/app/src/components/AutoUpdate.tsx',
-  'openless-all/app/src/components/SettingsModal.tsx',
-  'openless-all/app/src/pages/settings/AboutSection.tsx',
+  'openless-all/app/src/features/settings/shell/SettingsModal.tsx',
+  'openless-all/app/src/features/settings/sections/AboutSection.tsx',
   'openless-all/app/scripts/write-updater-manifest.mjs',
 ];
 

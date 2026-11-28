@@ -341,6 +341,14 @@ async fn send_chat_completion(
     .await?;
     let payload: ChatCompletionResponse = serde_json::from_slice(&response)
         .map_err(|error| provider_error(format!("invalid chat response JSON: {error}"), false))?;
+    if payload
+        .choices
+        .first()
+        .and_then(|choice| choice.finish_reason.as_deref())
+        .is_some_and(|reason| reason != "stop")
+    {
+        return Err(provider_error("llmResponseIncomplete".into(), false));
+    }
     let content = payload
         .choices
         .into_iter()
@@ -437,6 +445,9 @@ impl TextPolisher for OpenAiChatPolisher {
                         llm_call_label: None,
                     }
                 } else {
+                    if context.polish.selection_input {
+                        return Err(provider_error("llmResponseIncomplete".into(), false));
+                    }
                     log::warn!(
                         "polish-and-translate response missing markers; retrying plain translation"
                     );
@@ -503,6 +514,8 @@ struct ChatCompletionResponse {
 #[derive(Debug, serde::Deserialize)]
 struct ChatChoice {
     message: ChatMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]

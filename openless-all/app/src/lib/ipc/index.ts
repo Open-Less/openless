@@ -64,15 +64,14 @@ export {
 } from './channels';
 
 // history
+export { listHistory, getActivityStats } from './history';
 export {
-  listHistory,
   deleteHistoryEntry,
   clearHistory,
-  getActivityStats,
   readAudioRecording,
   retranscribeRecording,
   applyQuickNoteRepolish,
-} from './history';
+} from '../../api/history';
 
 // vocab
 export {
@@ -103,6 +102,10 @@ export {
   getCapsuleSnapshot,
   setCapsuleTranscriptVisible,
   handleWindowHotkeyEvent,
+  getDictationStyleTarget,
+  getCapsuleStyleMenuRequest,
+  updateDictationStyle,
+  setCapsuleStyleMenu,
 } from './dictation';
 
 // style-packs
@@ -147,6 +150,7 @@ export {
   setDictationHotkey,
   setSelectionPolishHotkey,
   setTranslationHotkey,
+  setSkipAutoStyleHotkey,
   setSwitchStyleHotkey,
   setOpenAppHotkey,
   setQuickNoteHotkey,
@@ -163,24 +167,6 @@ export {
   stopMicrophoneLevelMonitor,
   isWaylandCliMode,
 } from './devices';
-
-// qa
-export {
-  getQaHotkeyLabel,
-  setQaHotkey,
-  qaWindowDismiss,
-  qaWindowSetExpanded,
-  qaGetSnapshot,
-  qaToggleRecording,
-  qaSubmitText,
-  qaSetEditInstructionMode,
-} from './qa';
-
-export {
-  getSelectionPolishPreview,
-  confirmSelectionPolishPreview,
-  cancelSelectionPolishPreview,
-} from './selection-polish-preview';
 
 export {
   getSelectionVoiceIntentPrompt,
@@ -204,19 +190,6 @@ export {
 } from './voice-edit-session';
 export type { VoiceEditSnapshot } from './voice-edit-session';
 
-// less-computer
-export {
-  lessComputerWindowDismiss,
-  lessComputerWindowOpen,
-  lessComputerApprove,
-  lessComputerSubmitText,
-  lessComputerSync,
-  lessComputerVoiceStart,
-  lessComputerVoiceStop,
-  lessComputerVoiceCancel,
-  lessComputerTaskCancel,
-} from './less-computer';
-
 // chat-panel (shared by QA / Less Computer)
 export { chatPanelFocusKeyboard } from './chat-panel';
 
@@ -228,6 +201,7 @@ export {
   fetchLatestBetaRelease,
   appCheckUpdateWithChannel,
   appDownloadAndInstallAndroidUpdate,
+  appUpdateGithubFallback,
 } from './updater';
 
 // remote-server
@@ -238,26 +212,6 @@ export {
   regenerateRemotePin,
   setRemoteLocale,
 } from './remote-server';
-
-// coding-agent
-export type {
-  CodingAgentPermissionMode,
-  McpHealth,
-  CodingAgentEvent,
-  OpenCodeDetection,
-  McpServerStatus,
-  ClaudeDetection,
-  CodingAgentRunTestArgs,
-} from './coding-agent';
-export {
-  codingAgentDetect,
-  codingAgentDetectCli,
-  codingAgentDetectOpencode,
-  codingAgentListOpencodeModels,
-  codingAgentRunTest,
-  codingAgentCancelTest,
-  codingAgentCommandRisk,
-} from './coding-agent';
 
 // marketplace
 export {

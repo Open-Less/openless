@@ -6,21 +6,24 @@ import { fileURLToPath } from 'node:url';
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(scriptsDir, '..');
 const repoRoot = join(appRoot, '..', '..');
-const scriptPath = join(scriptsDir, 'windows-package-msvc.ps1');
-const launcherPath = join(scriptsDir, 'windows-package-msvc.cmd');
+const scriptPath = join(scriptsDir, '../../windows/scripts/windows-package-msvc.ps1');
+const launcherPath = join(scriptsDir, '../../windows/scripts/windows-package-msvc.cmd');
 const ciWorkflowPath = join(repoRoot, '.github', 'workflows', 'release-tauri.yml');
-const imeBuildPath = join(scriptsDir, 'windows-ime-build.ps1');
-const imeInstallSmokePath = join(scriptsDir, 'windows-ime-install-smoke.ps1');
-const realAsrInsertionSmokePath = join(scriptsDir, 'windows-real-asr-insertion-smoke.ps1');
-const imeRegisterPath = join(scriptsDir, 'windows-ime-register.ps1');
-const imeUnregisterPath = join(scriptsDir, 'windows-ime-unregister.ps1');
-const imeSolutionPath = join(appRoot, 'windows-ime', 'OpenLessIme.sln');
-const imeProjectPath = join(appRoot, 'windows-ime', 'OpenLessIme.vcxproj');
-const imeEditSessionPath = join(appRoot, 'windows-ime', 'src', 'edit_session.cpp');
-const imeTextServicePath = join(appRoot, 'windows-ime', 'src', 'text_service.cpp');
+const imeBuildPath = join(scriptsDir, '../../windows/scripts/windows-ime-build.ps1');
+const imeInstallSmokePath = join(scriptsDir, '../../windows/scripts/windows-ime-install-smoke.ps1');
+const realAsrInsertionSmokePath = join(
+  scriptsDir,
+  '../../windows/scripts/windows-real-asr-insertion-smoke.ps1',
+);
+const imeRegisterPath = join(scriptsDir, '../../windows/scripts/windows-ime-register.ps1');
+const imeUnregisterPath = join(scriptsDir, '../../windows/scripts/windows-ime-unregister.ps1');
+const imeSolutionPath = join(appRoot, '../windows/ime', 'OpenLessIme.sln');
+const imeProjectPath = join(appRoot, '../windows/ime', 'OpenLessIme.vcxproj');
+const imeEditSessionPath = join(appRoot, '../windows/ime', 'src', 'edit_session.cpp');
+const imeTextServicePath = join(appRoot, '../windows/ime', 'src', 'text_service.cpp');
 const tauriConfigPath = join(appRoot, 'src-tauri', 'tauri.conf.json');
-const nsisHookPath = join(appRoot, 'src-tauri', 'nsis', 'openless-ime-hooks.nsh');
-const wixFragmentPath = join(appRoot, 'src-tauri', 'wix', 'openless-ime.wxs');
+const nsisHookPath = join(appRoot, '../windows/nsis', 'openless-ime-hooks.nsh');
+const wixFragmentPath = join(appRoot, '../windows/wix', 'openless-ime.wxs');
 
 const script = readFileSync(scriptPath, 'utf8');
 const launcher = readFileSync(launcherPath, 'utf8');
@@ -137,13 +140,13 @@ assert.match(
 assert.match(imeBuild, /\/p:Platform=\$Platform/, 'IME build should pass Platform to MSBuild');
 assert.match(
   imeBuild,
-  /\$defaultOutputDirectory = Join-Path \$appRoot "windows-ime\\\$defaultPlatformFolder\\\$Configuration"/,
+  /\$defaultOutputDirectory = Join-Path \$appRoot "\.\.\\windows\\ime\\\$defaultPlatformFolder\\\$Configuration"/,
   'IME build should force stable default OutDir per platform',
 );
 assert.match(imeBuild, /\/p:OutDir=/, 'IME build should pass OutDir to MSBuild');
 assert.match(imeBuild, /\/p:IntDir=/, 'IME build should pass IntDir to MSBuild');
 assert.ok(
-  imeInstallSmoke.includes("OpenLessIme-.+\\.dll"),
+  imeInstallSmoke.includes('OpenLessIme-.+\\.dll'),
   'install smoke should verify a versioned registered IME DLL path',
 );
 assert.match(imeRegister, /windows-ime-build\.ps1/, 'IME register should build before registering');
@@ -203,7 +206,9 @@ assert.doesNotMatch(
   'IME unregister must not only derive legacy build-output DLL paths',
 );
 
-assert.deepEqual(tauriConfig.bundle.windows.wix.fragmentPaths, ['wix/openless-ime.wxs']);
+assert.deepEqual(tauriConfig.bundle.windows.wix.fragmentPaths, [
+  '../../windows/wix/openless-ime.wxs',
+]);
 assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [
   'OpenLessImeDllX64Component',
   'OpenLessImeDllX86Component',
@@ -215,7 +220,7 @@ assert.equal(
 );
 assert.equal(
   tauriConfig.bundle.windows.nsis.installerHooks,
-  'nsis/openless-ime-hooks.nsh',
+  '../../windows/nsis/openless-ime-hooks.nsh',
   'NSIS must install and register the TSF DLLs',
 );
 
@@ -303,12 +308,12 @@ assert.match(
 );
 assert.match(
   wixFragment,
-  /Source="src-tauri\\target\\windows-ime-msvc\\x64\\Release\\OpenLessIme\.dll"/,
+  /Source="\$\(env\.OPENLESS_IME_DLL_X64\)"/,
   'WiX fragment should consume the package-built x64 IME DLL',
 );
 assert.match(
   wixFragment,
-  /Source="src-tauri\\target\\windows-ime-msvc\\x86\\Release\\OpenLessIme\.dll"/,
+  /Source="\$\(env\.OPENLESS_IME_DLL_X86\)"/,
   'WiX fragment should consume the package-built x86 IME DLL',
 );
 assert.match(wixFragment, /regsvr32\.exe/, 'MSI should register and unregister the TSF DLL');
@@ -469,9 +474,7 @@ assert.match(
   /stage_x64_begin[\s\S]*stage_x64_complete[\s\S]*stage_x86_begin[\s\S]*stage_x86_complete/,
   'NSIS should mark both IME staging boundaries in order',
 );
-const stageMacro = nsisHook.match(
-  /!macro OPENLESS_IME_STAGE_AND_REPLACE[\s\S]*?!macroend/,
-)?.[0];
+const stageMacro = nsisHook.match(/!macro OPENLESS_IME_STAGE_AND_REPLACE[\s\S]*?!macroend/)?.[0];
 assert.ok(stageMacro, 'NSIS IME staging macro should exist');
 assert.match(
   stageMacro,

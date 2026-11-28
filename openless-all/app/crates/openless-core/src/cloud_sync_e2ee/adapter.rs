@@ -29,6 +29,37 @@ pub(crate) fn build(
     events: crate::events::BackendEventPublisher,
     tasks: Arc<dyn crate::TaskSpawner>,
 ) -> SyncResult<(super::EncryptedSyncService, Arc<CoreSyncStore>)> {
+    let credential_store_for_service = credentials.clone();
+    let (origin, local, store) = build_store(
+        config,
+        data_dir,
+        repositories,
+        credentials,
+        tasks,
+        "encrypted-sync",
+    )?;
+    let service = super::EncryptedSyncService::new(
+        super::SyncServiceConfig {
+            origin,
+            github_client_id,
+        },
+        marketplace,
+        local,
+        store.clone(),
+        credential_store_for_service,
+        events,
+    );
+    Ok((service, store))
+}
+
+pub(super) fn build_store(
+    config: super::EncryptedSyncConfig,
+    data_dir: &Path,
+    repositories: crate::BackendRepositories,
+    credentials: Arc<dyn crate::CredentialStore>,
+    tasks: Arc<dyn crate::TaskSpawner>,
+    root_name: &str,
+) -> SyncResult<(String, LocalStorage, Arc<CoreSyncStore>)> {
     let origin = url::Url::parse(&config.service_origin)
         .map_err(|_| super::error("unsupported_protocol"))?;
     if origin.scheme() != "https"
@@ -42,7 +73,7 @@ pub(crate) fn build(
         return Err(super::error("unsupported_protocol"));
     }
     let origin = origin.origin().ascii_serialization();
-    let root = data_dir.join("encrypted-sync");
+    let root = data_dir.join(root_name);
     log::debug!(
         "[e2ee-adapter] build start data_dir={} root={}",
         data_dir.display(),
@@ -80,7 +111,6 @@ pub(crate) fn build(
         credentials.clone(),
     );
     log::debug!("[e2ee-adapter] stage=store_new");
-    let credential_store_for_service = credentials.clone();
     let store = Arc::new(
         CoreSyncStore::new(
             repositories,
@@ -97,18 +127,7 @@ pub(crate) fn build(
         })?,
     );
     log::debug!("[e2ee-adapter] stage=store_ok");
-    let service = super::EncryptedSyncService::new(
-        super::SyncServiceConfig {
-            origin,
-            github_client_id,
-        },
-        marketplace,
-        local,
-        store.clone(),
-        credential_store_for_service,
-        events,
-    );
-    Ok((service, store))
+    Ok((origin, local, store))
 }
 
 /// Build the native document store without requiring a configured sync account.
@@ -180,8 +199,13 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
                     super::error("local_storage_unavailable")
                 })?;
                 let path = entry.path();
-                if path.is_dir()
-                    && std::fs::read_dir(&path)
+                let owned = entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(crate::cloud_sync_e2ee_store::gate::is_owned_sync_entry);
+                if owned
+                    && path.is_dir()
+                    && crate::cloud_sync_e2ee_store::gate::contains_owned_sync_entry(&path)
                         .map_err(|error| {
                             log::error!(
                                 "[e2ee-adapter] inspect protected dir failed path={} err={error}",
@@ -189,8 +213,6 @@ pub(crate) fn load_device_id(root: &Path) -> SyncResult<String> {
                             );
                             super::error("local_storage_unavailable")
                         })?
-                        .next()
-                        .is_some()
                 {
                     log::error!(
                         "[e2ee-adapter] device-id missing but ciphertext present under {}; recovery required",

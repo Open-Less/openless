@@ -258,7 +258,7 @@ impl DictationEngineRouter {
         context: &DictationContext,
     ) -> Result<Arc<dyn DictationEngine>, BackendError> {
         match context.pipeline_mode {
-            PipelineMode::Traditional => Ok(Arc::clone(&self.traditional)),
+            PipelineMode::Traditional | PipelineMode::Deepseek => Ok(Arc::clone(&self.traditional)),
             PipelineMode::Multimodal => self
                 .omni
                 .read()
