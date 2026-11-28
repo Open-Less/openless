@@ -49,11 +49,6 @@ mod ask_window {
 mod unicode_keystroke {
     pub fn is_secure_input_enabled() -> bool { false }
 }
-mod dictation_references {
-    pub fn key_event(_: i64, _: u64, _: bool, _: bool) -> bool { false }
-    pub fn capture_in_progress() -> bool { false }
-    pub fn collecting() -> bool { false }
-}
 mod host_document {
     pub mod macos {
         pub fn record_learning_key(_: i64, _: u64, _: bool) {}
@@ -65,8 +60,6 @@ mod combo_hotkey;
 mod hotkey;
 #[path = "../../src/build_identity.rs"]
 mod build_identity;
-#[path = "../../src/recording_companion.rs"]
-mod recording_companion;
 #[path = "../../src/side_aware_combo.rs"]
 mod side_aware_combo;
 #[path = "../../src/capsule_style_menu.rs"]

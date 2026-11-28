@@ -120,6 +120,18 @@ fn all_current_preference_fields_have_an_explicit_registration() {
 }
 
 #[test]
+fn references_legacy_encrypted_profile_ignores_retired_screenshot_key() {
+    let mut exported = export_documents(snapshot()).unwrap();
+    let profile = exported.documents.iter_mut().find(|doc| doc.kind == DocumentKind::DeviceProfile).unwrap();
+    profile.value["preferences"]["dictationReferenceKey"] = json!({"obsolete": true});
+    profile.value["preferences"]["dictationReferencesEnabled"] = json!(true);
+    let prefs: crate::shared_types::UserPreferences = serde_json::from_value(profile.value["preferences"].clone()).unwrap();
+    assert!(prefs.dictation_references_enabled);
+    assert!(serde_json::to_value(prefs).unwrap().get("dictationReferenceKey").is_none());
+    validate_document_set(&exported).unwrap();
+}
+
+#[test]
 fn skip_auto_style_e2ee_device_profile_accepts_legacy_and_new_fields() {
     let mut old = sample().documents().clone();
     let profile = old.documents.iter_mut().find(|doc| doc.kind == DocumentKind::DeviceProfile).unwrap();

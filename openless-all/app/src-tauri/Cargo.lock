@@ -4536,6 +4536,7 @@ dependencies = [
  "hmac 0.12.1",
  "hyper",
  "hyper-util",
+ "image",
  "jni 0.21.1",
  "keyring",
  "libc",

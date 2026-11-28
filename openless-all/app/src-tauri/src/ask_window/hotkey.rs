@@ -539,8 +539,6 @@ impl Native {
     }
 
     fn abort_for_companion(&mut self, tx: &mpsc::UnboundedSender<Message>) {
-        #[cfg(target_os = "macos")]
-        if crate::dictation_references::collecting() { return; }
         if let Some(held) = self
             .held
             .as_mut()

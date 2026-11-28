@@ -74,7 +74,6 @@ mod hotkey;
 mod hotkey;
 mod insertion;
 mod dictation_references;
-mod recording_companion;
 mod issue1266_debug;
 mod llm_gemini;
 #[cfg(target_os = "macos")]
@@ -285,8 +284,6 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_platform_capabilities,
             #[cfg(not(mobile))]
             commands::get_dictation_references_status,
-            #[cfg(not(mobile))]
-            commands::open_dictation_references_permission_settings,
             commands::get_android_overlay_status,
             commands::request_android_overlay_permission,
             commands::show_android_overlay,

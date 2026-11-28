@@ -603,8 +603,6 @@ pub struct UserPreferences {
     pub qa_companion_key: String,
     #[serde(default)]
     pub dictation_references_enabled: bool,
-    #[serde(default = "default_dictation_reference_key")]
-    pub dictation_reference_key: String,
     /// Kept in the device profile for compatibility with older Ask builds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qa_shortcut_behavior: Option<QaShortcutBehavior>,
@@ -1168,8 +1166,6 @@ struct UserPreferencesWire {
     qa_companion_key: String,
     #[serde(default)]
     dictation_references_enabled: bool,
-    #[serde(default = "default_dictation_reference_key")]
-    dictation_reference_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     qa_shortcut_behavior: Option<QaShortcutBehavior>,
     #[serde(default)]
@@ -1443,7 +1439,6 @@ impl Default for UserPreferencesWire {
             qa_hotkey: prefs.qa_hotkey,
             qa_companion_key: prefs.qa_companion_key,
             dictation_references_enabled: prefs.dictation_references_enabled,
-            dictation_reference_key: prefs.dictation_reference_key,
             qa_shortcut_behavior: prefs.qa_shortcut_behavior,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
@@ -1713,7 +1708,6 @@ impl<'de> Deserialize<'de> for UserPreferences {
             }, // retired desktop follow-up shortcut
             qa_companion_key: wire.qa_companion_key,
             dictation_references_enabled: wire.dictation_references_enabled,
-            dictation_reference_key: wire.dictation_reference_key,
             qa_shortcut_behavior: wire.qa_shortcut_behavior,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
@@ -1962,7 +1956,6 @@ pub enum QaShortcutBehavior {
 fn default_qa_companion_key() -> String {
     "Space".into()
 }
-pub fn default_dictation_reference_key() -> String { "S".into() }
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
     #[cfg(target_os = "windows")]
@@ -2144,7 +2137,6 @@ impl Default for UserPreferences {
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
             dictation_references_enabled: false,
-            dictation_reference_key: default_dictation_reference_key(),
             qa_shortcut_behavior: None,
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),

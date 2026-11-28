@@ -3815,7 +3815,7 @@ impl ActiveRecording for TauriActiveRecording {
 
     fn stop(mut self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
         Box::pin(async move {
-            drop(self.reference_lease.take());
+            let references = self.reference_lease.take().and_then(|lease| lease.stop());
             use crate::issue1266_debug::{Event, Facts, Kind, Operation, Outcome, Probe};
             let operation = Operation::new(Probe::P5);
             let _scope = operation.scope();
@@ -3856,6 +3856,7 @@ impl ActiveRecording for TauriActiveRecording {
                         warm_hub.resume_after_cold_capture();
                     }
                 }
+                if let Some(references) = references { references.finish(); }
                 operation.record(Event::Returned, Outcome::Returned, Facts::default());
                 Ok(())
             })
@@ -4566,6 +4567,27 @@ where
     result
 }
 
+impl TauriTextInserter {
+    fn capture_bound_target(&self, session_id: Option<SessionId>) -> Option<CapturedTextTarget> {
+        let insertion_target = crate::selection::capture_selection_insertion_target();
+        if crate::selection::selection_insertion_target_is_captured(&insertion_target) {
+            if let Some(id) = session_id { crate::dictation_references::bind_target(id); }
+        }
+        #[cfg(target_os = "windows")]
+        let ime_target = crate::windows_ime_target::capture_ime_submit_target();
+        Some(CapturedTextTarget {
+            inserter: Arc::new(Self {
+                insertion_target: Some(insertion_target.clone()),
+                #[cfg(target_os = "macos")]
+                live_capture: None,
+                #[cfg(target_os = "windows")]
+                ime_target,
+                ..self.clone()
+            }),
+            host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target, self.backend.clone())),
+        })
+    }
+}
 impl CoreTextInserter for TauriTextInserter {
     fn enrich_dictation_text(&self, session_id: SessionId, text: String, duration_ms: u64) -> String {
         crate::dictation_references::enrich(session_id, text, duration_ms)
@@ -4574,23 +4596,10 @@ impl CoreTextInserter for TauriTextInserter {
         true
     }
     fn capture_target(&self) -> Option<CapturedTextTarget> {
-        let insertion_target = crate::selection::capture_selection_insertion_target();
-        #[cfg(target_os = "windows")]
-        let ime_target = crate::windows_ime_target::capture_ime_submit_target();
-        #[cfg(target_os = "macos")]
-        // Retired AX composition does not capture or retain document text.
-        let live_capture = None;
-        Some(CapturedTextTarget {
-            inserter: Arc::new(Self {
-                insertion_target: Some(insertion_target.clone()),
-                #[cfg(target_os = "macos")]
-                live_capture,
-                #[cfg(target_os = "windows")]
-                ime_target,
-                ..self.clone()
-            }),
-            host_context: Arc::new(TauriHostContextAdapter::for_target(insertion_target, self.backend.clone())),
-        })
+        self.capture_bound_target(None)
+    }
+    fn capture_target_for_session(&self, session_id: SessionId) -> Option<CapturedTextTarget> {
+        self.capture_bound_target(Some(session_id))
     }
 
     fn begin(

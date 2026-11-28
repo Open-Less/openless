@@ -36,7 +36,7 @@ pub struct Reference {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilterResult { Accept, Baseline, SelfWrite, Duplicate, NotUserCopy, TooLarge }
+pub enum FilterResult { Accept, Baseline, SelfWrite, Duplicate, TooLarge }
 
 /// Revisions identify ownership; hashes identify consecutive duplicate content.
 /// A later identical *user* copy is not mistaken for an OpenLess write.
@@ -44,11 +44,10 @@ pub struct ClipboardFilter { baseline: u64, last_hash: Option<u64>, last_revisio
 impl ClipboardFilter {
     pub fn revision_seen(&self, revision: u64) -> bool { revision == self.baseline || revision == self.last_revision }
     pub fn new(baseline: u64) -> Self { Self { baseline, last_hash: None, last_revision: baseline } }
-    pub fn observe(&mut self, revision: u64, hash: u64, size: u64, self_write: bool, user_copy: bool) -> FilterResult {
+    pub fn observe(&mut self, revision: u64, hash: u64, size: u64, self_write: bool) -> FilterResult {
         if revision == self.baseline || revision == self.last_revision { return FilterResult::Baseline; }
         self.last_revision = revision;
         if self_write { self.last_hash = None; return FilterResult::SelfWrite; }
-        if !user_copy { return FilterResult::NotUserCopy; }
         if self.last_hash == Some(hash) { return FilterResult::Duplicate; }
         self.last_hash = Some(hash);
         if size > MAX_BYTES { FilterResult::TooLarge } else { FilterResult::Accept }
@@ -213,15 +212,18 @@ mod tests {
         Reference { kind: ReferenceKind::File, elapsed_ms: ms, sequence, path: PathBuf::from("/original.log"), source: "user".into(), size: 2, name: format!("file-{sequence}"), original_url: None, inline: None, transcript_chars: None, original_only: true }
     }
     #[test]
-    fn references_filter_baseline_self_writes_background_duplicates_and_limits() {
+    fn references_filter_baseline_self_writes_menu_context_screenshot_duplicates_and_limits() {
         let mut f = ClipboardFilter::new(7);
-        assert_eq!(f.observe(7, 1, 1, false, true), FilterResult::Baseline);
-        assert_eq!(f.observe(8, 2, 1, true, true), FilterResult::SelfWrite);
-        assert_eq!(f.observe(9, 3, 1, false, false), FilterResult::NotUserCopy);
-        assert_eq!(f.observe(10, 4, 1, false, true), FilterResult::Accept);
-        assert_eq!(f.observe(11, 4, 1, false, true), FilterResult::Duplicate);
-        assert_eq!(f.observe(12, 5, MAX_BYTES + 1, false, true), FilterResult::TooLarge);
-        assert_eq!(f.observe(13, 2, 1, false, true), FilterResult::Accept);
+        assert_eq!(f.observe(7, 1, 1, false), FilterResult::Baseline);
+        assert_eq!(f.observe(8, 2, 1, true), FilterResult::SelfWrite);
+        // There is deliberately no keyboard-intent input: menu, context menu,
+        // screenshot-to-clipboard and programmatic writes have identical eligibility.
+        for (revision, hash) in [(9, 3), (10, 4), (11, 5), (12, 6)] {
+            assert_eq!(f.observe(revision, hash, 1, false), FilterResult::Accept);
+        }
+        assert_eq!(f.observe(13, 6, 1, false), FilterResult::Duplicate);
+        assert_eq!(f.observe(14, 7, MAX_BYTES + 1, false), FilterResult::TooLarge);
+        assert_eq!(f.observe(15, 2, 1, false), FilterResult::Accept);
     }
     #[test]
     fn references_no_material_is_exact_identity_and_unknown_timing_appends() {
@@ -285,19 +287,17 @@ mod tests {
         assert_eq!(INLINE_CHARS, 80);
     }
     #[test]
-    fn references_legacy_preferences_defaults_and_shortcut_conflicts() {
+    fn references_legacy_preferences_ignore_removed_key_and_preserve_defaults() {
         let mut old = serde_json::to_value(crate::shared_types::UserPreferences::default()).unwrap();
         old.as_object_mut().unwrap().remove("dictationReferencesEnabled");
-        old.as_object_mut().unwrap().remove("dictationReferenceKey");
-        let mut p: crate::shared_types::UserPreferences = serde_json::from_value(old).unwrap();
-        assert!(!p.dictation_references_enabled);
-        assert_eq!(p.dictation_reference_key, "S");
-        p.dictation_references_enabled = true;
-        assert!(crate::reject_hotkey_collisions(&p).is_ok());
-        p.dictation_reference_key = p.qa_companion_key.clone();
-        assert!(crate::reject_hotkey_collisions(&p).is_err());
-        p.dictation_references_enabled = false;
-        assert!(crate::reject_hotkey_collisions(&p).is_ok());
+        for legacy in [serde_json::json!("S"), serde_json::json!(null), serde_json::json!({"obsolete": true})] {
+            old["dictationReferenceKey"] = legacy;
+            let mut p: crate::shared_types::UserPreferences = serde_json::from_value(old.clone()).unwrap();
+            assert!(!p.dictation_references_enabled);
+            p.dictation_references_enabled = true;
+            assert!(crate::reject_hotkey_collisions(&p).is_ok());
+            assert!(serde_json::to_value(p).unwrap().get("dictationReferenceKey").is_none());
+        }
     }
     #[test]
     fn references_limits_and_short_text_rendering_are_explicit() {
