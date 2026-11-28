@@ -28,6 +28,24 @@ for (const [event, dev, expected] of [
 const configure = job.indexOf('- name: Configure Dev build environment');
 const cache = job.indexOf('- name: Cache Dev Rust dependencies');
 const compile = job.indexOf('- name: Compile and package Dev');
+const saveCondition = job.slice(cache, compile).match(/save-if: \$\{\{ (.+) \}\}/)[1];
+for (const [event, ref, expected] of [
+  ['schedule', 'refs/heads/beta', true],
+  ['workflow_dispatch', 'refs/heads/beta', true],
+  ['workflow_dispatch', 'refs/heads/feature', true],
+  ['workflow_dispatch', 'refs/tags/v2.0.3-tauri', false],
+  ['pull_request', 'refs/pull/123/merge', false],
+  ['schedule', 'refs/heads/feature', false],
+]) {
+  assert.equal(
+    runInNewContext(saveCondition, {
+      github: { event_name: event, ref },
+      startsWith: (value, prefix) => value.startsWith(prefix),
+    }),
+    expected,
+    `${event} ${ref}: only the baseline and explicit branch builds may save`,
+  );
+}
 assert.ok(
   configure >= 0 && configure < cache && cache < compile,
   'the cache must fingerprint the same profile and compiler wrapper used by the build',

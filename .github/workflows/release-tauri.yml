@@ -113,8 +113,8 @@ jobs:
           prefix-key: v1-rust-dev
           shared-key: tauri-macos-dev
           workspaces: 'openless-all/app/src-tauri -> target'
-          # Explicit branch dispatches may warm their next trial build. PRs and
-          # tags never enter this job. Cache only dependencies, not app binaries
+          # Explicit branch dispatches may warm their next trial build. PRs never
+          # enter this job; tag dispatches cannot save. Cache dependencies, not app binaries
           # or incremental state; cache-maintenance enforces the repository budget.
           save-if: ${{ github.ref == 'refs/heads/beta' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/')) }}
       - name: Verify Dev build cache contracts
