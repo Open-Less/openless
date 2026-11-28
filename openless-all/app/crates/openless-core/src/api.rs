@@ -9721,6 +9721,10 @@ impl OpenLessBackend {
                 apply_correction_rules(&engine_result.polished_text, correction_rules);
         }
 
+        engine_result.polished_text = self.deps.text_inserter.enrich_dictation_text(
+            session_id, engine_result.polished_text, engine_result.duration_ms,
+        );
+
         // Cancellation may happen while ASR/LLM work is in flight. Never
         // insert a result after the session has been cancelled or replaced.
         let cancelled_before_insertion = {

@@ -874,6 +874,9 @@ pub trait TextPolisher: Send + Sync {
 }
 
 pub trait TextInserter: Send + Sync {
+    /// Optional desktop reference enrichment after all text processing, before history/delivery.
+    /// Other hosts retain exact legacy behavior without implementing this hook.
+    fn enrich_dictation_text(&self, _session_id: SessionId, text: String, _duration_ms: u64) -> String { text }
     /// Desktop keyboard/input-source preparation must run in the serialized
     /// processing lane, so a recording never owns another segment's native state.
     fn defer_preparation_until_stop(&self) -> bool {
