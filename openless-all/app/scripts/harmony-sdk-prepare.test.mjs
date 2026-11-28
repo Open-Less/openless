@@ -264,8 +264,28 @@ async function main() {
     assert.match(result.output, /HARMONY_MIN_API must be a positive integer/);
   }
 
+  // 11. Match the real 26.0.0.821 archive: a command-line-tools wrapper plus
+  // emulator/sdk-pkg.json. The emulator metadata is not an SDK API contract.
+  {
+    const wrapper = mkdtempSync(join(work, 'wrapped-'));
+    const tools = join(wrapper, 'command-line-tools');
+    cpSync(makeTree(26), tools, { recursive: true });
+    mkdirSync(join(tools, 'emulator'), { recursive: true });
+    writeFileSync(
+      join(tools, 'emulator/sdk-pkg.json'),
+      JSON.stringify({ meta: {}, data: { path: 'emulator', version: '26.0.0.821' } }),
+    );
+    const archive = pack(wrapper, 'wrapped-tools.tar.gz');
+    const root = fresh();
+    const result = run({ url: `file://${archive}`, sha256: digest(archive), toolchain: root });
+    assert.equal(result.code, 0, result.output);
+    const installed = JSON.parse(readFileSync(join(root, 'sdk/default/sdk-pkg.json'), 'utf8'));
+    assert.equal(installed.data.apiVersion, '26');
+    assert.ok(existsSync(join(root, 'bin/hvigorw')));
+  }
+
   console.log(
-    'HarmonyOS SDK prepare: API 26 install, API 21/checksum/non-Release rejection, shard concatenation, staged validation, reuse and explicit replacement passed',
+    'HarmonyOS SDK prepare: API 26 install, API 21/checksum/non-Release rejection, shard concatenation, staged validation, reuse, explicit replacement and wrapped toolchain root discovery passed',
   );
 }
 

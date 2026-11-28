@@ -227,10 +227,17 @@ else
   # install (`sdk/` + `bin/` + `hvigor/` + `tool/`), or either wrapped in one
   # top-level directory.
   source_root=$staging
-  if [ ! -d "$staging/sdk" ] && [ -z "$(find "$staging" -maxdepth 3 -name sdk-pkg.json | head -1)" ]; then
+  if [ ! -d "$staging/sdk" ]; then
+    # Whole toolchains may wrap sdk/ under command-line-tools/. Other tools,
+    # notably emulator/, also carry sdk-pkg.json without an apiVersion. Locate
+    # the actual sdk/ directory before interpreting loose package metadata as
+    # a bare SDK root.
     inner=$(find "$staging" -maxdepth 3 -type d -name sdk | head -1)
-    [ -n "$inner" ] || die "SDK archive contains neither sdk/ nor sdk-pkg.json"
-    source_root=$(dirname "$inner")
+    if [ -n "$inner" ]; then
+      source_root=$(dirname "$inner")
+    elif [ -z "$(find "$staging" -maxdepth 3 -name sdk-pkg.json | head -1)" ]; then
+      die "SDK archive contains neither sdk/ nor sdk-pkg.json"
+    fi
   fi
 
   # Validate the candidate while it is still staged: a bad archive, an old API or
