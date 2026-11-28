@@ -1183,7 +1183,8 @@ async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_str
         assert_eq!(history[0].raw_transcript, original);
         if !translation {
             assert_eq!(history[0].style_pack_id.as_deref(),
-                succeeds.then_some(selected_id.as_str()));
+                Some(selected_id.as_str()));
+            assert_eq!(history[0].mode, backend.get_style_pack(&selected_id).unwrap().base_mode);
         }
         assert_eq!(runtime.applied().len(), usize::from(succeeds && !translation));
         if succeeds { assert_eq!(history[0].final_text, if translation { complete_result.trim() } else { &complete_result }); }
