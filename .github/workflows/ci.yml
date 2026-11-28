@@ -673,14 +673,11 @@ jobs:
           path: ${{ runner.temp }}/openless-android-emulator.log
           if-no-files-found: ignore
 
-  # HarmonyOS covers three layers, in three places:
-  #   * the Rust host is compiled and tested by the Linux job
-  #     (`cargo test --locked -p openless-harmony-host`);
-  #   * ArkTS cannot be compiled without the Huawei SDK, so this job checks what
-  #     is reproducible on a hosted runner: the committed IPC audit still matches
-  #     the code, the ArkTS contract tests pass, and the ArkWeb bundle builds;
-  #   * when `HARMONY_SDK_URL` is configured, the last step additionally builds a
-  #     real HAP, which is what actually type-checks the ArkTS sources.
+  # HarmonyOS has one native ArkUI project in openless-all/harmony. This job
+  # verifies the shared IPC report and ArkTS behavior/structure contracts, then
+  # packages a real unsigned HAP with the checksum-pinned Huawei SDK so ArkTS
+  # sources and the Rust host are compiled. No React/ArkWeb bundle is embedded.
+  # Linux validation separately covers Rust host unit tests when explicitly enabled.
   harmony-check:
     needs: [changes]
     if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
@@ -706,17 +703,34 @@ jobs:
         # report hides commands that the Harmony host does not implement yet.
         run: |
           node ../harmony/scripts/audit-harmony-ipc.mjs --check
+      # Guards the gate itself: a stale report must fail the check and `--check`
+      # must stay read-only, so a later audit change cannot silently weaken it.
+      - name: Harmony IPC audit gate regression
+        run: |
+          node scripts/harmony-ipc-audit-check.test.mjs
       - name: Harmony ArkTS contracts
         run: |
+          set -euo pipefail
           node scripts/harmony-entry-startup.test.mjs
           node scripts/harmony-app-dictation.test.mjs
           node scripts/harmony-voice-configuration.test.mjs
+          node scripts/harmony-siwc.test.mjs
           node scripts/harmony-panel-layout.test.mjs
           node scripts/harmony-editor-compat.test.mjs
           node scripts/harmony-clipboard-history.test.mjs
           node scripts/harmony-symbol-gesture.test.mjs
           node scripts/harmony-rime-startup.test.mjs
           node scripts/harmony-native-ui.test.mjs
+          node scripts/harmony-responsive-ui.test.mjs
+          node scripts/harmony-system-speech.test.mjs
+          node scripts/harmony-ios-parity.test.mjs
+          node scripts/harmony-window-layout.test.mjs
+          node scripts/harmony-release-contract.test.mjs
+          node scripts/harmony-history-actions.test.mjs
+          node scripts/harmony-library-actions.test.mjs
+          node scripts/harmony-credential-actions.test.mjs
+          node scripts/harmony-core-contracts.test.mjs
+          node scripts/harmony-click-surfaces.test.mjs
       # The HAP ships native ArkUI, so packaging builds the Rust host with the
       # pinned SDK and skips the React bundle.
       - uses: dtolnay/rust-toolchain@stable
@@ -728,7 +742,7 @@ jobs:
           workspaces: 'openless-all/app -> target'
           # The HAP embeds a release cdylib; keep its own key so the debug trees
           # of the other jobs do not evict it.
-          key: harmony-host
+          shared-key: harmony-host
           save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       # No toolchain cache. The download is 2.1 GB at ~100 MB/s plus ~70 s to

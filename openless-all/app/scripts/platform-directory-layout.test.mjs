@@ -53,9 +53,29 @@ for (const member of ['linux/egui', 'harmony/rust']) {
   assert.ok(read('app/Cargo.toml').includes(`"../${member}"`));
 }
 
-const files = execFileSync('git', ['ls-files', '-z'], { cwd: repo, encoding: 'utf8' })
-  .split('\0')
-  .filter(Boolean);
+// Inspect the current candidate tree, including unstaged new tests and script
+// moves. The index alone omits new files and resurrects intentional deletions
+// until the integrator stages them. Keep the same strict path/content rules for
+// every remaining file; ignored build outputs are never part of this tree.
+const gitFiles = (flags) =>
+  execFileSync('git', ['ls-files', '-z', ...flags], {
+    cwd: repo,
+    encoding: 'utf8',
+  })
+    .split('\0')
+    .filter(Boolean);
+const candidateFiles = (listed, deleted) => {
+  const removed = new Set(deleted);
+  return [...new Set(listed)].filter((path) => !removed.has(path)).sort();
+};
+assert.deepEqual(candidateFiles(['tracked', 'new', 'tracked', 'deleted'], ['deleted']), [
+  'new',
+  'tracked',
+]);
+const files = candidateFiles(
+  gitFiles(['--cached', '--others', '--exclude-standard']),
+  gitFiles(['--deleted']),
+);
 const movedScripts = files.filter((path) =>
   /^openless-all\/(?:android|harmony|linux|windows|macos)\/scripts\//.test(path),
 );
@@ -82,6 +102,7 @@ const scriptNames = movedScripts.map((path) => path.split('/scripts/')[1]);
 const activeExtensions =
   /(?:\.(?:[cm]?[jt]sx?|sh|zsh|ps1|cmd|py|rs|toml|json|json5|ya?ml|md|txt|patch|sln|vcxproj|props|targets|nsh|wxs)|(?:^|\/)CMakeLists\.txt)$/;
 for (const path of files) {
+  assert.ok(!oldPlatform.test(path), `obsolete platform file: ${path}`);
   // AOCI indexes are maintained in a separate task and may describe old trees.
   if (!activeExtensions.test(path) || path.startsWith('.aoci/') || /^aoci[^/]*\.txt$/.test(path))
     continue;
@@ -260,9 +281,22 @@ const mirror = read('windows/scripts/windows-build-gnu.ps1');
 assert.match(mirror, /git -c core\.quotePath=false ls-files --cached --others --exclude-standard/);
 assert.match(mirror, /Join-Path \$MirrorRoot "app"/);
 assert.match(mirror, /Copy-Item -LiteralPath \(Join-Path \$allRoot \$relative\)/);
-const frontend = read('harmony/scripts/build-harmony-frontend.sh');
-assert.match(frontend, /"\$APP_ROOT\/mobile-ime"/);
-assert.match(frontend, /shutil\.copytree\(mobile_ime, target \/ 'mobile-ime'/);
+const harmonyBuild = read('harmony/scripts/build-harmony-app.sh');
+assert.match(harmonyBuild, /OPENLESS_HARMONY_MOBILE_IME:-\$APP_ROOT\/mobile-ime/);
+assert.match(harmonyBuild, /shutil\.copytree\(mobile_ime, target \/ 'mobile-ime'/);
+assert.doesNotMatch(harmonyBuild, /npm run build|web-dist|dist\/index\.html/);
+assert.ok(!existsSync(resolve(all, 'harmony/scripts/build-harmony-frontend.sh')));
+assert.ok(!existsSync(resolve(app, 'scripts/build-harmony-app.sh')));
+for (const file of [
+  'build-profile.json5',
+  'entry/src/main/module.json5',
+  'entry/src/main/ets/pages/Index.ets',
+]) {
+  assert.ok(
+    !existsSync(resolve(app, 'harmony', file)),
+    'the retired app-local Harmony project must not return: ' + file,
+  );
+}
 assert.match(read('windows/wix/openless-ime.wxs'), /Source="\$\(env\.OPENLESS_IME_DLL_X64\)"/);
 assert.match(read('windows/wix/openless-ime.wxs'), /Source="\$\(env\.OPENLESS_IME_DLL_X86\)"/);
 console.log('Platform directory layout, source paths, and bundle assets passed');

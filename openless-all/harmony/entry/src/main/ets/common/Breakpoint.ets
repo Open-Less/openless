@@ -1,25 +1,13 @@
-import { display, window } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI';
 
-/**
- * One-development-multi-deployment breakpoints.
- *
- * The HarmonyOS blueprint splits layouts at 600vp and 840vp:
- *   sm  phone portrait                        -> bottom tab bar, one column
- *   md  phone landscape / small tablet        -> icon rail, one wide column
- *   lg  tablet / 2-in-1                       -> labelled sidebar, list + detail
- *
- * The size class comes from the window's own rectangle instead of `mediaquery`:
- * a free-form 2-in-1 window is resized by the user, and `windowSizeChange` is the
- * only signal that reports those sizes reliably (media query listeners report the
- * whole-screen size and their range syntax parses differently across releases).
- * Rotation, split-screen and free-form resizing all arrive as size changes, so one
- * code path covers phone, tablet and PC.
+/** Huawei recommended window-width boundaries (xs folds into compact sm).
+ * https://developer.huawei.com/consumer/cn/doc/best-practices-V5/bpta-multi-device-bp-practice-V5
+ * No device-type/orientation lock: split and floating windows share this path.
  */
 export class Breakpoints {
   static readonly SM: string = 'sm';
   static readonly MD: string = 'md';
   static readonly LG: string = 'lg';
-  /** 2-in-1 / PC: 12-column layouts, three panes. */
   static readonly XL: string = 'xl';
 
   static isCompact(bp: string): boolean {
@@ -34,36 +22,41 @@ export class Breakpoints {
     return bp === Breakpoints.XL;
   }
 
-  /** Window width in vp to a size class. */
   static of(widthVp: number): string {
     if (widthVp < 600) return Breakpoints.SM;
     if (widthVp < 840) return Breakpoints.MD;
-    if (widthVp < 1080) return Breakpoints.LG;
+    if (widthVp < 1440) return Breakpoints.LG;
     return Breakpoints.XL;
   }
 }
 
 export class WindowWatcher {
   private win?: window.Window;
-  private callback?: (bp: string) => void;
-  private current: string = Breakpoints.MD;
-  private density: number = 2;
+  private callback?: (bp: string, shortWindow: boolean, portrait: boolean) => void;
+  private current: string = Breakpoints.SM;
+  private shortWindow: boolean = false;
+  private portrait: boolean = true;
+  private initialized: boolean = false;
+  private generation: number = 0;
+  private sizeListener?: (size: window.Size) => void;
 
   value(): string {
     return this.current;
   }
 
-  /**
-   * Subscribes to the window size; `onChange` fires only when the size class
-   * changes, so a resize inside one class does not re-render the whole tree.
-   */
-  start(target: window.Window, onChange: (bp: string) => void): void {
+  start(target: window.Window, onChange: (bp: string, shortWindow: boolean, portrait: boolean) => void): void {
+    this.stop();
     this.win = target;
     this.callback = onChange;
-    this.density = WindowWatcher.readDensity();
+    const generation: number = this.generation;
+    this.sizeListener = (size: window.Size): void => {
+      // An already queued event from a destroyed/replaced window is obsolete.
+      if (generation !== this.generation || this.win !== target) return;
+      this.apply(size.width, size.height);
+    };
     try {
       const properties = target.getWindowProperties();
-      this.apply(properties.windowRect.width);
+      this.apply(properties.windowRect.width, properties.windowRect.height);
       target.on('windowSizeChange', this.sizeListener);
     } catch (error) {
       console.error('[OpenLess Window] watcher failed: ' + JSON.stringify(error));
@@ -71,7 +64,8 @@ export class WindowWatcher {
   }
 
   stop(): void {
-    if (this.win !== undefined) {
+    this.generation++;
+    if (this.win !== undefined && this.sizeListener !== undefined) {
       try {
         this.win.off('windowSizeChange', this.sizeListener);
       } catch (error) {
@@ -80,26 +74,27 @@ export class WindowWatcher {
     }
     this.win = undefined;
     this.callback = undefined;
+    this.sizeListener = undefined;
+    this.initialized = false;
   }
 
-  private static readDensity(): number {
-    try {
-      const info: display.Display = display.getDefaultDisplaySync();
-      if (info.densityPixels > 0) return info.densityPixels;
-    } catch (error) {
-      console.warn('[OpenLess Window] density unavailable, assuming 2x');
-    }
-    return 2;
-  }
-
-  private sizeListener = (size: window.Size): void => {
-    this.apply(size.width);
-  };
-
-  private apply(widthPx: number): void {
-    const next: string = Breakpoints.of(widthPx / this.density);
-    if (next === this.current) return;
+  private apply(widthPx: number, heightPx: number): void {
+    if (this.win === undefined || widthPx <= 0 || heightPx <= 0) return;
+    // Bind conversion to this window's UIContext, not the default display density.
+    // https://developer.huawei.com/consumer/cn/doc/harmonyos-faqs/faqs-arkui-753
+    const context = this.win.getUIContext();
+    const widthVp: number = context.px2vp(widthPx);
+    const heightVp: number = context.px2vp(heightPx);
+    const next: string = Breakpoints.of(widthVp);
+    const short: boolean = heightVp < 480;
+    // Portrait keeps the phone presentation on tablets (iOS demo layout).
+    const portrait: boolean = heightVp >= widthVp;
+    if (this.initialized && next === this.current && short === this.shortWindow &&
+      portrait === this.portrait) return;
+    this.initialized = true;
     this.current = next;
-    if (this.callback !== undefined) this.callback(next);
+    this.shortWindow = short;
+    this.portrait = portrait;
+    if (this.callback !== undefined) this.callback(next, short, portrait);
   }
 }

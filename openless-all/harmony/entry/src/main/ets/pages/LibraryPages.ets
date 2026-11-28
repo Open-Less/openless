@@ -1,7 +1,17 @@
+import {
+  CorrectionRuleRow,
+  StyleSummaryCard,
+  VocabularyRow
+} from '../components/library/LibraryPresentation';
 import { Fmt } from '../common/Format';
-import { Layout, Leading, Palette, Radius, Space, Type } from '../common/Theme';
+import { symbolOf } from '../components/Icons';
+import { LengthMetrics } from '@kit.ArkUI';
+import { Layout, Leading, Palette, Radius, Size, Space, Type, floatShadow } from '../common/Theme';
 import {
   Banner,
+  AccentTextButton,
+  CapsuleChip,
+  CapsuleTrack,
   EmptyHint,
   ErrorNote,
   Group,
@@ -21,19 +31,24 @@ import {
   notify
 } from '../components/Kit';
 import { Nav } from '../components/Nav';
-import { Api, PendingCorrection, StylePackPayload, VocabPreset } from '../data/Api';
+import { Api, PendingCorrection, VocabPreset } from '../data/Api';
 import { CorrectionRule, DictionaryEntry, MarketplacePack, SettingsSnapshot, StylePack } from '../data/Types';
+import { StyleEditing } from '../data/StyleEditing';
 
 /**
- * Library surfaces of the v2 UI: 词典 / 纠正规则 / 风格（本地风格包 + 风格市场同页）.
+ * Library surfaces: 词典 / 纠正规则 / 风格（风格包 + 风格市场同页）.
  *
- * All three pages are list-shaped, so they share one skeleton: a `PageScaffold` title,
- * a search field on its own line, a `Segmented` filter, a `Flex`-wrapped action
- * row (never a single overflowing `Row`), then a `Group` of `RowItem`s. Rows only
- * navigate: every mutation (enable, delete, edit, install, like) happens in a
- * detail body that wide windows pin to the right column and compact windows lift
- * into a `bindSheet`. One sheet anchor per page switches content through
- * `sheetMode`, so two sheets can never stack.
+ * Ported from `ios/App/VocabularyView.swift` and `ios/App/StyleLibraryView.swift`
+ * rather than re-designed: the same inline page title with one trailing 44pt
+ * button, the same search field + segmented filter above the list, the same
+ * phrase-first dictionary rows and the same style cards (`StyleSummary` next to
+ * a 36pt sparkles tile, one trailing capsule, a 使用中 badge).
+ *
+ * The only structural adaptation is Harmony-specific and pre-existing: wide
+ * windows keep a right detail column and compact windows lift the same detail
+ * body into a `bindSheet`, so one sheet anchor per page switches content through
+ * `sheetMode` and two sheets can never stack. Every mutation still goes through
+ * the typed `Api` façade — no entry, rule or pack lost a button.
  */
 
 const SHEET_ADD: string = 'add';
@@ -45,23 +60,43 @@ const SHEET_CONFIRM: string = 'confirm';
 const SHEET_SUGGEST: string = 'suggest';
 const SHEET_MARKET: string = 'market';
 
+/**
+ * iOS `VocabularySource.filters` — `.all`, `.learned`, `.manual`.
+ * Core classifies an entry by its note marker, exactly like
+ * `CoreVocabularyEntry.classifiedSource` (`shared_types::LEARNED_VOCAB_NOTE`).
+ */
+const VOCAB_SOURCES: string[] = ['所有', '自动添加', '手动添加'];
+
+/** iOS `sourceFilters`: All has no glyph; learned uses sparkles, manual uses a book. */
+const VOCAB_CHIPS: CapsuleChip[] = [
+  { label: '所有', symbol: '', tint: 'neutral' },
+  { label: '自动添加', symbol: 'sparkles', tint: 'teal' },
+  { label: '手动添加', symbol: 'vocab', tint: 'neutral' }
+];
+const LEARNED_VOCAB_NOTE: string = '从手改中自动收集';
+
 const LIBRARY_FILTERS: string[] = ['全部', '已启用', '已停用'];
 const MARKET_SORTS: string[] = ['按热度', '最新'];
-const STYLE_SEGMENTS: string[] = ['本地风格包', '风格市场'];
 
 /**
- * 词典：本机词条的增删启停 + 只读预设词组。
+ * 词典：`VocabularyView` 的本机词条列表 + 增删启停 + 只读预设词组。
  *
  * `xl`/`lg` 时左侧列表右侧详情；窄屏点行把同一份详情抬进半模态。
  */
 @Component
 export struct VocabPage {
   @StorageLink('bp') bp: string = 'md';
+  @StorageLink('phoneLayout') phoneLayout: boolean = true;
+  @StorageLink('keyboardVisible') keyboardVisible: boolean = false;
 
   @State private entries: DictionaryEntry[] = [];
   @State private presets: VocabPreset[] = [];
   @State private query: string = '';
-  @State private filter: number = 0;
+  /** iOS reveals the search field from the floating orb instead of pinning it. */
+  @State private searchOpen: boolean = false;
+  private searchFocusPending: boolean = false;
+  /** Index into `VOCAB_SOURCES` (iOS `VocabularySource.filters`). */
+  @State private source: number = 0;
   @State private error: string = '';
   @State private loading: boolean = false;
   @State private busy: boolean = false;
@@ -69,13 +104,16 @@ export struct VocabPage {
   @State private sheetOpen: boolean = false;
   @State private sheetMode: string = SHEET_ADD;
   @State private draft: string = '';
+  @State private editDraft: string = '';
+  @State private editingPhrase: boolean = false;
 
   aboutToAppear(): void {
     this.reload();
   }
 
   private isWide(): boolean {
-    return this.bp === Layout.LG || this.bp === Layout.XL;
+    // Portrait tablets present the phone UI, so they stay single-column too.
+    return !this.phoneLayout && (this.bp === Layout.LG || this.bp === Layout.XL);
   }
 
   private async reload(): Promise<void> {
@@ -95,13 +133,21 @@ export struct VocabPage {
     }
   }
 
+  /** iOS `CoreVocabularyEntry.classifiedSource`, with Core's note-marker fallback. */
+  private sourceOf(entry: DictionaryEntry): string {
+    const note: string | null | undefined = entry.note;
+    if (note !== undefined && note !== null && note === LEARNED_VOCAB_NOTE) return 'learned';
+    return 'manual';
+  }
+
   private filtered(): DictionaryEntry[] {
     const needle: string = this.query.trim().toLowerCase();
     const result: DictionaryEntry[] = [];
     for (let index = 0; index < this.entries.length; index++) {
       const entry: DictionaryEntry = this.entries[index];
-      if (this.filter === 1 && entry.enabled !== true) continue;
-      if (this.filter === 2 && entry.enabled === true) continue;
+      const origin: string = this.sourceOf(entry);
+      if (this.source === 1 && origin !== 'learned') continue;
+      if (this.source === 2 && origin !== 'manual') continue;
       if (needle.length > 0 && entry.phrase.toLowerCase().indexOf(needle) < 0) continue;
       result.push(entry);
     }
@@ -146,6 +192,12 @@ export struct VocabPage {
     return Fmt.relative(this.entries[index].createdAt ?? '');
   }
 
+  private detailSource(): string {
+    const index: number = this.detailIndex();
+    if (index < 0) return '';
+    return this.sourceOf(this.entries[index]) === 'learned' ? '自动添加' : '手动添加';
+  }
+
   private openSheet(mode: string): void {
     this.sheetMode = mode;
     this.sheetOpen = true;
@@ -157,7 +209,36 @@ export struct VocabPage {
 
   private selectEntry(id: string): void {
     this.selectedId = id;
+    this.editingPhrase = false;
+    this.editDraft = '';
     if (!this.isWide()) this.openSheet(SHEET_DETAIL);
+  }
+
+  private startEditPhrase(): void {
+    const current: string = this.detailPhrase();
+    if (current.length === 0) return;
+    this.editDraft = current;
+    this.editingPhrase = true;
+  }
+
+  private async saveEditedPhrase(): Promise<void> {
+    const id: string = this.selectedId;
+    const next: string = this.editDraft.trim();
+    if (id.length === 0 || next.length === 0 || this.busy) return;
+    this.busy = true;
+    try {
+      await Api.updateVocabulary(id, next);
+      this.editingPhrase = false;
+      this.editDraft = '';
+      notify('已更新词条');
+      await this.reload();
+    } catch (error) {
+      const message: string = (error as Error).message;
+      this.error = message;
+      notify('更新失败：' + message);
+    } finally {
+      this.busy = false;
+    }
   }
 
   private async add(): Promise<void> {
@@ -208,368 +289,480 @@ export struct VocabPage {
   }
 
   build() {
-    PageScaffold({
-      title: '词典',
-      subtitle: this.entries.length.toString() + ' 个词条 · 转写时优先命中',
-      actionLabel: '纠正规则',
-      actionSymbol: 'corrections',
-      scrollable: false,
-      gap: Space.sm,
-      onAction: () => Nav.go(Nav.CORRECTIONS)
-    }) {
-      if (this.error.length > 0) {
-        ErrorNote({
-          message: this.error,
-          onRetry: () => {
-            this.reload();
+    // iOS `VocabularyView` (frame-verified): the 34pt title is drawn INSIDE the
+    // scrolling body (`.toolbar(.hidden)`, `navigationTitle("")`), the source chips
+    // scroll horizontally, and two 52pt orbs float above the dock.
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+      Scroll() {
+        Column({ space: Space.lg }) {
+          Text('词典')
+            .fontSize(Type.pageTitle)
+            .lineHeight(Leading.pageTitle)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Palette.text1())
+            .width('100%')
+            .accessibilityLevel('yes')
+
+          CapsuleTrack({
+            chips: VOCAB_CHIPS,
+            selected: this.source,
+            onSelect: (index: number) => {
+              if (index === this.source) return;
+              this.source = index;
+            }
+          })
+
+          if (this.error.length > 0) {
+            ErrorNote({
+              message: '词典暂时无法更新，请重试。',
+              onRetry: () => {
+                this.reload();
+              }
+            })
           }
-        })
+
+          if (this.isWide()) {
+            this.wideBody()
+          } else {
+            this.narrowBody()
+          }
+        }
+        .width('100%')
+        .padding({ top: Space.lg, bottom: Layout.dockClearance() + 76 })
       }
-      this.filterRow()
-      if (this.isWide()) {
-        this.wideBody()
-      } else {
-        this.narrowBody()
+      .layoutWeight(1)
+      .width('100%')
+      .align(Alignment.TopStart)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+
       }
+      .width('100%')
+      .height('100%')
+      this.bottomActions()
       this.sheetHost()
     }
+    .width('100%')
+    .height('100%')
+    .padding({ left: Layout.gutter(this.bp), right: Layout.gutter(this.bp) })
   }
 
   /**
-   * Search stays on its own line, filter and actions each own a line, so nothing
-   * can squeeze the input down to a few visible characters.
+   * iOS `dictionaryActions` (VocabularyView.swift:97-122): 52pt search orb that
+   * expands into a field of width `window - 64`, plus a 52pt add orb, 24pt side
+   * padding and 12pt vertical padding, all above the dock.
    */
   @Builder
-  filterRow() {
-    Column({ space: Space.xs }) {
-      SearchField({
-        placeholder: '搜索词条',
-        value: this.query,
-        onInput: (value: string) => {
-          this.query = value;
-        }
-      })
-      Segmented({
-        items: LIBRARY_FILTERS,
-        selected: this.filter,
-        onSelect: (index: number) => {
-          this.filter = index;
-        }
-      })
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-        Row() {
-          TonalButton({
-            label: '添加词条',
-            symbol: 'add',
-            onTap: () => {
-              this.draft = '';
-              this.openSheet(SHEET_ADD);
-            }
+  bottomActions() {
+    Row({ space: Space.sm }) {
+      if (this.searchOpen) {
+        Row({ space: Space.xs }) {
+          SymbolGlyph(symbolOf('search'))
+            .fontSize(Size.iconSmall)
+            .fontColor([Palette.text3()])
+          TextInput({ placeholder: '搜索词条', text: this.query })
+            .id('vocab-search-input')
+            .enableKeyboardOnFocus(true)
+            // Request only once after the conditional input is visible, not
+            // before mount or with a guessing timer (Huawei focus FAQ 483).
+            // https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-arkui-483
+            .onVisibleAreaChange([1.0], (visible: boolean, ratio: number) => {
+              if (!visible || ratio < 1 || !this.searchOpen || !this.searchFocusPending) return;
+              this.searchFocusPending = false;
+              try { this.getUIContext().getFocusController().requestFocus('vocab-search-input'); }
+              catch (error) { console.warn('[OpenLess Vocabulary] search focus unavailable'); }
+            })
+            .fontSize(Type.body)
+            .fontColor(Palette.text1())
+            .placeholderColor(Palette.text3())
+            .backgroundColor(Color.Transparent)
+            .padding(0)
+            .layoutWeight(1)
+            .onChange((text: string) => {
+              this.query = text;
+            })
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph(symbolOf('close'))
+              .fontSize(Size.iconSmall)
+              .fontColor([Palette.text3()])
+          }
+          .width(32)
+          .height(32)
+          .backgroundColor(Color.Transparent)
+          .id('vocab-search-close')
+          .accessibilityText('关闭搜索')
+          .onClick(() => {
+            this.query = '';
+            this.searchFocusPending = false;
+            this.searchOpen = false;
           })
         }
-        .padding({ right: Space.xs, bottom: Space.xxs })
-
-        Row() {
-          TonalButton({
-            label: '预设词组',
-            symbol: 'list',
-            onTap: () => {
-              this.openSheet(SHEET_PRESETS);
-            }
-          })
-        }
-        .padding({ right: Space.xs, bottom: Space.xxs })
+        .layoutWeight(1)
+        .height(52)
+        .padding({ left: Space.md, right: Space.md })
+        .backgroundColor(Palette.card())
+        .borderRadius(Radius.pill)
+        .shadow(floatShadow())
+      } else {
+        this.orb('search', '搜索词条', () => {
+          this.searchFocusPending = true;
+          this.searchOpen = true;
+        })
+        Blank()
       }
-      .width('100%')
+      this.orb('add', '添加词条', () => {
+        this.draft = '';
+        this.openSheet(SHEET_ADD);
+      })
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    .padding({ left: Space.xxs, right: Space.xxs, top: Space.sm, bottom: Space.sm })
+    .margin({ bottom: this.keyboardVisible ? 0 : Layout.dockClearance() })
+  }
+
+  @Builder
+  orb(symbol: string, label: string, action: () => void) {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph(symbolOf(symbol))
+        .fontSize(Type.section)
+        .fontColor([Palette.text1()])
+    }
+    .id('vocab-action-' + symbol)
+    .width(52)
+    .height(52)
+    .backgroundColor(Palette.card())
+    .shadow(floatShadow())
+    .hoverEffect(HoverEffect.Highlight)
+    .accessibilityText(label)
+    .onClick(action)
   }
 
   @Builder
   narrowBody() {
-    Scroll() {
-      Column({ space: Space.sm }) {
-        this.listBody()
+    Column({ space: Space.xxs }) {
+      if (this.entries.length === 0) {
+        EmptyHint({
+          symbol: 'vocab',
+          title: this.loading ? '正在读取词典…' : '还没有词条',
+          hint: '点右下角加号，添加常用人名或术语。'
+        })
+      } else if (this.filtered().length === 0) {
+        EmptyHint({ symbol: 'vocab', title: '没有匹配的词条', hint: '试试其他来源或搜索词。' })
+      } else {
+        ForEach(this.filtered(), (entry: DictionaryEntry) => {
+          VocabularyRow({
+            phrase: entry.phrase,
+            isEnabled: entry.enabled === true,
+            selected: this.selectedId === entry.id,
+            onSelect: () => {
+              this.selectEntry(entry.id);
+            }
+          })
+        }, (entry: DictionaryEntry) => entry.id)
+        Text('点按词条可编辑、停用、删除或查看详情。')
+          .fontSize(Type.caption)
+          .lineHeight(Leading.caption)
+          .fontColor(Palette.text2())
+          .width('100%')
+          .padding({ top: Space.xs })
       }
-      .width('100%')
-      .padding({ bottom: Space.lg })
     }
     .width('100%')
-    .layoutWeight(1)
-    .align(Alignment.Top)
-    .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder
   wideBody() {
     Row({ space: Space.md }) {
       Column() {
-        Scroll() {
-          Column({ space: Space.sm }) {
-            this.listBody()
-          }
-          .width('100%')
-          .padding({ bottom: Space.lg })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
+        this.listBody()
       }
-      .layoutWeight(5)
-      .height('100%')
+      .width(360)
+      .layoutWeight(0)
 
-      Column() {
-        if (this.detailIndex() >= 0) {
-          Scroll() {
-            Surface({ inset: Space.md }) {
-              this.detailBody()
-            }
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .align(Alignment.Top)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-        } else {
-          Surface({ inset: Space.md }) {
-            EmptyHint({
-              symbol: 'vocab',
-              title: '选一个词条',
-              hint: '右侧会显示命中次数、备注与启停状态'
-            })
-          }
+      if (this.selectedId.length > 0) {
+        Column() {
+          this.detailBody(true)
         }
+        .layoutWeight(1)
+      } else {
+        Column() {
+          EmptyHint({ symbol: 'vocab', title: '选一个词条', hint: '左侧列表里点开任意一条' })
+        }
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Start)
       }
-      .layoutWeight(4)
-      .height('100%')
     }
     .width('100%')
-    .layoutWeight(1)
     .alignItems(VerticalAlign.Top)
   }
 
+  /** iOS vocabulary cards: phrase first, source marker, disabled state greyed out. */
   @Builder
   listBody() {
-    if (this.loading && this.entries.length === 0) {
-      Skeleton({ rows: 4 })
+    if (this.entries.length === 0) {
+      EmptyHint({
+        symbol: 'vocab',
+        title: this.loading ? '正在读取词典…' : '还没有词条',
+        hint: '点右下角加号，添加常用人名或术语。'
+      })
     } else if (this.filtered().length === 0) {
-      if (this.entries.length === 0) {
-        EmptyHint({
-          symbol: 'vocab',
-          title: '词典还是空的',
-          hint: '把常被听错的名字加进来，转写会优先匹配'
-        })
-      } else {
-        EmptyHint({
-          symbol: 'search',
-          title: '没有匹配的词条',
-          hint: '换个关键词，或把筛选切回「全部」'
-        })
-      }
+      EmptyHint({ symbol: 'vocab', title: '没有匹配的词条', hint: '试试其他来源或搜索词。' })
     } else {
-      Group() {
-        ForEach(this.filtered(), (entry: DictionaryEntry, index: number) => {
-          RowItem({
-            symbol: 'vocab',
-            title: entry.phrase,
-            subtitle: (entry.hits ?? 0).toString() + ' 次命中' +
-              (entry.note !== undefined && entry.note !== null && entry.note.length > 0 ? ' · ' + entry.note : ''),
-            value: entry.enabled === true ? '已启用' : '已停用',
-            muted: entry.enabled !== true,
-            showChevron: true,
-            showDivider: index < this.filtered().length - 1,
-            onTap: () => {
+      Column({ space: Space.xxs }) {
+        ForEach(this.filtered(), (entry: DictionaryEntry) => {
+          VocabularyRow({
+            phrase: entry.phrase,
+            isEnabled: entry.enabled === true,
+            selected: this.selectedId === entry.id,
+            onSelect: () => {
               this.selectEntry(entry.id);
             }
           })
         }, (entry: DictionaryEntry) => entry.id)
       }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
     }
   }
 
-  /** Shared by the wide right column and the compact sheet. */
+  /** iOS `VocabularyDetails`: 词条 / 详细信息 sections, note, enable toggle, delete. */
   @Builder
-  detailBody() {
-    Column({ space: Space.sm }) {
-      Text(this.detailPhrase())
-        .fontSize(Type.cardTitle)
-        .lineHeight(Leading.cardTitle)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Palette.text1())
-        .width('100%')
+  detailBody(inline: boolean) {
+    Scroll() {
+      Column({ space: Space.sm }) {
+        this.detailSectionTitle('词条')
+        Group({ radius: 12 }) {
+          Column({ space: Space.xs }) {
+            if (this.editingPhrase) {
+              Column({ space: Space.sm }) {
+                InputField({
+                  label: '修改词条',
+                  placeholder: '输入专有名词或短语',
+                  value: this.editDraft,
+                  onInput: (value: string) => {
+                    this.editDraft = value;
+                  }
+                })
+                Row({ space: Space.sm }) {
+                  PrimaryButton({
+                    label: this.busy ? '保存中…' : '保存',
+                    usable: !this.busy && this.editDraft.trim().length > 0,
+                    onTap: () => {
+                      this.saveEditedPhrase();
+                    }
+                  })
+                  TextButton({
+                    label: '取消',
+                    tone: 'quiet',
+                    usable: !this.busy,
+                    onTap: () => {
+                      this.editingPhrase = false;
+                      this.editDraft = '';
+                    }
+                  })
+                }
+                .width('100%')
+              }
+              .width('100%')
+              .padding(Space.md)
+            } else {
+              Row({ space: Space.sm }) {
+                Text(this.detailPhrase())
+                  .fontSize(Type.section)
+                  .lineHeight(Leading.section)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Palette.text1())
+                  .layoutWeight(1)
+                  .copyOption(CopyOptions.LocalDevice)
+                TextButton({
+                  label: '编辑',
+                  symbol: 'edit',
+                  usable: !this.busy,
+                  onTap: () => {
+                    this.startEditPhrase();
+                  }
+                })
+              }
+              .width('100%')
+              .padding(Space.md)
+              .alignItems(VerticalAlign.Center)
+            }
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+        }
 
-      Row({ space: Space.xs }) {
-        Tag({
-          text: this.detailEnabled() ? '已启用' : '已停用',
-          tone: this.detailEnabled() ? 'success' : 'neutral'
+        this.detailSectionTitle('详细信息')
+        Group({ radius: 12 }) {
+          RowItem({ title: '添加方式', value: this.detailSource(), showDivider: true })
+          RowItem({ title: '状态', value: this.detailEnabled() ? '已启用' : '已停用', showDivider: true })
+          RowItem({ title: '使用次数', value: this.detailHits(), showDivider: true })
+          RowItem({ title: '添加时间', value: this.detailSince(), showDivider: false })
+        }
+
+        if (this.detailNote().length > 0) {
+          Group({ radius: 12 }) {
+            Column() {
+              Text(this.detailNote())
+                .fontSize(Type.body)
+                .lineHeight(Leading.body)
+                .fontColor(Palette.text1())
+                .width('100%')
+                .padding(Space.md)
+                .copyOption(CopyOptions.LocalDevice)
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }
+        }
+
+        SettingSwitch({
+          label: '参与转写替换',
+          hint: '停用后仍保留词条，但不会被替换',
+          checked: this.detailEnabled(),
+          showDivider: false,
+          onToggle: (value: boolean) => {
+            this.setEnabled(value);
+          }
         })
-        Tag({ text: this.detailHits(), tone: 'accent' })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Start)
 
-      if (this.detailNote().length > 0) {
-        Text(this.detailNote())
-          .fontSize(Type.label)
-          .lineHeight(Leading.label)
+        Text('确认后的中文词条会用于键盘候选。')
+          .fontSize(Type.caption)
+          .lineHeight(Leading.caption)
           .fontColor(Palette.text2())
           .width('100%')
-      }
+          .padding({ left: 4, top: Space.xs })
 
-      Text('加入于 ' + this.detailSince())
-        .fontSize(Type.caption)
-        .lineHeight(Leading.caption)
-        .fontColor(Palette.text3())
-        .width('100%')
-
-      SettingSwitch({
-        label: '启用该词条',
-        hint: '停用后转写不再优先匹配，词条仍会保留',
-        checked: this.detailEnabled(),
-        showDivider: false,
-        onToggle: (value: boolean) => {
-          this.setEnabled(value);
-        }
-      })
-
-      Row({ space: Space.sm }) {
-        if (!this.isWide()) {
-          PrimaryButton({
-            label: '完成',
-            onTap: () => {
-              this.closeSheet();
-            }
-          })
-        }
         TextButton({
           label: '删除词条',
-          symbol: 'trash',
+          symbol: 'delete',
           tone: 'danger',
+          usable: this.selectedId.length > 0 && !this.busy,
           onTap: () => {
             this.removeSelected();
           }
         })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Start)
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-  }
+        .width('100%')
 
-  @Builder
-  addBody() {
-    Column({ space: Space.md }) {
-      SheetTitle({
-        title: '添加词条',
-        hint: '常被听错的人名、产品名，转写时会优先匹配'
-      })
-      InputField({
-        label: '词条',
-        placeholder: '例如「谐音输入法」',
-        value: this.draft,
-        hint: '一个词条一行，回车可以直接提交',
-        onInput: (value: string) => {
-          this.draft = value;
-        }
-      })
-      Row({ space: Space.sm }) {
-        PrimaryButton({
-          label: this.busy ? '添加中…' : '添加',
-          usable: !this.busy && this.draft.trim().length > 0,
-          onTap: () => {
-            this.add();
-          }
-        })
-        TextButton({
-          label: '取消',
-          tone: 'quiet',
-          onTap: () => {
-            this.closeSheet();
-          }
-        })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.End)
-    }
-    .width('100%')
-  }
-
-  @Builder
-  presetsBody() {
-    Column({ space: Space.md }) {
-      SheetTitle({
-        title: '预设词组',
-        hint: '来自加密文档库，随云同步一起更新，共 ' + this.presets.length.toString() + ' 组'
-      })
-      if (this.presets.length === 0) {
-        EmptyHint({
-          symbol: 'list',
-          title: '还没有预设词组',
-          hint: '文档库里的词组整理好之后会自动出现在这里'
-        })
-      } else {
-        Group() {
-          ForEach(this.presets, (preset: VocabPreset, index: number) => {
-            RowItem({
-              title: preset.name !== undefined && preset.name !== null && preset.name.length > 0
-                ? preset.name : preset.id,
-              subtitle: (preset.phrases === undefined ? 0 : preset.phrases.length).toString() + ' 条 · ' +
-                (preset.origin ?? '本机'),
-              value: preset.enabled === false ? '已停用' : '启用中',
-              muted: preset.enabled === false,
-              showDivider: index < this.presets.length - 1
+        if (inline) {
+          Row() {
+            PrimaryButton({
+              label: '完成',
+              usable: true,
+              onTap: () => {
+                this.selectedId = '';
+              }
             })
-          }, (preset: VocabPreset) => preset.id)
+          }
+          .width('100%')
+          .padding({ top: Space.xs })
         }
       }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
+    .layoutWeight(1)
+    .scrollBar(BarState.Off)
   }
 
+  /** iOS `Section("…")` header above an inset-grouped card. */
   @Builder
-  sheetBody() {
-    Column({ space: Space.md }) {
-      if (this.sheetMode === SHEET_ADD) {
-        this.addBody()
-      } else if (this.sheetMode === SHEET_PRESETS) {
-        this.presetsBody()
-      } else if (this.sheetMode === SHEET_DETAIL) {
-        this.detailBody()
-      }
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xl })
+  detailSectionTitle(title: string) {
+    Text(title)
+      .fontSize(Type.caption)
+      .lineHeight(Leading.caption)
+      .fontColor(Palette.text2())
+      .width('100%')
+      .padding({ left: 4, top: Space.xs })
   }
 
-  /** Single anchor: `sheetMode` swaps the body, so two sheets never stack. */
   @Builder
   sheetHost() {
     Row()
       .width(0)
       .height(0)
       .bindSheet($$this.sheetOpen, this.sheetBody, {
-        height: SheetSize.MEDIUM,
+        preferType: this.isWide() ? SheetType.CENTER : SheetType.BOTTOM,
+        width: this.isWide() ? 560 : '100%',
+        height: this.isWide() ? SheetSize.FIT_CONTENT : SheetSize.MEDIUM,
         dragBar: true,
-        showClose: true,
+        showClose: this.sheetMode !== SHEET_DETAIL,
+        radius: LengthMetrics.vp(Radius.sheet),
         onDisappear: () => {
           this.sheetOpen = false;
         }
       })
   }
+
+  @Builder
+  sheetBody() {
+    Scroll() {
+      Column({ space: Space.md }) {
+        if (this.sheetMode === SHEET_DETAIL) {
+          SheetTitle({
+            title: '词条详情',
+            actionLabel: '完成',
+            onAction: () => {
+              this.closeSheet();
+            }
+          })
+          .id('vocab-detail-done')
+          this.detailBody(false)
+        } else if (this.sheetMode === SHEET_PRESETS) {
+          SheetTitle({
+            title: '预设词组',
+            hint: '来自加密文档库，随云同步一起更新，共 ' + this.presets.length.toString() + ' 组'
+          })
+          if (this.presets.length === 0) {
+            EmptyHint({ symbol: 'list', title: '还没有预设词组', hint: '文档库里的词组整理好之后会自动出现在这里' })
+          } else {
+            Group() {
+              ForEach(this.presets, (preset: VocabPreset) => {
+                RowItem({
+                  title: preset.name !== undefined && preset.name !== null && preset.name.length > 0
+                    ? preset.name : '未命名词组',
+                  subtitle: (preset.phrases ?? []).join('、'),
+                  showDivider: false
+                })
+              }, (preset: VocabPreset, index: number) => 'preset-' + index.toString())
+            }
+          }
+        } else {
+          SheetTitle({ title: '添加词条', hint: '输入常用词或专有名词，转写时优先命中' })
+          InputField({
+            label: '词条',
+            placeholder: '例如：OpenLess',
+            value: this.draft,
+            onInput: (value: string) => {
+              this.draft = value;
+            }
+          })
+          PrimaryButton({
+            label: '添加',
+            usable: this.draft.trim().length > 0 && !this.busy,
+            onTap: () => {
+              this.add();
+            }
+          })
+          .id('vocab-add-save')
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({ left: Space.md, right: Space.md, top: Space.lg, bottom: Space.xl })
+    }
+    .width('100%')
+    .scrollBar(BarState.Off)
+  }
 }
 
-/**
- * 纠正规则：规则增删启停 + 模型学习建议的接受/忽略。
- */
 @Component
 export struct CorrectionsPage {
   @StorageLink('bp') bp: string = 'md';
+  @StorageLink('phoneLayout') phoneLayout: boolean = true;
 
   @State private rules: CorrectionRule[] = [];
   @State private pending: PendingCorrection[] = [];
@@ -589,7 +782,8 @@ export struct CorrectionsPage {
   }
 
   private isWide(): boolean {
-    return this.bp === Layout.LG || this.bp === Layout.XL;
+    // Portrait tablets present the phone UI, so they stay single-column too.
+    return !this.phoneLayout && (this.bp === Layout.LG || this.bp === Layout.XL);
   }
 
   private async reload(): Promise<void> {
@@ -741,6 +935,21 @@ export struct CorrectionsPage {
     }
   }
 
+  private async dismissAllSuggestions(): Promise<void> {
+    if (this.busy || this.pending.length === 0) return;
+    this.busy = true;
+    try {
+      await Api.dismissSuggestions();
+      notify('已忽略全部建议');
+      await this.reload();
+    } catch (error) {
+      this.error = (error as Error).message;
+      notify('操作失败：' + this.error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   build() {
     PageScaffold({
       title: '纠正规则',
@@ -775,7 +984,7 @@ export struct CorrectionsPage {
 
   @Builder
   filterRow() {
-    Column({ space: Space.xs }) {
+    Column({ space: Space.sm }) {
       SearchField({
         placeholder: '搜索规则，例如错字或正确写法',
         value: this.query,
@@ -790,33 +999,18 @@ export struct CorrectionsPage {
           this.filter = index;
         }
       })
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-        Row() {
-          TonalButton({
-            label: this.pending.length > 0 ? '学习建议 ' + this.pending.length.toString() : '学习建议',
-            symbol: 'sparkles',
-            usable: this.pending.length > 0,
-            onTap: () => {
-              this.openSheet(SHEET_SUGGEST);
-            }
-          })
-        }
-        .padding({ right: Space.xs, bottom: Space.xxs })
-
-        Row() {
-          TonalButton({
-            label: '新建规则',
-            symbol: 'add',
-            onTap: () => {
-              this.pattern = '';
-              this.replacement = '';
-              this.openSheet(SHEET_ADD);
-            }
-          })
-        }
-        .padding({ right: Space.xs, bottom: Space.xxs })
+      Row({ space: Space.sm }) {
+        TonalButton({
+          label: this.pending.length > 0 ? '学习建议 ' + this.pending.length.toString() : '学习建议',
+          symbol: 'sparkles',
+          usable: this.pending.length > 0,
+          onTap: () => {
+            this.openSheet(SHEET_SUGGEST);
+          }
+        })
       }
       .width('100%')
+      .justifyContent(FlexAlign.Start)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -829,7 +1023,7 @@ export struct CorrectionsPage {
         this.listBody()
       }
       .width('100%')
-      .padding({ bottom: Space.lg })
+      .padding({ bottom: Layout.dockClearance() })
     }
     .width('100%')
     .layoutWeight(1)
@@ -847,7 +1041,7 @@ export struct CorrectionsPage {
             this.listBody()
           }
           .width('100%')
-          .padding({ bottom: Space.lg })
+          .padding({ bottom: Layout.dockClearance() })
         }
         .width('100%')
         .layoutWeight(1)
@@ -907,23 +1101,28 @@ export struct CorrectionsPage {
         })
       }
     } else {
+      // Same row geometry as 词典: the replacement is the big line and the
+      // original pattern sits above it, struck through.
       Group() {
         ForEach(this.filtered(), (rule: CorrectionRule, index: number) => {
-          RowItem({
-            symbol: 'corrections',
-            title: rule.pattern + ' → ' + rule.replacement,
-            subtitle: (rule.source === 'learned' ? '自动学习 · ' : '手动添加 · ') +
-              Fmt.relative(rule.createdAt ?? ''),
-            value: rule.enabled === true ? '已启用' : '已停用',
-            muted: rule.enabled !== true,
-            showChevron: true,
-            showDivider: index < this.filtered().length - 1,
-            onTap: () => {
+          CorrectionRuleRow({
+            pattern: rule.pattern,
+            replacement: rule.replacement,
+            source: rule.source === 'learned' ? 'learned' : 'manual',
+            isEnabled: rule.enabled === true,
+            selected: this.selectedId === rule.id,
+            divider: index < this.filtered().length - 1,
+            onSelect: () => {
               this.selectRule(rule.id);
             }
           })
         }, (rule: CorrectionRule) => rule.id)
       }
+      Text('点按规则可查看来源、启停或删除。')
+        .fontSize(Type.caption)
+        .lineHeight(Leading.caption)
+        .fontColor(Palette.text2())
+        .width('100%')
     }
   }
 
@@ -1053,6 +1252,7 @@ export struct CorrectionsPage {
 
   @Builder
   suggestionsBody() {
+    Scroll() {
     Column({ space: Space.md }) {
       SheetTitle({
         title: '学习建议',
@@ -1066,6 +1266,18 @@ export struct CorrectionsPage {
         })
       } else {
         Column({ space: Space.sm }) {
+          Row() {
+            TextButton({
+              label: '全部忽略',
+              tone: 'quiet',
+              usable: !this.busy,
+              onTap: () => {
+                this.dismissAllSuggestions();
+              }
+            })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.End)
           ForEach(this.pending, (item: PendingCorrection) => {
             Surface({ inset: Space.sm }) {
               Column({ space: Space.xs }) {
@@ -1102,6 +1314,9 @@ export struct CorrectionsPage {
       }
     }
     .width('100%')
+    }
+    .width('100%')
+    .scrollBar(BarState.Off)
   }
 
   @Builder
@@ -1126,9 +1341,12 @@ export struct CorrectionsPage {
       .width(0)
       .height(0)
       .bindSheet($$this.sheetOpen, this.sheetBody, {
-        height: SheetSize.MEDIUM,
+        preferType: this.isWide() ? SheetType.CENTER : SheetType.BOTTOM,
+        width: this.isWide() ? 560 : '100%',
+        height: this.isWide() ? SheetSize.FIT_CONTENT : SheetSize.MEDIUM,
         dragBar: true,
-        showClose: true,
+        showClose: this.sheetMode !== SHEET_DETAIL,
+        radius: LengthMetrics.vp(Radius.sheet),
         onDisappear: () => {
           this.sheetOpen = false;
         }
@@ -1137,19 +1355,21 @@ export struct CorrectionsPage {
 }
 
 /**
- * 风格：本地风格包与风格市场合并为一页，顶部 `Segmented` 切换。
+ * 风格：`StyleLibraryView` 的「我的风格 / 风格市场」两段同页。
  *
- * 两段共用一个 `PageScaffold`、一条搜索行、一个 sheet 锚点与同一套两栏骨架，
- * 但状态各成一套：切换段只做“首次按需加载”，之后回到该段时搜索词、筛选、
- * 选中行都不会被另一段覆盖。`sm/md` 单列，`lg/xl` 左列表右详情。
+ * 页标题固定为「风格」；顶部是一条钉住的搜索框 + 与 Dock 双向绑定的 `styleSection`
+ * 分段（0 = 我的风格，1 = 风格市场）。卡片是 iOS `StyleCard` + `StyleSummary`：
+ * 36pt 图标块、名称与「使用中」徽标、三行简介、caption 元信息，右侧一枚 capsule。
+ * 两段共用一个 sheet 锚点与同一套两栏骨架，切段只按需首次加载市场。
  */
 @Component
 export struct StylePage {
   @StorageLink('bp') bp: string = 'md';
+  @StorageLink('phoneLayout') phoneLayout: boolean = true;
   @StorageLink('backendRevision') revision: number = 0;
 
-  /** 当前段：0 = 本地风格包，1 = 风格市场。 */
-  @State private segment: number = 0;
+  /** 当前段：0 = 我的风格，1 = 风格市场。 */
+  @StorageLink('styleSection') @Watch('onStyleSection') segment: number = 0;
   @State private error: string = '';
 
   // ── 本地风格包 ────────────────────────────────────────────────────────────
@@ -1163,6 +1383,15 @@ export struct StylePage {
   @State private newName: string = '';
   @State private newPrompt: string = '';
   @State private draftPrompt: string = '';
+  private editId: string = '';
+  private viewActive: boolean = false;
+  private readGeneration: number = 0;
+  private marketGeneration: number = 0;
+  private marketSearchTimer: number = -1;
+  private loginGeneration: number = 0;
+  private loginFlowId: string = '';
+  private loginTimer: number = -1;
+  private loginWake?: () => void;
 
   // ── 风格市场（原独立的市场页状态，整组搬入本页） ─────────────────────────
   @State private marketQuery: string = '';
@@ -1171,20 +1400,47 @@ export struct StylePage {
   @State private marketSelectedId: string = '';
   @State private marketLoading: boolean = false;
   @State private marketLoaded: boolean = false;
+  @State private signedIn: boolean = false;
   @State private loginState: string = '';
   @State private loginCode: string = '';
   @State private loginBusy: boolean = false;
+  @State private likedIds: string[] = [];
 
   // ── 两段共用的半模态：一个锚点 + sheetMode 决定内容 ───────────────────────
   @State private sheetOpen: boolean = false;
   @State private sheetMode: string = SHEET_CREATE;
 
   aboutToAppear(): void {
+    this.viewActive = true;
     this.reload();
+    this.onStyleSection();
+  }
+
+  aboutToDisappear(): void {
+    this.viewActive = false;
+    this.readGeneration++;
+    this.marketGeneration++;
+    this.marketLoading = false;
+    if (this.marketSearchTimer >= 0) clearTimeout(this.marketSearchTimer);
+    this.marketSearchTimer = -1;
+    this.cancelLogin();
   }
 
   private isWide(): boolean {
-    return this.bp === Layout.LG || this.bp === Layout.XL;
+    // Portrait tablets present the phone UI, so they stay single-column too.
+    return !this.phoneLayout && (this.bp === Layout.LG || this.bp === Layout.XL);
+  }
+
+  private onStyleSection(): void {
+    if (this.segment !== 1) {
+      this.marketGeneration++;
+      this.marketLoading = false;
+      if (this.marketSearchTimer >= 0) clearTimeout(this.marketSearchTimer);
+      this.marketSearchTimer = -1;
+      this.cancelLogin();
+    } else if (!this.marketLoaded && !this.marketLoading) {
+      this.reloadMarket();
+    }
   }
 
   /** 段切换只按需首次加载市场，之后完全保留两段各自的状态。 */
@@ -1202,8 +1458,9 @@ export struct StylePage {
     return this.packs.length.toString() + ' 个风格包 · 决定润色的语气';
   }
 
+  /** iOS toolbar: `.library` 段右侧是「导入风格」的加号；市场段刷新。 */
   private actionLabel(): string {
-    return this.segment === 1 ? '刷新' : '新建风格';
+    return this.segment === 1 ? '刷新' : '导入风格';
   }
 
   private actionSymbol(): string {
@@ -1215,11 +1472,12 @@ export struct StylePage {
       this.reloadMarket();
       return;
     }
-    this.startCreate();
+    this.importZip();
   }
 
+  /** iOS `PinnedSearchBar` 的占位文案只有一句「搜索风格」。 */
   private searchPlaceholder(): string {
-    return this.segment === 1 ? '搜索名称、描述或标签' : '搜索本地风格包';
+    return '搜索风格';
   }
 
   private searchValue(): string {
@@ -1229,7 +1487,12 @@ export struct StylePage {
   private onSearchInput(value: string): void {
     if (this.segment === 1) {
       this.marketQuery = value;
-      this.reloadMarket();
+      this.marketGeneration++;
+      if (this.marketSearchTimer >= 0) clearTimeout(this.marketSearchTimer);
+      this.marketSearchTimer = setTimeout(() => {
+        this.marketSearchTimer = -1;
+        this.reloadMarket();
+      }, 300);
       return;
     }
     this.query = value;
@@ -1238,16 +1501,19 @@ export struct StylePage {
   // ── 本地风格包 ────────────────────────────────────────────────────────────
 
   private async reload(): Promise<void> {
+    const generation: number = ++this.readGeneration;
     this.loading = true;
     try {
-      this.packs = await Api.stylePacks();
+      const packs: StylePack[] = await Api.stylePacks();
       const snapshot: SettingsSnapshot = await Api.settings();
+      if (!this.viewActive || generation !== this.readGeneration) return;
+      this.packs = packs;
       this.active = snapshot.preferences.activeStylePackId ?? '';
       this.error = '';
     } catch (error) {
-      this.error = (error as Error).message;
+      if (this.viewActive && generation === this.readGeneration) this.error = (error as Error).message;
     } finally {
-      this.loading = false;
+      if (generation === this.readGeneration) this.loading = false;
     }
   }
 
@@ -1286,7 +1552,7 @@ export struct StylePage {
   private detailPrompt(): string {
     const index: number = this.detailIndex();
     if (index < 0) return '';
-    return this.packs[index].systemPrompt ?? '';
+    return this.packs[index].prompt;
   }
 
   private detailEnabled(): boolean {
@@ -1296,7 +1562,7 @@ export struct StylePage {
 
   private detailBuiltIn(): boolean {
     const index: number = this.detailIndex();
-    return index >= 0 && this.packs[index].builtIn === true;
+    return index >= 0 && this.packs[index].kind === 'builtin';
   }
 
   private detailActive(): boolean {
@@ -1304,26 +1570,32 @@ export struct StylePage {
   }
 
   private openSheet(mode: string): void {
+    if (this.busy) return;
     this.sheetMode = mode;
     this.sheetOpen = true;
   }
 
   private closeSheet(): void {
+    if (this.busy) return;
     this.sheetOpen = false;
   }
 
   private selectPack(id: string): void {
+    if (this.busy) return;
     this.selectedId = id;
     this.draftPrompt = '';
     if (!this.isWide()) this.openSheet(SHEET_DETAIL);
   }
 
   private startEdit(): void {
+    if (this.busy || this.detailIndex() < 0) return;
+    this.editId = this.selectedId;
     this.draftPrompt = this.detailPrompt();
     this.openSheet(SHEET_EDIT);
   }
 
   private startCreate(): void {
+    if (this.busy) return;
     this.newName = '';
     this.newPrompt = '';
     this.openSheet(SHEET_CREATE);
@@ -1331,49 +1603,43 @@ export struct StylePage {
 
   private async createPack(): Promise<void> {
     const name: string = this.newName.trim();
-    if (name.length === 0) return;
+    const prompt: string = this.newPrompt;
+    if (name.length === 0 || this.busy) return;
     this.busy = true;
     try {
-      await Api.saveStylePack({
-        name: name,
-        description: '',
-        systemPrompt: this.newPrompt.trim(),
-        enabled: true
-      } as StylePackPayload);
+      await Api.createStylePack(name, prompt);
+      if (!this.viewActive) return;
       this.newName = '';
       this.newPrompt = '';
-      this.closeSheet();
+      this.sheetOpen = false;
       notify('已创建风格「' + name + '」');
       await this.reload();
     } catch (error) {
-      const message: string = (error as Error).message;
-      this.error = message;
-      notify('创建失败：' + message);
+      if (this.viewActive) {
+        this.error = (error as Error).message;
+        notify('创建失败：' + this.error);
+      }
     } finally {
       this.busy = false;
     }
   }
 
   private async savePrompt(): Promise<void> {
-    const index: number = this.detailIndex();
-    if (index < 0) return;
-    const name: string = this.packs[index].name;
+    const id: string = this.editId;
+    const prompt: string = this.draftPrompt;
+    if (id.length === 0 || this.busy) return;
     this.busy = true;
     try {
-      await Api.saveStylePack({
-        id: this.selectedId,
-        name: name,
-        description: this.packs[index].description ?? '',
-        systemPrompt: this.draftPrompt,
-        enabled: this.packs[index].enabled !== false
-      } as StylePackPayload);
-      this.closeSheet();
+      await Api.updateStylePrompt(id, prompt);
+      if (!this.viewActive) return;
+      if (this.editId === id && this.sheetMode === SHEET_EDIT) this.sheetOpen = false;
       notify('提示词已保存');
       await this.reload();
     } catch (error) {
-      const message: string = (error as Error).message;
-      this.error = message;
-      notify('保存失败：' + message);
+      if (this.viewActive) {
+        this.error = (error as Error).message;
+        notify('保存失败：' + this.error);
+      }
     } finally {
       this.busy = false;
     }
@@ -1381,86 +1647,107 @@ export struct StylePage {
 
   private async setEnabled(enabled: boolean): Promise<void> {
     const id: string = this.selectedId;
-    if (id.length === 0) return;
+    if (id.length === 0 || this.busy) return;
+    this.busy = true;
     try {
       await Api.setStylePackEnabled(id, enabled);
+      if (!this.viewActive) return;
       notify(enabled ? '风格已启用' : '风格已停用');
       await this.reload();
     } catch (error) {
-      this.error = (error as Error).message;
-      notify('操作失败：' + this.error);
-    }
+      if (this.viewActive) { this.error = (error as Error).message; notify('操作失败：' + this.error); }
+    } finally { this.busy = false; }
   }
 
-  private async activate(): Promise<void> {
-    const id: string = this.selectedId;
-    if (id.length === 0) return;
+  private async activate(id: string): Promise<void> {
+    if (id.length === 0 || id === this.active || this.busy) return;
+    this.busy = true;
     try {
       await Api.activateStylePack(id);
+      if (!this.viewActive) return;
       notify('已切换为当前风格');
       await this.reload();
     } catch (error) {
-      this.error = (error as Error).message;
-      notify('切换失败：' + this.error);
-    }
+      if (this.viewActive) { this.error = (error as Error).message; notify('切换失败：' + this.error); }
+    } finally { this.busy = false; }
   }
 
-  private async exportZip(): Promise<void> {
-    const index: number = this.detailIndex();
-    if (index < 0) return;
-    try {
-      const note: string = await Api.exportStylePack(this.selectedId, this.packs[index].name);
-      notify(note);
-    } catch (error) {
-      this.error = (error as Error).message;
-      notify('导出失败：' + this.error);
-    }
+  private async exportZip(id: string, name: string): Promise<void> {
+    if (id.length === 0 || this.busy) return;
+    this.busy = true;
+    try { const note: string = await Api.exportStylePack(id, name); if (this.viewActive) notify(note); }
+    catch (error) { if (this.viewActive) { this.error = (error as Error).message; notify('导出失败：' + this.error); } }
+    finally { this.busy = false; }
   }
 
   private async importZip(): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
     try {
       const note: string = await Api.importStylePack();
+      if (!this.viewActive) return;
       notify(note);
       await this.reload();
     } catch (error) {
-      this.error = (error as Error).message;
-      notify('导入失败：' + this.error);
-    }
+      if (this.viewActive) { this.error = (error as Error).message; notify('导入失败：' + this.error); }
+    } finally { this.busy = false; }
+  }
+
+  private async resetBuiltinSelected(): Promise<void> {
+    const id: string = this.selectedId;
+    if (id.length === 0 || this.busy || !this.detailBuiltIn()) return;
+    this.busy = true;
+    try {
+      await Api.resetBuiltinStylePack(id);
+      if (!this.viewActive) return;
+      notify('已恢复内置风格默认提示词');
+      await this.reload();
+    } catch (error) {
+      if (this.viewActive) { this.error = (error as Error).message; notify('恢复失败：' + this.error); }
+    } finally { this.busy = false; }
   }
 
   private async removeSelected(): Promise<void> {
     const id: string = this.selectedId;
-    if (id.length === 0) return;
+    if (id.length === 0 || this.busy || this.detailBuiltIn()) return;
+    this.busy = true;
     try {
       await Api.deleteStylePack(id);
-      this.selectedId = '';
-      this.closeSheet();
+      if (!this.viewActive) return;
+      if (this.selectedId === id) { this.selectedId = ''; this.sheetOpen = false; }
       notify('已删除风格包');
       await this.reload();
     } catch (error) {
-      this.error = (error as Error).message;
-      notify('删除失败：' + this.error);
-    }
+      if (this.viewActive) { this.error = (error as Error).message; notify('删除失败：' + this.error); }
+    } finally { this.busy = false; }
   }
 
   // ── 风格市场 ──────────────────────────────────────────────────────────────
 
   private async reloadMarket(): Promise<void> {
+    if (this.marketSearchTimer >= 0) clearTimeout(this.marketSearchTimer);
+    this.marketSearchTimer = -1;
+    const generation: number = ++this.marketGeneration;
+    const query: string = this.marketQuery;
+    const sort: string = this.marketSort;
     this.marketLoading = true;
     try {
-      try {
-        const auth = await Api.marketplaceAuthStatus();
-        this.loginState = auth.loggedIn === true ? '已登录 ' + (auth.login ?? '') : '';
-      } catch (error) {
-        this.loginState = '';
+      const auth = await Api.marketplaceAuthStatus();
+      if (!this.viewActive || generation !== this.marketGeneration) return;
+      if (!this.loginBusy) {
+        this.signedIn = auth.signedIn === true;
+        this.loginState = this.signedIn
+          ? (this.loginState.startsWith('已登录') ? this.loginState : '已登录 GitHub') : '';
       }
-      this.marketPacks = await Api.marketplace(this.marketQuery, this.marketSort);
+      const packs: MarketplacePack[] = await Api.marketplace(query, sort);
+      if (!this.viewActive || generation !== this.marketGeneration) return;
+      this.marketPacks = packs;
       this.marketLoaded = true;
       this.error = '';
     } catch (error) {
-      this.error = (error as Error).message;
+      if (this.viewActive && generation === this.marketGeneration) this.error = (error as Error).message;
     } finally {
-      this.marketLoading = false;
+      if (generation === this.marketGeneration) this.marketLoading = false;
     }
   }
 
@@ -1473,57 +1760,106 @@ export struct StylePage {
     return 'GitHub 登录';
   }
 
+  private waitLogin(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.loginWake = resolve;
+      this.loginTimer = setTimeout(() => {
+        this.loginTimer = -1;
+        this.loginWake = undefined;
+        resolve();
+      }, ms);
+    });
+  }
+
+  private cancelLogin(): void {
+    this.loginGeneration++;
+    if (this.loginTimer >= 0) clearTimeout(this.loginTimer);
+    this.loginTimer = -1;
+    const wake = this.loginWake;
+    this.loginWake = undefined;
+    if (wake !== undefined) wake();
+    const flowId: string = this.loginFlowId;
+    this.loginFlowId = '';
+    this.loginBusy = false;
+    this.loginCode = '';
+    if (!this.signedIn) this.loginState = '';
+    if (flowId.length > 0) Api.githubDeviceFlowCancel(flowId).catch(() => {});
+  }
+
   private async startLogin(): Promise<void> {
+    if (this.loginBusy || this.busy || !this.viewActive) return;
+    const generation: number = ++this.loginGeneration;
     this.loginBusy = true;
     try {
       const flow = await Api.githubDeviceFlowStart();
+      if (!this.viewActive || generation !== this.loginGeneration) {
+        Api.githubDeviceFlowCancel(flow.flowId).catch(() => {});
+        return;
+      }
+      this.loginFlowId = flow.flowId;
       this.loginCode = flow.userCode;
       this.loginState = '等待授权…';
-      Api.copyText(flow.userCode);
-      let attempts: number = 0;
-      while (attempts < 60) {
-        attempts++;
-        await new Promise<void>((resolve) => setTimeout(() => resolve(), Math.max(2, flow.interval) * 1000));
+      try { await Api.copyText(flow.userCode); } catch (error) { notify('请手动复制配对码'); }
+      if (!this.viewActive || generation !== this.loginGeneration) return;
+      await Api.openExternalUrl(flow.verificationUri);
+      if (!this.viewActive || generation !== this.loginGeneration) return;
+      const expiresSecs: number = flow.expiresInSecs ?? flow.expiresIn ?? 900;
+      const intervalSecs: number = flow.intervalSecs ?? flow.interval ?? 5;
+      const expiresAt: number = Date.now() + Math.max(1, expiresSecs) * 1000;
+      let intervalMs: number = Math.max(2, intervalSecs) * 1000;
+      while (Date.now() < expiresAt) {
+        await this.waitLogin(Math.min(intervalMs, Math.max(1, expiresAt - Date.now())));
+        if (!this.viewActive || generation !== this.loginGeneration) return;
+        if (Date.now() >= expiresAt) break;
         const poll = await Api.githubDeviceFlowPoll(flow.flowId);
-        if (poll.state === 'authorized') {
-          this.loginState = '已登录 ' + (poll.login ?? '');
+        if (!this.viewActive || generation !== this.loginGeneration) return;
+        if (poll.kind === 'authorized') {
+          this.signedIn = true;
+          this.loginState = '已登录 ' + (poll.login ?? 'GitHub');
           this.loginCode = '';
+          this.loginFlowId = '';
+          this.loginBusy = false;
           notify('已登录 GitHub');
           await this.reloadMarket();
           return;
         }
-        if (poll.state === 'expired' || poll.state === 'error') {
-          this.loginState = '';
-          this.loginCode = '';
-          notify('登录失败，请重试');
-          return;
-        }
+        if (poll.kind === 'slowDown') intervalMs += 5000;
+        if (poll.kind === 'error') throw new Error(poll.message ?? '授权未完成，请重试');
       }
-      this.loginState = '';
-      this.loginCode = '';
-      notify('登录超时');
+      throw new Error('登录已过期，请重试');
     } catch (error) {
-      this.loginState = '';
-      this.loginCode = '';
-      this.error = (error as Error).message;
-      notify('登录不可用：' + this.error);
+      if (this.viewActive && generation === this.loginGeneration) {
+        this.loginState = '';
+        this.loginCode = '';
+        this.error = (error as Error).message;
+        notify('登录不可用：' + this.error);
+      }
     } finally {
-      this.loginBusy = false;
+      if (generation === this.loginGeneration) {
+        const flowId: string = this.loginFlowId;
+        this.loginFlowId = '';
+        this.loginBusy = false;
+        if (flowId.length > 0) Api.githubDeviceFlowCancel(flowId).catch(() => {});
+      }
     }
   }
 
   private async toggleLogin(): Promise<void> {
-    if (this.loginState.length > 0) {
+    if (this.loginBusy || this.busy) return;
+    if (this.signedIn) {
+      this.loginBusy = true;
       try {
         await Api.marketplaceLogout();
+        if (!this.viewActive) return;
+        this.signedIn = false;
         this.loginState = '';
         this.loginCode = '';
+        this.likedIds = [];
         notify('已退出 GitHub');
-        await this.reloadMarket();
       } catch (error) {
-        this.error = (error as Error).message;
-        notify('退出失败：' + this.error);
-      }
+        if (this.viewActive) { this.error = (error as Error).message; notify('退出失败：' + this.error); }
+      } finally { this.loginBusy = false; }
+      if (this.viewActive) await this.reloadMarket();
       return;
     }
     await this.startLogin();
@@ -1549,54 +1885,68 @@ export struct StylePage {
 
   private marketDetailInstalled(): boolean {
     const index: number = this.marketDetailIndex();
-    return index >= 0 && this.marketPacks[index].installed === true;
+    return index >= 0 && this.marketInstalled(this.marketPacks[index]);
   }
 
   private marketDetailMeta(): string {
     const index: number = this.marketDetailIndex();
     if (index < 0) return '';
     const pack: MarketplacePack = this.marketPacks[index];
-    return (pack.author ?? '社区') + ' · ' + (pack.downloads ?? 0).toString() + ' 次下载 · ' +
-      (pack.likes ?? 0).toString() + ' 赞';
+    return (pack.authorLogin || '社区') + ' · ' + (pack.downloadCount ?? 0).toString() + ' 次下载 · ' +
+      (pack.likeCount ?? 0).toString() + ' 赞';
   }
 
   private selectMarketPack(id: string): void {
+    if (this.busy) return;
     this.marketSelectedId = id;
     if (!this.isWide()) this.openSheet(SHEET_MARKET);
   }
 
-  private async install(): Promise<void> {
-    const id: string = this.marketSelectedId;
-    if (id.length === 0) return;
-    try {
-      await Api.installMarketplacePack(id);
-      notify('已安装到本机');
-      await this.reloadMarket();
-      // 安装会写进本地风格包列表，本地段也要跟着刷新。
-      await this.reload();
-    } catch (error) {
-      this.error = (error as Error).message;
-      notify('安装失败：' + this.error);
-    }
+  private marketInstalled(pack: MarketplacePack): boolean {
+    return StyleEditing.installed(pack, this.packs);
   }
 
-  private async like(): Promise<void> {
-    const id: string = this.marketSelectedId;
-    if (id.length === 0) return;
+  private marketLiked(id: string): boolean {
+    return this.likedIds.indexOf(id) >= 0;
+  }
+
+  private async install(id: string): Promise<void> {
+    if (id.length === 0 || this.busy) return;
+    const pack: MarketplacePack | undefined = this.marketPacks.find((item: MarketplacePack) => item.id === id);
+    if (pack === undefined || this.marketInstalled(pack)) return;
+    this.busy = true;
     try {
-      await Api.likePack(id);
-      notify('已点赞');
+      await Api.installMarketplacePack(id);
+      if (!this.viewActive) return;
+      notify('已安装到本机');
+      await this.reload();
       await this.reloadMarket();
     } catch (error) {
-      this.error = (error as Error).message;
-      notify('点赞失败：' + this.error);
-    }
+      if (this.viewActive) { this.error = (error as Error).message; notify('安装失败：' + this.error); }
+    } finally { this.busy = false; }
+  }
+
+  private async like(id: string): Promise<void> {
+    if (id.length === 0 || this.busy) return;
+    this.busy = true;
+    try {
+      const result = await Api.likePack(id);
+      if (!this.viewActive) return;
+      this.likedIds = this.likedIds.filter((old: string) => old !== id);
+      if (result.alreadyLiked) this.likedIds = this.likedIds.concat([id]);
+      this.marketPacks = this.marketPacks.map((pack: MarketplacePack) => {
+        if (pack.id === id) pack.likeCount = result.likeCount;
+        return pack;
+      });
+      notify(result.alreadyLiked ? '已点赞' : '已取消点赞');
+    } catch (error) {
+      if (this.viewActive) { this.error = (error as Error).message; notify('点赞操作失败：' + this.error); }
+    } finally { this.busy = false; }
   }
 
   build() {
     PageScaffold({
-      title: '风格',
-      subtitle: this.subtitleText(),
+      title: this.segment === 0 ? '我的风格' : '风格市场',
       actionLabel: this.actionLabel(),
       actionSymbol: this.actionSymbol(),
       scrollable: false,
@@ -1605,7 +1955,7 @@ export struct StylePage {
     }) {
       if (this.error.length > 0) {
         ErrorNote({
-          message: this.error,
+          message: '风格库暂不可用，请稍后重试。',
           onRetry: () => {
             if (this.segment === 1) {
               this.reloadMarket();
@@ -1640,12 +1990,6 @@ export struct StylePage {
         }
       })
 
-      Segmented({
-        items: STYLE_SEGMENTS,
-        selected: this.segment,
-        onSelect: (index: number) => this.switchSegment(index)
-      })
-
       if (this.segment === 1) {
         if (this.loginCode.length > 0) {
           Banner({
@@ -1660,84 +2004,74 @@ export struct StylePage {
           })
         }
 
-        Segmented({
-          items: MARKET_SORTS,
-          selected: this.marketSortIndex(),
-          onSelect: (index: number) => {
-            this.marketSort = index === 1 ? 'new' : 'popular';
-            this.reloadMarket();
-          }
-        })
-
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-          Row() {
-            TonalButton({
-              label: this.loginLabel(),
-              symbol: 'person',
-              usable: !this.loginBusy,
-              onTap: () => {
-                this.toggleLogin();
-              }
-            })
-          }
-          .padding({ right: Space.xs, bottom: Space.xxs })
-
-          Row() {
-            TonalButton({
-              label: '刷新列表',
-              symbol: 'refresh',
-              usable: !this.marketLoading,
-              onTap: () => {
-                this.reloadMarket();
-              }
-            })
-          }
-          .padding({ right: Space.xs, bottom: Space.xxs })
-        }
-        .width('100%')
-      } else {
-        Segmented({
-          items: LIBRARY_FILTERS,
-          selected: this.filter,
-          onSelect: (index: number) => {
-            this.filter = index;
-          }
-        })
-
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-          Row() {
-            TonalButton({
-              label: '去风格市场',
-              symbol: 'marketplace',
-              onTap: () => this.switchSegment(1)
-            })
-          }
-          .padding({ right: Space.xs, bottom: Space.xxs })
-
-          Row() {
-            TonalButton({
-              label: '从 ZIP 导入',
-              symbol: 'add',
-              onTap: () => {
-                this.importZip();
-              }
-            })
-          }
-          .padding({ right: Space.xs, bottom: Space.xxs })
-
-          Row() {
-            TonalButton({
-              label: '新建风格',
-              symbol: 'add',
-              onTap: () => this.startCreate()
-            })
-          }
-          .padding({ right: Space.xs, bottom: Space.xxs })
-        }
-        .width('100%')
       }
     }
     .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** Market footnote rows: account state and ordering live under the list. */
+  @Builder
+  marketFooter() {
+    Row() {
+      SymbolGlyph(symbolOf('person'))
+        .fontSize(Size.iconSmall)
+        .fontColor([Palette.text2()])
+      TextButton({
+        label: this.loginBusy ? '取消授权' : this.loginLabel(),
+        tone: 'quiet',
+        usable: !this.busy,
+        onTap: () => {
+          if (this.loginBusy) this.cancelLogin();
+          else this.toggleLogin();
+        }
+      })
+      Blank()
+      TextButton({
+        label: this.marketSort === 'new' ? '按最新' : '按热度',
+        tone: 'quiet',
+        onTap: () => {
+          this.marketSort = this.marketSort === 'new' ? 'popular' : 'new';
+          this.reloadMarket();
+        }
+      })
+    }
+    .width('100%')
+    .padding({ top: Space.sm })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** iOS footnote rows under the installed list (StyleLibraryView.swift:231-235). */
+  @Builder
+  libraryFooter() {
+    Column({ space: Space.xs }) {
+      Row() {
+        SymbolGlyph(symbolOf('sparkles'))
+          .fontSize(Size.iconSmall)
+          .fontColor([Palette.text2()])
+        TextButton({
+          label: '设置文字模型',
+          tone: 'quiet',
+          onTap: () => Nav.go(Nav.CREDENTIALS)
+        })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Row() {
+        TextButton({
+          label: '新建风格',
+          tone: 'quiet',
+          onTap: () => {
+            this.startCreate();
+          }
+        })
+        .id('style-create-open')
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ top: Space.sm })
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -1746,9 +2080,14 @@ export struct StylePage {
     Scroll() {
       Column({ space: Space.sm }) {
         this.listBody()
+        if (this.segment === 0) {
+          this.libraryFooter()
+        } else {
+          this.marketFooter()
+        }
       }
       .width('100%')
-      .padding({ bottom: Space.lg })
+      .padding({ bottom: Layout.dockClearance() })
     }
     .width('100%')
     .layoutWeight(1)
@@ -1764,9 +2103,14 @@ export struct StylePage {
         Scroll() {
           Column({ space: Space.sm }) {
             this.listBody()
+            if (this.segment === 0) {
+              this.libraryFooter()
+            } else {
+              this.marketFooter()
+            }
           }
           .width('100%')
-          .padding({ bottom: Space.lg })
+          .padding({ bottom: Layout.dockClearance() })
         }
         .width('100%')
         .layoutWeight(1)
@@ -1791,9 +2135,13 @@ export struct StylePage {
       if (this.segment === 1) {
         if (this.marketDetailIndex() >= 0) {
           Scroll() {
-            Surface({ inset: Space.md }) {
-              this.marketDetailBody()
+            Column() {
+              Surface({ inset: Space.md }) {
+                this.marketDetailBody()
+              }
             }
+            .width('100%')
+            .padding({ bottom: Layout.dockClearance() })
           }
           .width('100%')
           .layoutWeight(1)
@@ -1812,9 +2160,13 @@ export struct StylePage {
       } else {
         if (this.detailIndex() >= 0) {
           Scroll() {
-            Surface({ inset: Space.md }) {
-              this.localDetailBody()
+            Column() {
+              Surface({ inset: Space.md }) {
+                this.localDetailBody()
+              }
             }
+            .width('100%')
+            .padding({ bottom: Layout.dockClearance() })
           }
           .width('100%')
           .layoutWeight(1)
@@ -1822,13 +2174,11 @@ export struct StylePage {
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
         } else {
-          Surface({ inset: Space.md }) {
             EmptyHint({
               symbol: 'style',
               title: '选一个风格包',
               hint: '右侧可以改提示词、设为当前风格或导出 ZIP'
             })
-          }
         }
       }
     }
@@ -1850,38 +2200,39 @@ export struct StylePage {
     if (this.loading && this.packs.length === 0) {
       Skeleton({ rows: 4 })
     } else if (this.filtered().length === 0) {
-      if (this.packs.length === 0) {
-        EmptyHint({
-          symbol: 'style',
-          title: '还没有本地风格包',
-          hint: '切到上方「风格市场」安装一个，或创建自定义风格'
-        })
-      } else {
-        EmptyHint({
-          symbol: 'search',
-          title: '没有匹配的风格包',
-          hint: '换个关键词，或把筛选切回「全部」'
-        })
-      }
+      EmptyHint({
+        symbol: this.packs.length === 0 ? 'style' : 'search',
+        title: this.packs.length === 0 ? '还没有添加风格' : '没有匹配的风格',
+        hint: this.packs.length === 0
+          ? '切到「风格市场」安装一个，或用右上角加号导入 ZIP。'
+          : '试试其他关键词。'
+      })
     } else {
-      Group() {
-        ForEach(this.filtered(), (pack: StylePack, index: number) => {
-          RowItem({
-            symbol: 'style',
-            accentSymbol: pack.id === this.active,
-            title: pack.name,
-            subtitle: pack.description !== undefined && pack.description.length > 0
-              ? pack.description : (pack.builtIn === true ? '内置风格包' : '自定义风格包'),
-            value: pack.id === this.active ? '使用中' : (pack.builtIn === true ? '内置' : ''),
+      Column({ space: Space.sm }) {
+        ForEach(this.filtered(), (pack: StylePack) => {
+          StyleSummaryCard({
+            name: pack.name,
+            summary: pack.description ?? '',
+            metadata: (pack.kind === 'builtin' ? '内置风格' : '自定义风格') +
+              (pack.enabled === false ? ' · 已停用' : ''),
+            badge: pack.kind === 'builtin' && pack.id !== this.active ? '内置' : '',
+            badgeTone: 'neutral',
+            selected: pack.id === this.active,
+            primaryLabel: pack.id === this.active ? '使用中' : '使用',
+            primaryEnabled: pack.enabled !== false && pack.id !== this.active && !this.busy,
+            secondaryLabel: '',
             muted: pack.enabled === false,
-            showChevron: true,
-            showDivider: index < this.filtered().length - 1,
-            onTap: () => {
-              this.selectPack(pack.id);
+            onOpen: () => this.selectPack(pack.id),
+            onPrimary: () => {
+              this.activate(pack.id);
+            },
+            onSecondary: () => {
+              this.exportZip(pack.id, pack.name);
             }
           })
         }, (pack: StylePack) => pack.id)
       }
+      .width('100%')
     }
   }
 
@@ -1892,28 +2243,35 @@ export struct StylePage {
     } else if (this.marketPacks.length === 0) {
       EmptyHint({
         symbol: 'marketplace',
-        title: this.marketLoading ? '正在加载…' : '还没有可显示的风格包',
-        hint: '市场需要网络与 GitHub 账号；未登录或搜索无结果时这里会是空的'
+        title: this.marketLoading ? '正在加载…' : '没有匹配的风格',
+        hint: '市场需要网络与 GitHub 账号；也可以换个关键词再试。'
       })
     } else {
-      Group() {
-        ForEach(this.marketPacks, (pack: MarketplacePack, index: number) => {
-          RowItem({
-            symbol: 'style',
-            accentSymbol: pack.installed === true,
-            title: pack.name,
-            subtitle: pack.description !== undefined && pack.description.length > 0
-              ? pack.description : (pack.author ?? '社区'),
-            value: pack.installed === true ? '已安装'
-              : (pack.downloads ?? 0).toString() + ' 次下载',
-            showChevron: true,
-            showDivider: index < this.marketPacks.length - 1,
-            onTap: () => {
-              this.selectMarketPack(pack.id);
+      Column({ space: Space.sm }) {
+        ForEach(this.marketPacks, (pack: MarketplacePack) => {
+          StyleSummaryCard({
+            name: pack.name,
+            summary: pack.description ?? '',
+            // iOS 市场行把作者放进元信息，详情页再补「下载 · 喜欢」。
+            metadata: (pack.authorLogin || '社区') + ' · 下载 ' + (pack.downloadCount ?? 0).toString() +
+              ' · 喜欢 ' + (pack.likeCount ?? 0).toString(),
+            badge: this.marketInstalled(pack) ? '已安装' : '',
+            badgeTone: 'success',
+            primaryLabel: this.marketInstalled(pack) ? '' : '安装',
+            primaryEnabled: !this.busy,
+            secondaryLabel: this.marketLiked(pack.id) ? '取消点赞' : '点赞',
+            selected: pack.id === this.marketSelectedId,
+            onOpen: () => this.selectMarketPack(pack.id),
+            onPrimary: () => {
+              this.install(pack.id);
+            },
+            onSecondary: () => {
+              this.like(pack.id);
             }
           })
         }, (pack: MarketplacePack) => pack.id)
       }
+      .width('100%')
     }
   }
 
@@ -1989,16 +2347,19 @@ export struct StylePage {
           TonalButton({
             label: '设为当前风格',
             symbol: 'check',
+            usable: !this.busy && this.detailEnabled(),
             onTap: () => {
-              this.activate();
+              this.activate(this.selectedId);
             }
           })
         }
         TonalButton({
           label: '编辑提示词',
-          symbol: 'copy',
+          symbol: 'edit',
+          usable: !this.busy,
           onTap: () => this.startEdit()
         })
+        .id('style-edit-open')
       }
       .width('100%')
       .justifyContent(FlexAlign.Start)
@@ -2009,17 +2370,30 @@ export struct StylePage {
           symbol: 'copy',
           tone: 'quiet',
           onTap: () => {
-            this.exportZip();
+            this.exportZip(this.selectedId, this.detailName());
           }
         })
-        TextButton({
-          label: '删除',
-          symbol: 'trash',
-          tone: 'danger',
-          onTap: () => {
-            this.openSheet(SHEET_CONFIRM);
-          }
-        })
+        if (this.detailBuiltIn()) {
+          TextButton({
+            label: '恢复默认',
+            symbol: 'refresh',
+            tone: 'quiet',
+            usable: !this.busy,
+            onTap: () => {
+              this.resetBuiltinSelected();
+            }
+          })
+        } else {
+          TextButton({
+            label: '删除',
+            symbol: 'trash',
+            tone: 'danger',
+            usable: !this.busy,
+            onTap: () => {
+              this.openSheet(SHEET_CONFIRM);
+            }
+          })
+        }
         if (!this.isWide()) {
           TextButton({
             label: '关闭',
@@ -2074,17 +2448,19 @@ export struct StylePage {
       Row({ space: Space.sm }) {
         if (!this.marketDetailInstalled()) {
           PrimaryButton({
-            label: '安装到本机',
+            label: this.busy ? '安装中…' : '安装到本机',
+            usable: !this.busy,
             onTap: () => {
-              this.install();
+              this.install(this.marketSelectedId);
             }
           })
         }
         TonalButton({
-          label: '点赞',
+          label: this.marketLiked(this.marketSelectedId) ? '取消点赞' : '点赞',
           symbol: 'sparkles',
+          usable: !this.busy,
           onTap: () => {
-            this.like();
+            this.like(this.marketSelectedId);
           }
         })
         if (!this.isWide()) {
@@ -2137,9 +2513,11 @@ export struct StylePage {
             this.createPack();
           }
         })
+        .id('style-create-save')
         TextButton({
           label: '取消',
           tone: 'quiet',
+          usable: !this.busy,
           onTap: () => {
             this.closeSheet();
           }
@@ -2175,9 +2553,11 @@ export struct StylePage {
             this.savePrompt();
           }
         })
+        .id('style-edit-save')
         TextButton({
           label: '取消',
           tone: 'quiet',
+          usable: !this.busy,
           onTap: () => {
             this.openSheet(SHEET_DETAIL);
           }
@@ -2213,6 +2593,7 @@ export struct StylePage {
         TextButton({
           label: '取消',
           tone: 'quiet',
+          usable: !this.busy,
           onTap: () => {
             this.openSheet(SHEET_DETAIL);
           }
@@ -2230,6 +2611,14 @@ export struct StylePage {
       if (this.sheetMode === SHEET_CREATE) {
         this.createBody()
       } else if (this.sheetMode === SHEET_DETAIL) {
+        SheetTitle({
+          title: '风格详情',
+          actionLabel: '完成',
+          onAction: () => {
+            this.closeSheet();
+          }
+        })
+        .id('style-detail-done')
         this.localDetailBody()
       } else if (this.sheetMode === SHEET_EDIT) {
         this.editBody()
@@ -2250,9 +2639,12 @@ export struct StylePage {
       .width(0)
       .height(0)
       .bindSheet($$this.sheetOpen, this.sheetBody, {
-        height: SheetSize.MEDIUM,
+        preferType: this.isWide() ? SheetType.CENTER : SheetType.BOTTOM,
+        width: this.isWide() ? 560 : '100%',
+        height: this.isWide() ? SheetSize.FIT_CONTENT : SheetSize.MEDIUM,
         dragBar: true,
-        showClose: true,
+        showClose: this.sheetMode !== SHEET_DETAIL,
+        radius: LengthMetrics.vp(Radius.sheet),
         onDisappear: () => {
           this.sheetOpen = false;
         }

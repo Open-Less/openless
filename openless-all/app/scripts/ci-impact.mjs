@@ -278,11 +278,11 @@ function classify(file, context) {
 
   const tags = new Set();
   if (motionSurface(file)) {
-    // The bundle is embedded in every shell that renders it. The Linux host uses
-    // a native egui UI and does not consume `dist/` at all, and the Android job
-    // only compiles the Rust crate (`npm run build` there just satisfies
-    // `generate_context!`), so neither is in scope for a bundle-only change.
-    for (const tag of ['frontend', 'macos', 'windows', 'harmony']) tags.add(tag);
+    // Only browser-rendered shells consume the bundle. HarmonyOS builds native
+    // ArkUI and Linux uses egui; neither reads `dist/`. The Android job only
+    // compiles Rust (`npm run build` satisfies `generate_context!`), so it is
+    // outside a bundle-only change too. Shared manifests/resources stay fail-open.
+    for (const tag of ['frontend', 'macos', 'windows']) tags.add(tag);
   }
 
   const owner = ownerPackage(file, context);

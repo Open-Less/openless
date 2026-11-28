@@ -65,6 +65,20 @@ for (const key of ['tauri-windows', 'tauri-macos']) {
   assert.ok(sharedKeys(release).includes(key), `release-tauri.yml must restore shared-key ${key}`);
 }
 
+// Harmony CI and release have different job ids. An additive `key` alone keeps
+// those ids in rust-cache's default key and cannot reuse the beta producer.
+for (const [yaml, label] of [
+  [ci.match(/\n  harmony-check:[\s\S]*?(?=\n  [a-z-]+:\n)/)?.[0] ?? '', 'ci.yml/harmony-check'],
+  [releaseHarmony, 'release-harmony.yml/build-harmony-hap'],
+]) {
+  assert.match(yaml, /shared-key: harmony-host/, label + ' needs one job-independent key');
+  assert.doesNotMatch(yaml, /^\s+key: harmony-host$/m);
+  assert.match(
+    yaml,
+    /save-if: \$\{\{ github\.ref == 'refs\/heads\/beta' && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) \}\}/,
+  );
+}
+
 // 2. The release workflow must not keep a private key: that is what made tag
 //    builds cold (the baseline branch never wrote it).
 assert.doesNotMatch(release, /key:\s*macos-release/);

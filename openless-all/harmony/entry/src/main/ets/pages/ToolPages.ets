@@ -25,9 +25,11 @@ import { Nav } from '../components/Nav';
 import { Api } from '../data/Api';
 import { PlatformCapabilities, SettingsSnapshot, UserPreferences } from '../data/Types';
 
-const LANGUAGES: string[] = ['zh-CN', 'en', 'ja', 'ko'];
+/** Canonical native names expected by `openless-core::UserPreferences.translation_target_language`. */
+const LANGUAGES: string[] = ['简体中文', 'English', '日本語', '한국어'];
 const LANGUAGE_NAMES: string[] = ['简体中文', 'English', '日本語', '한국어'];
-const MODES: string[] = ['raw', 'polish', 'translate', 'structured'];
+/** Valid `openless-core::PolishMode` variants (`raw | light | structured | formal`). */
+const MODES: string[] = ['raw', 'light', 'structured', 'formal'];
 
 /** One dictation result kept on the 问答 page for the current session. */
 interface QaTurn {
@@ -48,8 +50,10 @@ interface QaTurn {
 @Component
 export struct TranslationPage {
   @StorageLink('bp') bp: string = 'md';
+  @StorageLink('phoneLayout') phoneLayout: boolean = true;
 
   @State private prefs: UserPreferences = {};
+  @State private lastTarget: string = 'English';
   @State private error: string = '';
   @State private busy: boolean = false;
   @State private draft: string = '';
@@ -61,13 +65,16 @@ export struct TranslationPage {
   }
 
   private isWide(): boolean {
-    return this.bp === Layout.LG || this.bp === Layout.XL;
+    // Portrait tablets present the phone UI, so they stay single-column too.
+    return !this.phoneLayout && (this.bp === Layout.LG || this.bp === Layout.XL);
   }
 
   private async reload(): Promise<void> {
     try {
       const snapshot: SettingsSnapshot = await Api.settings();
       this.prefs = snapshot.preferences;
+      const saved: string = (snapshot.preferences.translationTargetLanguage ?? '').trim();
+      if (saved.length > 0) this.lastTarget = saved;
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -80,6 +87,9 @@ export struct TranslationPage {
     try {
       const snapshot: SettingsSnapshot = await Api.writeString(pointer, value);
       this.prefs = snapshot.preferences;
+      if (pointer === '/translationTargetLanguage' && value.trim().length > 0) {
+        this.lastTarget = value.trim();
+      }
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -88,11 +98,12 @@ export struct TranslationPage {
     }
   }
 
-  private async writeBool(pointer: string, value: boolean): Promise<void> {
+  private async writePolishMode(mode: string): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     try {
-      const snapshot: SettingsSnapshot = await Api.writeBool(pointer, value);
+      await Api.setDefaultPolishMode(mode);
+      const snapshot: SettingsSnapshot = await Api.settings();
       this.prefs = snapshot.preferences;
       this.error = '';
     } catch (error) {
@@ -102,20 +113,30 @@ export struct TranslationPage {
     }
   }
 
+  private translationOn(): boolean {
+    return (this.prefs.translationTargetLanguage ?? '').trim().length > 0;
+  }
+
+  private async setTranslationEnabled(enabled: boolean): Promise<void> {
+    const target: string = enabled ? (this.lastTarget.length > 0 ? this.lastTarget : 'English') : '';
+    await this.writeString('/translationTargetLanguage', target);
+  }
+
   private targetIndex(): number {
-    const target: string = this.prefs.translationTargetLanguage ?? '';
+    const raw: string = (this.prefs.translationTargetLanguage ?? '').trim();
+    const target: string = raw.length > 0 ? raw : this.lastTarget;
     for (let index = 0; index < LANGUAGES.length; index++) {
       if (LANGUAGES[index] === target) return index;
     }
-    return 0;
+    return 1;
   }
 
   private targetName(): string {
-    return LANGUAGE_NAMES[this.targetIndex()];
+    return this.translationOn() ? LANGUAGE_NAMES[this.targetIndex()] : '已关闭';
   }
 
   private modeIndex(): number {
-    const mode: string = this.prefs.defaultMode ?? 'polish';
+    const mode: string = this.prefs.defaultMode ?? 'light';
     for (let index = 0; index < MODES.length; index++) {
       if (MODES[index] === mode) return index;
     }
@@ -131,10 +152,10 @@ export struct TranslationPage {
   }
 
   private modeHint(): string {
-    if ((this.prefs.defaultMode ?? '') === 'translate') {
-      return '听写结束后会直接输出 ' + this.targetName() + ' 译文，历史里同时保留原文与译文。';
+    if (this.translationOn()) {
+      return '目标语言已设为 ' + this.targetName() + '，开启翻译听写时将输出译文并保留原文。';
     }
-    return '当前不是翻译模式；选「翻译」后听写结果会直接是 ' + this.targetName() + ' 译文。';
+    return '当前未开启翻译目标；开启下方开关或选择目标语言后即可用于翻译听写。';
   }
 
   /** One-shot rewrite through the active model, same path as dictation. */
@@ -161,8 +182,7 @@ export struct TranslationPage {
 
   build() {
     PageScaffold({
-      title: '翻译',
-      subtitle: '把说的话直接翻译成目标语言',
+      title: '翻译目标',
       actionLabel: '刷新',
       actionSymbol: 'refresh',
       onAction: () => {
@@ -235,12 +255,12 @@ export struct TranslationPage {
   modeCard() {
     Surface({ inset: Space.md }) {
       Column({ space: Space.sm }) {
-        SectionTitle({ title: '当前模式', hint: '点一下切换，也可以在设置里改默认值' })
+        SectionTitle({ title: '默认润色模式', hint: '点一下切换，与输入法语音和全局默认风格同步' })
         Segmented({
           items: this.modeLabels(),
           selected: this.modeIndex(),
           onSelect: (index: number) => {
-            this.writeString('/defaultMode', MODES[index]);
+            this.writePolishMode(MODES[index]);
           }
         })
         Text(this.modeHint())
@@ -249,12 +269,12 @@ export struct TranslationPage {
           .fontColor(Palette.text3())
           .width('100%')
         SettingSwitch({
-          label: '翻译开关',
-          hint: '关掉后听写结果只走润色，不做翻译',
-          checked: this.prefs.translationEnabled === true,
+          label: '启用翻译目标语言',
+          hint: '关掉后会清空目标语言，仅按所选润色模式输出',
+          checked: this.translationOn(),
           showDivider: false,
           onToggle: (value: boolean) => {
-            this.writeBool('/translationEnabled', value);
+            this.setTranslationEnabled(value);
           }
         })
       }
@@ -363,6 +383,7 @@ export struct TranslationPage {
 @Component
 export struct QaPage {
   @StorageLink('bp') bp: string = 'md';
+  @StorageLink('phoneLayout') phoneLayout: boolean = true;
   @StorageLink('dictPhase') phase: string = 'idle';
   @StorageLink('dictError') dictError: string = '';
 
@@ -377,7 +398,8 @@ export struct QaPage {
   }
 
   private isWide(): boolean {
-    return this.bp === Layout.LG || this.bp === Layout.XL;
+    // Portrait tablets present the phone UI, so they stay single-column too.
+    return !this.phoneLayout && (this.bp === Layout.LG || this.bp === Layout.XL);
   }
 
   private async loadCapabilities(): Promise<void> {
@@ -515,7 +537,7 @@ export struct QaPage {
             this.question = value;
           }
         })
-        Row({ space: Space.sm }) {
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
           PrimaryButton({
             label: this.phaseLabel(),
             usable: !this.busy && this.phase !== 'processing',
@@ -633,298 +655,5 @@ export struct QaPage {
       }
       .width('100%')
     }
-  }
-}
-
-@Component
-export struct LocalAsrPage {
-  @StorageLink('bp') bp: string = 'md';
-
-  @State private capabilities: PlatformCapabilities = { platform: 'harmony' };
-  @State private prefs: UserPreferences = {};
-  @State private error: string = '';
-  @State private busy: boolean = false;
-  @State private infoOpen: boolean = false;
-
-  aboutToAppear(): void {
-    this.reload();
-  }
-
-  private isWide(): boolean {
-    return this.bp === Layout.LG || this.bp === Layout.XL;
-  }
-
-  private async reload(): Promise<void> {
-    try {
-      this.capabilities = await Api.platformCapabilities();
-      const snapshot: SettingsSnapshot = await Api.settings();
-      this.prefs = snapshot.preferences;
-      this.error = '';
-    } catch (error) {
-      this.error = (error as Error).message;
-    }
-  }
-
-  private async enableLocal(value: boolean): Promise<void> {
-    if (this.busy) return;
-    this.busy = true;
-    try {
-      const snapshot: SettingsSnapshot = await Api.writeBool('/localAsrEnabled', value);
-      this.prefs = snapshot.preferences;
-      notify(value ? '已开启本地转写' : '已关闭本地转写');
-    } catch (error) {
-      this.error = (error as Error).message;
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  private localModelName(): string {
-    const model: string | undefined = this.prefs.localAsrModel;
-    if (model === undefined || model.length === 0) return '未安装';
-    return model;
-  }
-
-  private capability(value: boolean | undefined): string {
-    return value === true ? '支持' : '不支持';
-  }
-
-  build() {
-    PageScaffold({
-      title: '模型设置',
-      subtitle: '本地与云端模型的能力边界',
-      actionLabel: '刷新',
-      actionSymbol: 'refresh',
-      onAction: () => {
-        this.reload();
-      }
-    }) {
-      if (this.error.length > 0) {
-        ErrorNote({
-          message: this.error,
-          onRetry: () => {
-            this.reload();
-          }
-        })
-      }
-      if (this.capabilities.supportsLocalAsr !== true) {
-        this.capabilityBanner()
-      }
-      if (this.isWide()) {
-        Row({ space: Space.md }) {
-          Column({ space: Space.md }) {
-            this.localCard()
-            this.engineCard()
-          }
-          .layoutWeight(5)
-          .alignItems(HorizontalAlign.Start)
-
-          Column({ space: Space.md }) {
-            this.platformCard()
-            this.usageCard()
-          }
-          .layoutWeight(4)
-          .alignItems(HorizontalAlign.Start)
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Top)
-      } else {
-        Column({ space: Space.md }) {
-          this.localCard()
-          this.engineCard()
-          this.platformCard()
-          this.usageCard()
-        }
-        .width('100%')
-      }
-
-      Row()
-        .width(0)
-        .height(0)
-        .bindSheet($$this.infoOpen, this.infoSheet, {
-          height: SheetSize.MEDIUM,
-          dragBar: true,
-          showClose: true,
-          onDisappear: () => {
-            this.infoOpen = false;
-          }
-        })
-    }
-  }
-
-  @Builder
-  capabilityBanner() {
-    Banner({
-      title: '本地推理还没接入这台设备',
-      text: '平台能力表里 supportsLocalAsr=false：本地模型需要额外的 NPU 适配与模型分发，这个版本还没有提供。听写仍然可用，走的是当前选中的云端引擎。',
-      tone: 'warning',
-      action: '去换云端引擎',
-      actionSymbol: 'settings',
-      onAction: () => Nav.go(Nav.SETTINGS)
-    })
-  }
-
-  @Builder
-  localCard() {
-    Surface({ inset: Space.md }) {
-      Column({ space: Space.sm }) {
-        SectionTitle({ title: '本地模型', hint: '在设备上推理，不联网' })
-        if (this.capabilities.supportsLocalAsr === true) {
-          SettingSwitch({
-            label: '启用本地转写',
-            hint: '关闭后回落到当前选中的云端引擎',
-            checked: this.prefs.localAsrEnabled === true,
-            showDivider: false,
-            onToggle: (value: boolean) => {
-              this.enableLocal(value);
-            }
-          })
-          Row({ space: Space.xs }) {
-            Tag({ text: '当前模型 · ' + this.localModelName(), tone: 'accent' })
-            Tag({ text: '由 Rust Core 管理', tone: 'neutral' })
-          }
-          .width('100%')
-        } else {
-          EmptyHint({
-            symbol: 'localasr',
-            title: '本地模型还不在这台设备上',
-            hint: '宿主补上本地推理后，这里会出现模型状态、下载与切换入口。'
-          })
-        }
-        Row({ space: Space.sm }) {
-          TonalButton({
-            label: '本地模型怎么接入',
-            symbol: 'list',
-            onTap: () => {
-              this.infoOpen = true;
-            }
-          })
-          TextButton({
-            label: '更换转写引擎',
-            tone: 'quiet',
-            onTap: () => Nav.go(Nav.SETTINGS)
-          })
-        }
-        .width('100%')
-      }
-      .width('100%')
-    }
-  }
-
-  @Builder
-  engineCard() {
-    Group() {
-      Column() {
-        Row() {
-          SectionTitle({ title: '当前转写引擎', hint: '听写实际使用的引擎' })
-        }
-        .width('100%')
-        .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xxs })
-
-        RowItem({
-          symbol: 'settings',
-          title: '转写引擎',
-          value: Labels.provider(this.prefs.activeAsrProvider),
-          showChevron: true,
-          showDivider: true,
-          onTap: () => Nav.go(Nav.SETTINGS)
-        })
-        RowItem({
-          title: '处理管线',
-          subtitle: '两段式或全模态，由设置页决定',
-          value: Labels.pipeline(this.prefs.pipelineMode),
-          showChevron: true,
-          showDivider: false,
-          onTap: () => Nav.go(Nav.SETTINGS)
-        })
-      }
-      .width('100%')
-    }
-  }
-
-  @Builder
-  platformCard() {
-    Group() {
-      Column() {
-        Row() {
-          SectionTitle({ title: '平台能力', hint: '来自 Rust Core 的能力表' })
-        }
-        .width('100%')
-        .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xxs })
-
-        RowItem({
-          title: '平台',
-          value: this.capabilities.platform,
-          showDivider: true
-        })
-        RowItem({
-          title: '本地转写',
-          value: this.capability(this.capabilities.supportsLocalAsr),
-          showDivider: true
-        })
-        RowItem({
-          title: '应用内听写',
-          value: this.capability(this.capabilities.supportsInAppDictation),
-          showDivider: true
-        })
-        RowItem({
-          title: '语音编辑',
-          value: this.capability(this.capabilities.supportsVoiceEdit),
-          showDivider: true
-        })
-        RowItem({
-          title: '浮窗与选中文本',
-          value: this.capability(this.capabilities.supportsOverlay),
-          showDivider: true
-        })
-        RowItem({
-          title: '自动更新',
-          value: this.capability(this.capabilities.supportsAutoUpdate),
-          showDivider: false
-        })
-      }
-      .width('100%')
-    }
-  }
-
-  @Builder
-  usageCard() {
-    Surface({ tone: 'alt', inset: Space.md }) {
-      Column({ space: Space.xs }) {
-        SectionTitle({ title: '说明' })
-        Text('能力开关全部读自 Rust Core 的平台能力表，页面不伪造控件：宿主没有的能力只写清楚缺什么，不做一个点了没反应的按钮。换引擎、换管线都在设置页完成。')
-          .fontSize(Type.label)
-          .lineHeight(Leading.body)
-          .fontColor(Palette.text2())
-          .width('100%')
-      }
-      .width('100%')
-    }
-  }
-
-  @Builder
-  infoSheet() {
-    Column({ space: Space.md }) {
-      SheetTitle({
-        title: '本地模型怎么接入',
-        hint: '这一页只展示宿主真实能力，不放置假控件'
-      })
-      Group() {
-        Column() {
-          RowItem({ title: '模型分发', subtitle: '模型文件与词表随应用或按需下载', showDivider: true })
-          RowItem({ title: '推理后端', subtitle: '需要 NPU/CPU 适配层与量化权重', showDivider: true })
-          RowItem({ title: '当前状态', value: this.capability(this.capabilities.supportsLocalAsr), showDivider: false })
-        }
-        .width('100%')
-      }
-      Text('宿主把 supportsLocalAsr 置为 true 后，这里会出现启用开关、模型状态与切换入口；在那之前，听写走云端引擎。')
-        .fontSize(Type.label)
-        .lineHeight(Leading.body)
-        .fontColor(Palette.text2())
-        .width('100%')
-    }
-    .width('100%')
-    .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.xl })
-    .alignItems(HorizontalAlign.Start)
   }
 }

@@ -1,3 +1,4 @@
+import { KeyCode } from '@kit.InputKit';
 import { promptAction } from '@kit.ArkUI';
 import { Layout, Leading, Palette, Radius, Size, Space, Type } from '../common/Theme';
 import { symbolOf } from './Icons';
@@ -9,6 +10,26 @@ import { symbolOf } from './Icons';
  * not re-implement buttons, rows, chips or cards inline. Keeping the vocabulary
  * small is what makes the pages look like one product.
  */
+
+/**
+ * Activate a custom clickable surface from a physical keyboard. Tablet and PC
+ * users navigate by focus, so every row/card answers Enter/Space.
+ * https://developer.huawei.com/consumer/cn/doc/best-practices-V14/bpta-multi-interaction-V14
+ */
+export function activateOnKey(event: KeyEvent, action: () => void): void {
+  if (event.type !== KeyType.Down) return;
+  if (event.keyCode === KeyCode.KEYCODE_ENTER || event.keyCode === KeyCode.KEYCODE_NUMPAD_ENTER ||
+    event.keyCode === KeyCode.KEYCODE_SPACE) {
+    event.stopPropagation();
+    action();
+  }
+}
+
+/** A nested native Button must not also activate an enclosing clickable card. */
+export function stopButtonKeyBubbling(event: KeyEvent): void {
+  if (event.keyCode === KeyCode.KEYCODE_ENTER || event.keyCode === KeyCode.KEYCODE_NUMPAD_ENTER ||
+    event.keyCode === KeyCode.KEYCODE_SPACE) event.stopPropagation();
+}
 
 /** Section heading inside a card. */
 @Component
@@ -23,15 +44,15 @@ export struct SectionTitle {
     Row({ space: Space.sm }) {
       Column({ space: Space.xxs }) {
         Text(this.title)
-          .fontSize(Type.section)
-          .lineHeight(Leading.section)
+          .fontSize(Type.label)
+          .lineHeight(Leading.label)
           .fontWeight(FontWeight.Medium)
           .fontColor(Palette.text1())
         if (this.hint.length > 0) {
           Text(this.hint)
             .fontSize(Type.caption)
             .lineHeight(Leading.caption)
-            .fontColor(Palette.text3())
+            .fontColor(Palette.text2())
         }
       }
       .alignItems(HorizontalAlign.Start)
@@ -75,6 +96,8 @@ export struct Surface {
 @Component
 export struct Group {
   @Prop fill: string = 'card';
+  /** iOS inset-grouped default is tighter than the 18vp product card. */
+  @Prop radius: number = Radius.card;
   @BuilderParam content: () => void;
 
   build() {
@@ -84,7 +107,7 @@ export struct Group {
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .backgroundColor(this.fill === 'alt' ? Palette.cardAlt() : Palette.card())
-    .borderRadius(Radius.card)
+    .borderRadius(this.radius)
     .border({ width: 0.5, color: Palette.line() })
     .clip(true)
   }
@@ -101,6 +124,8 @@ export struct RowItem {
   @Prop showChevron: boolean = false;
   @Prop showDivider: boolean = true;
   @Prop muted: boolean = false;
+  /** iOS menu pickers render their current value in the accent colour. */
+  @Prop valueAccent: boolean = false;
   onTap: () => void = () => {
   };
 
@@ -110,13 +135,13 @@ export struct RowItem {
         if (this.symbol.length > 0) {
           Stack() {
             SymbolGlyph(symbolOf(this.symbol))
-              .fontSize(Size.icon)
-              .fontColor([this.accentSymbol ? Palette.accent() : Palette.icon2()])
+              .fontSize(14)
+              .fontColor([Palette.accent()])
           }
-          .width(34)
-          .height(34)
-          .backgroundColor(this.accentSymbol ? Palette.accentSoft() : Palette.cardAlt())
-          .borderRadius(Radius.control)
+          .width(28)
+          .height(28)
+          .backgroundColor(Palette.accentSoft())
+          .borderRadius(Radius.icon)
         }
 
         Column({ space: Space.xxs }) {
@@ -130,7 +155,7 @@ export struct RowItem {
             Text(this.subtitle)
               .fontSize(Type.caption)
               .lineHeight(Leading.caption)
-              .fontColor(Palette.text3())
+              .fontColor(Palette.text2())
               .maxLines(2)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
@@ -142,7 +167,7 @@ export struct RowItem {
           Text(this.value)
             .fontSize(Type.label)
             .lineHeight(Leading.label)
-            .fontColor(Palette.text2())
+            .fontColor(this.valueAccent ? Palette.accent() : Palette.text2())
             .textAlign(TextAlign.End)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -155,16 +180,19 @@ export struct RowItem {
         }
       }
       .width('100%')
-      .constraintSize({ minHeight: this.subtitle.length > 0 ? Size.rowDouble : Size.row })
+      .constraintSize({ minHeight: this.subtitle.length > 0 ? 60 : Size.touch })
       .padding({ left: Space.md, right: Space.md, top: Space.xs, bottom: Space.xs })
       .opacity(this.muted ? 0.45 : 1)
+      .hoverEffect(HoverEffect.Highlight)
+      .focusable(true)
+      .onKeyEvent((event: KeyEvent) => activateOnKey(event, () => this.onTap()))
       .onClick(() => this.onTap())
 
       if (this.showDivider) {
         Divider()
           .color(Palette.line())
           .strokeWidth(0.5)
-          .margin({ left: this.symbol.length > 0 ? Space.md + Size.tile + Space.sm : Space.md })
+          .margin({ left: this.symbol.length > 0 ? Space.md + 28 + Space.sm : Space.md })
       }
     }
     .width('100%')
@@ -182,7 +210,7 @@ export struct PrimaryButton {
 
   build() {
     Button(this.label, { type: ButtonType.Capsule })
-      .height(Size.touch)
+      .constraintSize({ minHeight: Size.touch })
       .fontSize(Type.body)
       .fontWeight(FontWeight.Medium)
       .fontColor(Palette.onAccent())
@@ -194,7 +222,8 @@ export struct PrimaryButton {
         normal: { .opacity(this.usable ? 1 : 0.4) },
         pressed: { .opacity(0.82) }
       })
-      .onClick(() => {
+      .onKeyEvent((event: KeyEvent) => stopButtonKeyBubbling(event))
+      .onClick((event: ClickEvent) => {
         if (this.usable) this.onTap();
       })
   }
@@ -210,26 +239,31 @@ export struct TonalButton {
   };
 
   build() {
-    Row({ space: Space.xs }) {
-      if (this.symbol.length > 0) {
-        SymbolGlyph(symbolOf(this.symbol))
-          .fontSize(Size.iconSmall)
-          .fontColor([Palette.accent()])
+    Button({ type: ButtonType.Capsule }) {
+      Row({ space: Space.xs }) {
+        if (this.symbol.length > 0) {
+          SymbolGlyph(symbolOf(this.symbol))
+            .fontSize(Size.iconSmall)
+            .fontColor([Palette.accent()])
+        }
+        Text(this.label)
+          .fontSize(Type.label)
+          .lineHeight(Leading.label)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Palette.accent())
       }
-      Text(this.label)
-        .fontSize(Type.label)
-        .lineHeight(Leading.label)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Palette.accent())
     }
-    .height(Size.touch)
+    .constraintSize({ minHeight: Size.touch })
     .padding({ left: Space.md, right: Space.md })
-    .justifyContent(FlexAlign.Center)
     .backgroundColor(Palette.accentSoft())
     .borderRadius(Radius.pill)
     .opacity(this.usable ? 1 : 0.4)
-    .onClick(() => {
-      if (this.usable) this.onTap();
+    .enabled(this.usable)
+    .hoverEffect(HoverEffect.Highlight)
+    .accessibilityText(this.label)
+    .onKeyEvent((event: KeyEvent) => stopButtonKeyBubbling(event))
+    .onClick((event: ClickEvent) => {
+      this.onTap();
     })
   }
 }
@@ -251,22 +285,31 @@ export struct TextButton {
   }
 
   build() {
-    Row({ space: Space.xxs }) {
-      if (this.symbol.length > 0) {
-        SymbolGlyph(symbolOf(this.symbol))
-          .fontSize(Size.iconSmall)
-          .fontColor([this.ink()])
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: Space.xxs }) {
+        if (this.symbol.length > 0) {
+          SymbolGlyph(symbolOf(this.symbol))
+            .fontSize(Size.iconSmall)
+            .fontColor([this.ink()])
+        }
+        Text(this.label)
+          .fontSize(Type.label)
+          .lineHeight(Leading.label)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.ink())
       }
-      Text(this.label)
-        .fontSize(Type.label)
-        .lineHeight(Leading.label)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.ink())
     }
+    .constraintSize({ minHeight: Size.touch })
     .padding({ left: Space.xs, right: Space.xs, top: Space.xxs, bottom: Space.xxs })
+    .backgroundColor(Color.Transparent)
+    .borderRadius(Radius.control)
     .opacity(this.usable ? 1 : 0.4)
-    .onClick(() => {
-      if (this.usable) this.onTap();
+    .enabled(this.usable)
+    .hoverEffect(HoverEffect.Highlight)
+    .accessibilityText(this.label)
+    .onKeyEvent((event: KeyEvent) => stopButtonKeyBubbling(event))
+    .onClick((event: ClickEvent) => {
+      this.onTap();
     })
   }
 }
@@ -280,16 +323,20 @@ export struct IconButton {
   };
 
   build() {
-    Stack() {
+    Button({ type: ButtonType.Circle }) {
       SymbolGlyph(symbolOf(this.symbol))
         .fontSize(Size.icon)
         .fontColor([this.tint === 'accent' ? Palette.accent() : Palette.icon1()])
     }
     .width(Size.touch)
     .height(Size.touch)
-    .borderRadius(Radius.pill)
     .backgroundColor(Palette.cardAlt())
-    .onClick(() => this.onTap())
+    .hoverEffect(HoverEffect.Highlight)
+    .accessibilityText(this.symbol)
+    .onKeyEvent((event: KeyEvent) => stopButtonKeyBubbling(event))
+    .onClick((event: ClickEvent) => {
+      this.onTap();
+    })
   }
 }
 
@@ -304,17 +351,22 @@ export struct Segmented {
   build() {
     Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
       ForEach(this.items, (item: string, index: number) => {
-        Text(item)
-          .fontSize(Type.label)
-          .lineHeight(Leading.label)
-          .fontColor(index === this.selected ? Palette.text1() : Palette.text2())
-          .fontWeight(index === this.selected ? FontWeight.Medium : FontWeight.Normal)
-          .padding({ left: Space.md, right: Space.md, top: Space.xs, bottom: Space.xs })
-          .margin({ right: Space.xxs, top: 2, bottom: 2 })
-          .backgroundColor(index === this.selected ? Palette.controlSelected() : Color.Transparent)
-          .borderRadius(Radius.pill)
-          .border({ width: index === this.selected ? 0.5 : 0, color: Palette.line() })
-          .onClick(() => this.onSelect(index))
+        Button({ type: ButtonType.Normal }) {
+          Text(item)
+            .fontSize(Type.caption)
+            .lineHeight(Leading.caption)
+            .fontColor(index === this.selected ? Palette.text1() : Palette.text2())
+            .fontWeight(index === this.selected ? FontWeight.Medium : FontWeight.Normal)
+        }
+        .constraintSize({ minHeight: 30 })
+        .padding({ left: Space.sm, right: Space.sm })
+        .margin(2)
+        .backgroundColor(index === this.selected ? Palette.controlSelected() : Color.Transparent)
+        .borderRadius(Radius.control)
+        .hoverEffect(HoverEffect.Highlight)
+        .accessibilityText(item)
+        .accessibilitySelected(index === this.selected)
+        .onClick(() => this.onSelect(index))
       }, (item: string) => item)
     }
     .width('100%')
@@ -380,14 +432,20 @@ export struct SearchField {
         .layoutWeight(1)
         .onChange((text: string) => this.onInput(text))
       if (this.value.length > 0) {
-        SymbolGlyph(symbolOf('close'))
-          .fontSize(Size.iconSmall)
-          .fontColor([Palette.text3()])
-          .onClick(() => this.onInput(''))
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph(symbolOf('close'))
+            .fontSize(Size.iconSmall)
+            .fontColor([Palette.text3()])
+        }
+        .width(32)
+        .height(32)
+        .backgroundColor(Color.Transparent)
+        .accessibilityText('清除搜索内容')
+        .onClick(() => this.onInput(''))
       }
     }
     .width('100%')
-    .height(40)
+    .constraintSize({ minHeight: 40 })
     .padding({ left: Space.sm, right: Space.sm })
     .backgroundColor(Palette.cardAlt())
     .borderRadius(Radius.control)
@@ -402,27 +460,32 @@ export struct EmptyHint {
   @Prop hint: string = '';
 
   build() {
-    Column({ space: Space.xs }) {
-      SymbolGlyph(symbolOf(this.symbol))
-        .fontSize(Size.iconLarge)
-        .fontColor([Palette.text3()])
-        .margin({ bottom: Space.xxs })
+    Column({ space: Space.sm }) {
+      Stack() {
+        SymbolGlyph(symbolOf(this.symbol))
+          .fontSize(24)
+          .fontColor([Palette.accent()])
+      }
+      .width(56)
+      .height(56)
+      .backgroundColor(Palette.accentSoft())
+      .borderRadius(14)
       Text(this.title)
-        .fontSize(Type.body)
-        .lineHeight(Leading.body)
+        .fontSize(Type.cardTitle)
+        .lineHeight(Leading.cardTitle)
         .fontWeight(FontWeight.Medium)
-        .fontColor(Palette.text2())
+        .fontColor(Palette.text1())
         .textAlign(TextAlign.Center)
       if (this.hint.length > 0) {
         Text(this.hint)
-          .fontSize(Type.label)
-          .lineHeight(Leading.label)
-          .fontColor(Palette.text3())
+          .fontSize(Type.caption)
+          .lineHeight(Leading.caption)
+          .fontColor(Palette.text2())
           .textAlign(TextAlign.Center)
       }
     }
     .width('100%')
-    .padding({ top: Space.xxl, bottom: Space.xxl, left: Space.lg, right: Space.lg })
+    .padding({ top: 48, bottom: 48, left: Space.lg, right: Space.lg })
     .justifyContent(FlexAlign.Center)
   }
 }
@@ -638,17 +701,22 @@ export struct PageBackBar {
   };
 
   build() {
-    Row({ space: Space.xxs }) {
-      SymbolGlyph(symbolOf('chevron_left'))
-        .fontSize(Size.icon)
-        .fontColor([Palette.accent()])
-      Text(this.label)
-        .fontSize(Type.label)
-        .lineHeight(Leading.label)
-        .fontColor(Palette.accent())
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: Space.xxs }) {
+        SymbolGlyph(symbolOf('chevron_left'))
+          .fontSize(Size.icon)
+          .fontColor([Palette.accent()])
+        Text(this.label)
+          .fontSize(Type.label)
+          .lineHeight(Leading.label)
+          .fontColor(Palette.accent())
+      }
     }
-    .height(Size.touch)
+    .constraintSize({ minHeight: Size.touch })
     .padding({ right: Space.sm })
+    .backgroundColor(Color.Transparent)
+    .hoverEffect(HoverEffect.Highlight)
+    .accessibilityText('返回' + this.label)
     .onClick(() => this.onTap())
   }
 }
@@ -661,40 +729,105 @@ export struct PageBackBar {
 export struct PageScaffold {
   @Prop title: string;
   @Prop subtitle: string = '';
+  /** iOS largeTitle pages (Dictionary, Styles) keep a 34pt left title. */
+  @Prop largeTitle: boolean = false;
   @Prop actionLabel: string = '';
   @Prop actionSymbol: string = '';
   @Prop scrollable: boolean = true;
-  @Prop gap: number = Space.md;
+  @Prop gap: number = Space.lg;
   onAction: () => void = () => {
   };
   @BuilderParam content: () => void;
   @StorageLink('bp') bp: string = 'md';
+  @StorageLink('shortWindow') shortWindow: boolean = false;
 
   build() {
     Column() {
-      Row({ space: Space.sm }) {
-        Column({ space: Space.xxs }) {
-          Text(this.title)
-            .fontSize(Type.pageTitle)
-            .lineHeight(Leading.pageTitle)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Palette.text1())
-          if (this.subtitle.length > 0) {
-            Text(this.subtitle)
-              .fontSize(Type.label)
-              .lineHeight(Leading.label)
-              .fontColor(Palette.text3())
+      // iOS inline navigation bar: 44pt row, centred 17pt semibold title and a
+      // 44pt trailing toolbar button. An optional subtitle renders as a
+      // caption2 line rather than a second large title.
+      if (this.largeTitle) {
+        Row({ space: Space.sm }) {
+          Column({ space: Space.xxs }) {
+            Text(this.title)
+              .fontSize(Type.pageTitle)
+              .lineHeight(Leading.pageTitle)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Palette.text1())
+            if (this.subtitle.length > 0) {
+              Text(this.subtitle)
+                .fontSize(Type.caption)
+                .lineHeight(Leading.caption)
+                .fontColor(Palette.text2())
+            }
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          if (this.actionLabel.length > 0 || this.actionSymbol.length > 0) {
+            Button({ type: ButtonType.Circle }) {
+              SymbolGlyph(symbolOf(this.actionSymbol.length > 0 ? this.actionSymbol : 'add'))
+                .fontSize(Type.navTitle)
+                .fontColor([Palette.accent()])
+            }
+            .width(Size.touch)
+            .height(Size.touch)
+            .backgroundColor(Palette.card())
+            .hoverEffect(HoverEffect.Highlight)
+            .accessibilityText(this.actionLabel)
+            .onClick(() => this.onAction())
           }
         }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        if (this.actionLabel.length > 0) {
-          TextButton({ label: this.actionLabel, symbol: this.actionSymbol, onTap: () => this.onAction() })
+        .width('100%')
+        .padding({ top: Space.xs, bottom: Space.sm })
+      }
+      Stack({ alignContent: Alignment.Center }) {
+        Column({ space: 2 }) {
+          Text(this.title)
+            .fontSize(Type.navTitle)
+            .lineHeight(Leading.navTitle)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Palette.text1())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (this.subtitle.length > 0 && !this.shortWindow) {
+            Text(this.subtitle)
+              .fontSize(Type.caption2)
+              .lineHeight(Leading.caption2)
+              .fontColor(Palette.text2())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
         }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+
+        Row() {
+          Blank()
+          if (this.actionLabel.length > 0 || this.actionSymbol.length > 0) {
+            Button({ type: ButtonType.Circle }) {
+              if (this.actionSymbol.length > 0) {
+                SymbolGlyph(symbolOf(this.actionSymbol))
+                  .fontSize(Type.navTitle)
+                  .fontColor([Palette.accent()])
+              } else {
+                Text(this.actionLabel)
+                  .fontSize(Type.caption)
+                  .fontColor(Palette.accent())
+              }
+            }
+            .width(Size.touch)
+            .height(Size.touch)
+            .backgroundColor(Palette.control())
+            .hoverEffect(HoverEffect.Highlight)
+            .accessibilityText(this.actionLabel.length > 0 ? this.actionLabel : '操作')
+            .onClick(() => this.onAction())
+          }
+        }
+        .width('100%')
       }
       .width('100%')
-      .padding({ top: Space.xs, bottom: Space.sm })
+      .visibility(this.largeTitle ? Visibility.None : Visibility.Visible)
+      .constraintSize({ minHeight: this.subtitle.length > 0 && !this.shortWindow ? 60 : Size.touch })
 
       if (this.scrollable) {
         Scroll() {
@@ -702,7 +835,7 @@ export struct PageScaffold {
             this.content()
           }
           .width('100%')
-          .padding({ bottom: Space.xl })
+          .padding({ top: Space.sm, bottom: Layout.dockClearance() })
         }
         .layoutWeight(1)
         .width('100%')
@@ -715,12 +848,168 @@ export struct PageScaffold {
         }
         .layoutWeight(1)
         .width('100%')
-        .padding({ bottom: Space.xs })
+        .padding({ top: Space.xs, bottom: Space.xs })
       }
     }
     .width('100%')
     .height('100%')
     .padding({ left: Layout.gutter(this.bp), right: Layout.gutter(this.bp) })
+  }
+}
+
+/**
+ * iOS `PinnedSearchBar` (NativeSearchField.swift:71-79): a 48vp field pinned above
+ * the scrolling list, page gutter 20, 8vp vertical padding and a 0.5 hairline.
+ * Content scrolls underneath it, like the `.searchable` drawer in the video.
+ */
+@Component
+export struct PinnedSearchBar {
+  @Prop placeholder: string = '';
+  @Prop value: string = '';
+  @Prop showHairline: boolean = true;
+  /** False when the parent page already applies the 20vp page gutter. */
+  @Prop inset: boolean = true;
+  onInput: (text: string) => void = (text: string) => {
+  };
+  @StorageLink('bp') bp: string = 'md';
+
+  build() {
+    Column() {
+      Row({ space: Space.xs }) {
+        SymbolGlyph(symbolOf('search'))
+          .fontSize(Size.iconSmall)
+          .fontColor([Palette.text3()])
+        TextInput({ placeholder: this.placeholder, text: this.value })
+          .fontSize(Type.body)
+          .fontColor(Palette.text1())
+          .placeholderColor(Palette.text3())
+          .backgroundColor(Color.Transparent)
+          .padding(0)
+          .layoutWeight(1)
+          .onChange((text: string) => this.onInput(text))
+        if (this.value.length > 0) {
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph(symbolOf('close'))
+              .fontSize(Size.iconSmall)
+              .fontColor([Palette.text3()])
+          }
+          .width(32)
+          .height(32)
+          .backgroundColor(Color.Transparent)
+          .accessibilityText('清除搜索内容')
+          .onClick(() => this.onInput(''))
+        }
+      }
+      .width('100%')
+      .height(48)
+      .padding({ left: Space.sm, right: Space.sm })
+      .backgroundColor(Palette.cardAlt())
+      .borderRadius(Radius.control)
+    }
+    .width('100%')
+    .padding({
+      left: this.inset ? Layout.gutter(this.bp) : 0,
+      right: this.inset ? Layout.gutter(this.bp) : 0,
+      top: Space.xs,
+      bottom: Space.xs
+    })
+    .backgroundColor(Palette.bg())
+    .border(this.showHairline
+      ? { width: { bottom: 0.5 }, color: Palette.line() }
+      : { width: 0, color: Color.Transparent })
+  }
+}
+
+/**
+ * iOS `sourceFilters` capsule track (VocabularyView.swift:133-153): a horizontally
+ * scrolling track (`secondarySystemBackground`) whose selected chip is a white
+ * capsule with a soft shadow. Chips carry an optional tinted glyph.
+ */
+export interface CapsuleChip {
+  label: string;
+  symbol: string;
+  tint: string;
+}
+
+@Component
+export struct CapsuleTrack {
+  @Prop chips: CapsuleChip[] = [];
+  @Prop selected: number = 0;
+  onSelect: (index: number) => void = (index: number) => {
+  };
+
+  private ink(tint: string): Resource {
+    if (tint === 'teal') return Palette.success();
+    if (tint === 'accent') return Palette.accent();
+    return Palette.text2();
+  }
+
+  build() {
+    Scroll() {
+      Row({ space: Space.xxs }) {
+        ForEach(this.chips, (chip: CapsuleChip, index: number) => {
+          Button({ type: ButtonType.Normal }) {
+            Row({ space: 6 }) {
+              if (chip.symbol.length > 0) {
+                SymbolGlyph(symbolOf(chip.symbol))
+                  .fontSize(Size.iconSmall)
+                  .fontColor([this.ink(chip.tint)])
+              }
+              Text(chip.label)
+                .fontSize(Type.body)
+                .lineHeight(Leading.body)
+                .fontWeight(index === this.selected ? FontWeight.Medium : FontWeight.Regular)
+                .fontColor(Palette.text1())
+                .maxLines(1)
+            }
+            .padding({ left: Space.md, right: Space.md, top: Space.sm, bottom: Space.sm })
+            .backgroundColor(index === this.selected ? Palette.card() : Color.Transparent)
+            .borderRadius(Radius.pill)
+            .shadow(index === this.selected
+              ? { radius: 4, color: Palette.line(), offsetY: 1 }
+              : undefined)
+          }
+          .padding(0)
+          .backgroundColor(Color.Transparent)
+          .hoverEffect(HoverEffect.Highlight)
+          .accessibilityText(chip.label)
+          .accessibilitySelected(index === this.selected)
+          .onClick(() => this.onSelect(index))
+        }, (chip: CapsuleChip) => 'chip-' + chip.label)
+      }
+      .padding(5)
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .align(Alignment.Start)
+    .width('100%')
+    .backgroundColor(Palette.control())
+    .borderRadius(Radius.pill)
+  }
+}
+
+/** iOS `.foregroundStyle(AppDesign.accent)` plain text action ("Filter by date"). */
+@Component
+export struct AccentTextButton {
+  @Prop label: string;
+  @Prop usable: boolean = true;
+  onTap: () => void = () => {
+  };
+
+  build() {
+    Button({ type: ButtonType.Normal }) {
+      Text(this.label)
+        .fontSize(Type.label)
+        .lineHeight(Leading.label)
+        .fontWeight(FontWeight.Regular)
+        .fontColor(Palette.accent())
+    }
+    .padding({ left: 0, right: 0, top: Space.xxs, bottom: Space.xxs })
+    .backgroundColor(Color.Transparent)
+    .hoverEffect(HoverEffect.Highlight)
+    .enabled(this.usable)
+    .accessibilityText(this.label)
+    .onClick(() => this.onTap())
   }
 }
 
@@ -795,25 +1084,41 @@ export struct InputField {
 export struct SheetTitle {
   @Prop title: string;
   @Prop hint: string = '';
+  /** Trailing text action, e.g. the iOS sheet's 完成 / 保存. */
+  @Prop actionLabel: string = '';
+  onAction: () => void = () => {
+  };
 
   build() {
-    Column({ space: Space.xxs }) {
-      Text(this.title)
-        .fontSize(Type.section)
-        .lineHeight(Leading.section)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Palette.text1())
-        .width('100%')
-      if (this.hint.length > 0) {
-        Text(this.hint)
-          .fontSize(Type.label)
-          .lineHeight(Leading.label)
-          .fontColor(Palette.text3())
+    Row({ space: Space.sm }) {
+      Column({ space: Space.xxs }) {
+        Text(this.title)
+          .fontSize(Type.section)
+          .lineHeight(Leading.section)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Palette.text1())
           .width('100%')
+        if (this.hint.length > 0) {
+          Text(this.hint)
+            .fontSize(Type.label)
+            .lineHeight(Leading.label)
+            .fontColor(Palette.text3())
+            .width('100%')
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      if (this.actionLabel.length > 0) {
+        TextButton({
+          label: this.actionLabel,
+          usable: true,
+          onTap: () => this.onAction()
+        })
       }
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    .alignItems(VerticalAlign.Top)
     .padding({ bottom: Space.sm })
   }
 }

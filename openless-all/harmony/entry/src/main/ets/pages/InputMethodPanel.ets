@@ -711,30 +711,27 @@ struct InputMethodPanel {
     else if (index === 5) { this.menuTile($r('app.media.ime_tools'), '定制工具栏', () => { this.shortcutSlot = 0; this.utility = 3; }) }
     else if (index === 6) { this.menuTile($r('app.media.ime_phrase'), '常用语', () => { this.utility = 8; }) }
     else if (index === 7) { this.menuTile($r('app.media.ime_emoji'), '表情', () => { this.utility = 2; }) }
-    else if (index === 8) { this.menuTile($r('app.media.ime_camera'), '拍照输入', () => {}, false, '待接入') }
-    else if (index === 9) { this.menuTile($r('app.media.ime_language'), '繁体输入', () => {}, false, '待接入') }
-    else if (index === 10) { this.menuTile($r('app.media.ime_swipe'), '上滑输入', () => { inputSession.toggleKeyOption('swipeSymbols'); }, true, '状态') }
-    else { this.menuTile($r('app.media.ime_language'), '英文联想', () => {}, false, '待接入') }
+    else { this.menuTile($r('app.media.ime_swipe'), '上滑输入', () => { inputSession.toggleKeyOption('swipeSymbols'); }, true, '状态') }
   }
 
   @Builder
   commonTools() {
     Scroll() {
       Column({ space: 0 }) {
-        Row() { ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].slice(0, this.menuSplit(12)), (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
-        if (this.menuSplit(12) < 12) {
-          Row() { ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].slice(this.menuSplit(12)), (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
+        Row() { ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8].slice(0, this.menuSplit(9)), (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
+        if (this.menuSplit(9) < 9) {
+          Row() { ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8].slice(this.menuSplit(9)), (index: number) => { this.commonTool(index) }, (index: number) => index.toString()) }
         }
-      }.width(Math.max(this.keyboardWidth, (this.menuTileSize() + 24) * this.menuSplit(12)))
-    }.width('100%').height((this.menuTileSize() + 12) * (this.menuSplit(12) === 12 ? 1 : 2)).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+      }.width(Math.max(this.keyboardWidth, (this.menuTileSize() + 24) * this.menuSplit(9)))
+    }.width('100%').height((this.menuTileSize() + 12) * (this.menuSplit(9) === 9 ? 1 : 2)).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
       .align(Alignment.TopStart)
   }
 
   @Builder
   inputTool(index: number) {
-    if (index === 0) { this.menuTile($r('app.media.ime_keyboard'), '26键', () => { this.inputMode(true); }, this.connected && !this.password && !this.pendingCommit) }
-    else if (index === 1) { this.menuTile($r('app.media.ime_number'), '9键', () => {}, false, '待接入') }
-    else { this.menuTile($r('app.media.ime_handwrite'), '手写输入法', () => {}, false, '待接入') }
+    if (index === 0) { this.menuTile($r('app.media.ime_keyboard'), '26键拼音', () => { this.inputMode(true); }, this.connected && !this.password && !this.pendingCommit) }
+    else if (index === 1) { this.menuTile($r('app.media.ime_language'), '英文输入', () => { this.inputMode(false); }, this.connected && !this.pendingCommit) }
+    else { this.menuTile($r('app.media.ime_microphone'), '语音输入', () => { this.voice(); }, this.connected && this.editorVerified && !this.password && !this.pendingCommit && this.voicePhase === 'idle') }
   }
 
   @Builder

@@ -218,6 +218,7 @@ export class HarmonyApi {
   private lastLevelEvent: number = 0;
   private voice: VoiceClient = new VoiceClient();
   private voiceEpoch: number = 0;
+  private monitorEpoch: number = 0;
   private voicePhase: string = 'idle';
   private voiceLevelAt: number = 0;
 
@@ -231,6 +232,7 @@ export class HarmonyApi {
   private async startDictation(): Promise<void> {
     if (!this.context) throw new Error('应用上下文未就绪');
     if (this.voicePhase !== 'idle') throw new Error('请先结束当前录音');
+    if (AppStorage.get<boolean>('systemSpeechBusy') === true) throw new Error('请先结束端侧语音试用');
     const epoch = ++this.voiceEpoch;
     this.publishVoice('starting');
     try {
@@ -344,6 +346,8 @@ export class HarmonyApi {
   }
 
   private async stopMonitor(): Promise<void> {
+    this.monitorEpoch++;
+    AppStorage.setOrCreate<boolean>('microphoneMonitorBusy', false);
     const capturer = this.capturer;
     this.capturer = undefined;
     if (capturer) {
@@ -353,16 +357,27 @@ export class HarmonyApi {
 
   private async startMonitor(name: string): Promise<void> {
     if (this.voicePhase !== 'idle') throw new Error('请先结束当前录音');
+    if (AppStorage.get<boolean>('systemSpeechBusy') === true) throw new Error('请先结束端侧语音试用');
     await this.stopMonitor();
-    if (this.microphoneStatus() !== 'granted' && await this.requestMicrophone() !== 'granted') {
-      throw new Error('未获得麦克风权限，请在权限页面授权');
+    if (this.voicePhase !== 'idle' || AppStorage.get<boolean>('systemSpeechBusy') === true) {
+      throw new Error('麦克风正在使用中');
     }
-    const capturer = await audio.createAudioCapturer({
-      streamInfo: { samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000, channels: audio.AudioChannel.CHANNEL_1, sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE, encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW },
-      capturerInfo: { source: audio.SourceType.SOURCE_TYPE_MIC, capturerFlags: 0 }
-    });
-    this.capturer = capturer;
+    const epoch: number = ++this.monitorEpoch;
+    AppStorage.setOrCreate<boolean>('microphoneMonitorBusy', true);
     try {
+      if (this.microphoneStatus() !== 'granted' && await this.requestMicrophone() !== 'granted') {
+        throw new Error('未获得麦克风权限，请在权限页面授权');
+      }
+      if (epoch !== this.monitorEpoch) throw new Error('麦克风测试已取消');
+      const capturer = await audio.createAudioCapturer({
+        streamInfo: { samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000, channels: audio.AudioChannel.CHANNEL_1, sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE, encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW },
+        capturerInfo: { source: audio.SourceType.SOURCE_TYPE_MIC, capturerFlags: 0 }
+      });
+      if (epoch !== this.monitorEpoch) {
+        await capturer.release();
+        throw new Error('麦克风测试已取消');
+      }
+      this.capturer = capturer;
       if (name) {
         const selected = this.devices().filter((device: audio.AudioDeviceDescriptor) => this.deviceName(device) === name);
         if (selected.length === 0) throw new Error('选中的麦克风已断开');
@@ -370,6 +385,7 @@ export class HarmonyApi {
         if (!preferred.some((device: audio.AudioDeviceDescriptor) => device.id === selected[0].id)) throw new Error('当前系统使用其他输入设备，请在系统中切换麦克风或选择系统默认');
       }
       capturer.on('readData', (buffer: ArrayBuffer) => {
+        if (epoch !== this.monitorEpoch) return;
         const now = Date.now();
         if (now - this.lastLevelEvent < 100) return;
         this.lastLevelEvent = now;
@@ -382,7 +398,7 @@ export class HarmonyApi {
       await capturer.start();
       console.info('[OpenLess Audio] microphone monitor started');
     } catch (error) {
-      await this.stopMonitor();
+      if (epoch === this.monitorEpoch) await this.stopMonitor();
       throw new Error(String(error));
     }
   }

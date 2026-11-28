@@ -1,5 +1,6 @@
 import { Labels } from '../common/Labels';
-import { Leading, Palette, Radius, Space, Type, floatShadow } from '../common/Theme';
+import { Store } from '../common/Store';
+import { Layout, Leading, Palette, Radius, Space, Type, floatShadow } from '../common/Theme';
 import {
   EmptyHint,
   ErrorNote,
@@ -11,6 +12,7 @@ import {
   RowItem,
   SectionTitle,
   Segmented,
+  SettingSwitch,
   Surface,
   Tag,
   TextButton,
@@ -18,7 +20,7 @@ import {
   notify
 } from '../components/Kit';
 import { Api, CredentialStatus } from '../data/Api';
-import { Channel, ChannelTest, ProviderDescriptor, SettingsSnapshot, UserPreferences } from '../data/Types';
+import { Channel, ChannelTest, EndpointPreset, ProviderDescriptor, SettingsSnapshot, UserPreferences } from '../data/Types';
 
 /**
  * Providers that exist as descriptors but cannot run in the HarmonyOS host:
@@ -57,9 +59,16 @@ struct CredentialInput {
   @Prop label: string;
   @Prop placeholder: string = '';
   @Prop secret: boolean = true;
+  @Prop @Watch('onSeed') seed: string = '';
   onInput: (value: string) => void = (value: string) => {
   };
   @State private draft: string = '';
+
+  private onSeed(): void {
+    if (this.seed.length > 0 && this.seed !== this.draft) {
+      this.draft = this.seed;
+    }
+  }
 
   build() {
     InputField({
@@ -85,17 +94,24 @@ struct CredentialInput {
  */
 @Component
 export struct CredentialsPage {
+  @StorageLink('bp') bp: string = 'md';
   @State private prefs: UserPreferences = {};
   @State private status: CredentialStatus = {};
   @State private asrChannels: Channel[] = [];
   @State private llmChannels: Channel[] = [];
+  @State private omniChannels: Channel[] = [];
   @State private asrDescriptors: ProviderDescriptor[] = [];
   @State private llmDescriptors: ProviderDescriptor[] = [];
+  @State private omniDescriptors: ProviderDescriptor[] = [];
   @State private error: string = '';
   @State private loading: boolean = false;
+  @State private pipelineBusy: boolean = false;
 
   // Overlay editor.
   @State private editorOpen: boolean = false;
+  /** Published so `Index.onBackPress` can close this overlay before navigating. */
+  @StorageLink('overlayOpen') overlayFlag: boolean = false;
+  @StorageLink('overlayBackRequest') @Watch('onOverlayBack') overlayBackRequest: number = 0;
   @State private editorStep: string = 'pick';
   @State private editorKind: string = 'llm';
   @State private editorChannelId: string = '';
@@ -103,10 +119,15 @@ export struct CredentialsPage {
   @State private editorName: string = '';
   @State private editorOriginalName: string = '';
   @State private editorActive: boolean = false;
+  @State private editorEnabled: boolean = true;
   @State private editorSaving: boolean = false;
   @State private editorTesting: boolean = false;
   @State private editorTest: string = 'idle';
   @State private editorTestNote: string = '';
+  @State private editorModels: string[] = [];
+  @State private editorLoadingModels: boolean = false;
+  @State private editorEndpointSeed: string = '';
+  @State private editorModelSeed: string = '';
   @State private editorConfirmDelete: boolean = false;
   @State private editorError: string = '';
   /** True while the overlay is editing a channel it created in this same session. */
@@ -116,9 +137,29 @@ export struct CredentialsPage {
 
   /** Draft values keyed by credential account; not rendered, so plain state. */
   private drafts: Map<string, string> = new Map<string, string>();
+  private pageActive: boolean = false;
+  private editorGeneration: number = 0;
 
   aboutToAppear(): void {
+    this.pageActive = true;
     this.reload();
+  }
+
+  aboutToDisappear(): void {
+    this.pageActive = false;
+    const discard: boolean = this.editorCreated && !this.editorApplied;
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
+    this.finishClose();
+    if (discard && id.length > 0) this.removeDraftChannel(kind, id);
+  }
+
+  private editorBusy(): boolean {
+    return this.editorSaving || this.editorTesting || this.editorLoadingModels;
+  }
+
+  private currentEditor(generation: number): boolean {
+    return this.pageActive && this.editorOpen && this.editorGeneration === generation;
   }
 
   private async reload(): Promise<void> {
@@ -131,6 +172,15 @@ export struct CredentialsPage {
       this.llmChannels = await Api.channels('llm');
       this.asrDescriptors = await Api.providerDescriptors('asr');
       this.llmDescriptors = await Api.providerDescriptors('llm');
+      this.omniDescriptors = await Api.providerDescriptors('omni');
+      const configuredOmni: string[] = await Api.configuredOmniProviders();
+      this.omniChannels = configuredOmni.map((provider: string, index: number): Channel => ({
+        id: provider,
+        name: Labels.provider(provider),
+        providerType: provider,
+        enabled: true,
+        order: index
+      }));
       this.error = '';
     } catch (error) {
       this.error = (error as Error).message;
@@ -140,7 +190,29 @@ export struct CredentialsPage {
   }
 
   private totalChannels(): number {
-    return this.asrChannels.length + this.llmChannels.length;
+    return this.asrChannels.length + this.llmChannels.length + this.omniChannels.length;
+  }
+
+  private isMultimodal(): boolean {
+    if (this.status.pipelineMode === 'multimodal') return true;
+    return this.prefs.multimodalPipelineEnabled === true && this.prefs.pipelineMode === 'multimodal';
+  }
+
+  private async switchPipeline(multimodal: boolean): Promise<void> {
+    if (this.pipelineBusy || this.editorOpen || this.isMultimodal() === multimodal) return;
+    this.pipelineBusy = true;
+    this.error = '';
+    try {
+      const mode: string = multimodal ? 'multimodal' : 'traditional';
+      const snapshot: SettingsSnapshot = await Api.writePipelineMode(mode);
+      this.prefs = snapshot.preferences;
+      this.status = await Api.credentialStatus();
+      notify(multimodal ? '已切换为全模态管线' : '已切换为两段式管线');
+    } catch (error) {
+      this.error = (error as Error).message;
+    } finally {
+      this.pipelineBusy = false;
+    }
   }
 
   private asrActive(): string {
@@ -151,21 +223,42 @@ export struct CredentialsPage {
     return this.prefs.activeLlmProvider ?? '';
   }
 
+  private omniActive(): string {
+    return this.prefs.activeOmniProvider ?? '';
+  }
+
   private activeOf(kind: string): string {
-    return kind === 'asr' ? this.asrActive() : this.llmActive();
+    if (kind === 'asr') return this.asrActive();
+    if (kind === 'omni') return this.omniActive();
+    return this.llmActive();
   }
 
   private channelsOf(kind: string): Channel[] {
-    return kind === 'asr' ? this.asrChannels : this.llmChannels;
+    if (kind === 'asr') return this.asrChannels;
+    if (kind === 'omni') return this.omniChannels;
+    return this.llmChannels;
   }
 
   private descriptorsOf(kind: string): ProviderDescriptor[] {
-    return kind === 'asr' ? this.asrDescriptors : this.llmDescriptors;
+    if (kind === 'asr') return this.asrDescriptors;
+    if (kind === 'omni') return this.omniDescriptors;
+    return this.llmDescriptors;
   }
 
-  private channelSubtitle(channel: Channel): string {
+  private kindLabel(kind: string): string {
+    if (kind === 'asr') return '转写引擎';
+    if (kind === 'omni') return '全模态模型';
+    return '润色模型';
+  }
+
+  private channelSubtitle(channel: Channel, kind: string): string {
     const parts: string[] = [];
     parts.push(Labels.provider(channel.providerType));
+    // Core has no persisted ChannelTest for omni slots; do not invent a history.
+    if (kind === 'omni') {
+      parts.push('配置已保存');
+      return parts.join(' · ');
+    }
     const test: ChannelTest | null | undefined = channel.lastTest;
     if (test !== undefined && test !== null) {
       parts.push(test.ok ? '上次调用通过' : '上次调用失败');
@@ -219,9 +312,17 @@ export struct CredentialsPage {
     return parts.join(' · ');
   }
 
-  /** Volcano Engine (ASR) takes an app id plus a token; everything else one key. */
+  /** Volcano Engine, iFlytek and Tencent Cloud have multi-field auth in `openless-core`. */
   private isVolcengine(providerType: string): boolean {
     return providerType.indexOf('volcengine') >= 0;
+  }
+
+  private isIflytek(providerType: string): boolean {
+    return providerType === 'iflytek' || providerType === 'xfyun';
+  }
+
+  private isTencentCloud(providerType: string): boolean {
+    return providerType === 'tencent-cloud' || providerType === 'tencent';
   }
 
   private fieldSpecs(kind: string, providerType: string): FieldSpec[] {
@@ -242,6 +343,43 @@ export struct CredentialsPage {
           placeholder: '粘贴后保存到系统密钥库'
         };
         specs.push(token);
+      } else if (this.isIflytek(providerType)) {
+        const appId: FieldSpec = {
+          label: 'App ID',
+          account: 'xfyun.app_id',
+          secret: false,
+          placeholder: '讯飞开放平台的 App ID'
+        };
+        specs.push(appId);
+        const key: FieldSpec = {
+          label: 'API Key',
+          account: 'xfyun.api_key',
+          secret: true,
+          placeholder: '粘贴后保存到系统密钥库'
+        };
+        specs.push(key);
+      } else if (this.isTencentCloud(providerType)) {
+        const appId: FieldSpec = {
+          label: 'App ID',
+          account: 'tencent_cloud.app_id',
+          secret: false,
+          placeholder: '腾讯云控制台的 AppID'
+        };
+        specs.push(appId);
+        const secretId: FieldSpec = {
+          label: 'SecretId',
+          account: 'tencent_cloud.secret_id',
+          secret: false,
+          placeholder: '腾讯云 API SecretId'
+        };
+        specs.push(secretId);
+        const secretKey: FieldSpec = {
+          label: 'SecretKey',
+          account: 'tencent_cloud.secret_key',
+          secret: true,
+          placeholder: '粘贴后保存到系统密钥库'
+        };
+        specs.push(secretKey);
       } else {
         const key: FieldSpec = {
           label: 'API Key',
@@ -261,6 +399,31 @@ export struct CredentialsPage {
       const model: FieldSpec = {
         label: '模型',
         account: 'asr.model',
+        secret: false,
+        placeholder: '可选：不填就用服务商默认模型'
+      };
+      specs.push(model);
+      return specs;
+    }
+
+    if (kind === 'omni') {
+      const key: FieldSpec = {
+        label: 'API Key',
+        account: 'omni.api_key',
+        secret: true,
+        placeholder: '粘贴后保存到系统密钥库'
+      };
+      specs.push(key);
+      const endpoint: FieldSpec = {
+        label: '接入点',
+        account: 'omni.endpoint',
+        secret: false,
+        placeholder: '可选：不填就用服务商默认接入点'
+      };
+      specs.push(endpoint);
+      const model: FieldSpec = {
+        label: '模型 ID',
+        account: 'omni.model',
         secret: false,
         placeholder: '可选：不填就用服务商默认模型'
       };
@@ -295,7 +458,10 @@ export struct CredentialsPage {
   // ── Overlay lifecycle ──────────────────────────────────────────────────────
 
   private openCreate(): void {
+    if (this.editorBusy() || this.editorOpen) return;
+    this.editorGeneration++;
     this.editorOpen = true;
+    this.publishOverlay(true);
     this.editorStep = 'pick';
     this.editorKind = 'llm';
     this.editorChannelId = '';
@@ -315,7 +481,10 @@ export struct CredentialsPage {
   }
 
   private openEdit(kind: string, channel: Channel): void {
+    if (this.editorBusy() || this.editorOpen) return;
+    this.editorGeneration++;
     this.editorOpen = true;
+    this.publishOverlay(true);
     this.editorError = '';
     this.enterEdit(kind, channel, false);
   }
@@ -328,14 +497,38 @@ export struct CredentialsPage {
     this.editorName = channel.name;
     this.editorOriginalName = channel.name;
     this.editorActive = channel.id === this.activeOf(kind);
-    this.editorSaving = false;
-    this.editorTesting = false;
+    this.editorEnabled = channel.enabled !== false;
     this.editorTest = 'idle';
     this.editorTestNote = '';
+    this.editorModels = [];
+    this.editorLoadingModels = false;
+    this.editorEndpointSeed = '';
+    this.editorModelSeed = '';
     this.editorConfirmDelete = false;
     this.editorCreated = created;
     this.editorApplied = false;
     this.drafts.clear();
+  }
+
+  private onOverlayBack(): void {
+    if (this.editorOpen) this.closeEditor();
+  }
+
+  private selectKind(index: number): void {
+    if (this.editorBusy()) return;
+    if (index === 1) this.editorKind = 'asr';
+    else if (index === 2) this.editorKind = 'omni';
+    else this.editorKind = 'llm';
+  }
+
+  private editorKindIndex(): number {
+    if (this.editorKind === 'asr') return 1;
+    if (this.editorKind === 'omni') return 2;
+    return 0;
+  }
+
+  private publishOverlay(open: boolean): void {
+    Store.put<boolean>('overlayOpen', open);
   }
 
   private closeEditor(): void {
@@ -347,27 +540,39 @@ export struct CredentialsPage {
     this.finishClose();
   }
 
-  /** 取消新建：先关掉覆盖层，再删掉这一层里刚创建、还没写入内容的空渠道。 */
-  private async discardCreated(): Promise<void> {
-    const kind: string = this.editorKind;
-    const id: string = this.editorChannelId;
-    this.finishClose();
+  /** A cancelled draft never became active, so deleting it preserves selection. */
+  private async removeDraftChannel(kind: string, id: string): Promise<void> {
     try {
       await Api.deleteChannel(kind, id);
     } catch (error) {
       console.warn('[OpenLess Credentials] discard created channel failed');
     }
-    await this.reload();
+    if (this.pageActive) this.reload();
+  }
+
+  private discardCreated(): void {
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
+    this.finishClose();
+    this.removeDraftChannel(kind, id);
   }
 
   private finishClose(): void {
+    this.editorGeneration++;
     this.editorOpen = false;
+    this.publishOverlay(false);
+    this.editorSaving = false;
+    this.editorTesting = false;
+    this.editorLoadingModels = false;
+    this.editorModels = [];
+    this.editorModelSeed = '';
+    this.editorEndpointSeed = '';
     this.editorError = '';
     this.editorConfirmDelete = false;
     this.editorCreated = false;
     this.editorApplied = false;
     this.drafts.clear();
-    this.reload();
+    if (this.pageActive) this.reload();
   }
 
   private editorTitle(): string {
@@ -378,11 +583,12 @@ export struct CredentialsPage {
 
   private editorSubtitle(): string {
     if (this.editorStep === 'pick') return '选一个服务商，再填名称、密钥与接入点';
-    return (this.editorKind === 'asr' ? '转写引擎' : '润色模型') + ' · ' + Labels.provider(this.editorProviderType);
+    return this.kindLabel(this.editorKind) + ' · ' + Labels.provider(this.editorProviderType);
   }
 
   private editorConfigured(): boolean {
     if (this.editorKind === 'asr') return this.status.asrConfigured === true;
+    if (this.editorKind === 'omni') return this.status.omniConfigured === true;
     return this.status.llmConfigured === true;
   }
 
@@ -401,126 +607,299 @@ export struct CredentialsPage {
 
   // ── Overlay actions ────────────────────────────────────────────────────────
 
-  /** Creates the channel, then switches the overlay to its edit step. */
+  /** Create an inactive draft. Only the explicit use action changes active routing. */
   private async chooseProvider(providerType: string): Promise<void> {
-    if (this.editorSaving) return;
+    if (this.editorBusy() || !this.editorOpen || this.editorStep !== 'pick') return;
+    const generation: number = this.editorGeneration;
+    const kind: string = this.editorKind;
+    if (kind === 'omni') {
+      const omniSlot: Channel = {
+        id: providerType,
+        name: Labels.provider(providerType),
+        providerType: providerType,
+        enabled: true,
+        order: 0
+      };
+      this.enterEdit('omni', omniSlot, false);
+      return;
+    }
+    const name: string = this.editorName.trim();
     this.editorSaving = true;
     this.editorError = '';
     try {
-      const channel: Channel = await Api.createChannel(this.editorKind, providerType, this.editorName.trim());
-      if (this.editorKind === 'asr') {
-        await Api.activateAsrProvider(channel.id);
-      } else {
-        await Api.activateLlmProvider(channel.id);
+      const channel: Channel = await Api.createChannel(kind, providerType, name);
+      if (!this.currentEditor(generation)) {
+        this.removeDraftChannel(kind, channel.id);
+        return;
       }
-      this.enterEdit(this.editorKind, channel, true);
-      this.editorActive = true;
-      notify('已新建渠道 ' + Labels.provider(providerType));
+      this.enterEdit(kind, channel, true);
+      notify('已新建渠道 ' + Labels.provider(providerType) + '，保存后可设为当前使用');
       await this.reload();
     } catch (error) {
-      this.editorError = (error as Error).message;
+      if (this.currentEditor(generation)) this.editorError = (error as Error).message;
     } finally {
-      this.editorSaving = false;
+      if (this.currentEditor(generation)) this.editorSaving = false;
     }
   }
 
-  /** Writes the pending drafts (name + every non-empty field). */
-  private async applyDrafts(): Promise<void> {
+  /** Freeze drafts and identity before awaiting so late work cannot target a new editor. */
+  private async applyDrafts(): Promise<boolean> {
+    const generation: number = this.editorGeneration;
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
     const name: string = this.editorName.trim();
-    if (name.length > 0 && name !== this.editorOriginalName) {
-      await Api.renameChannel(this.editorKind, this.editorChannelId, name);
-      this.editorOriginalName = name;
-      this.editorApplied = true;
-    }
-    const specs: FieldSpec[] = this.fieldSpecs(this.editorKind, this.editorProviderType);
+    const specs: FieldSpec[] = this.fieldSpecs(kind, this.editorProviderType);
+    const values: string[] = [];
     for (let index = 0; index < specs.length; index++) {
-      const account: string = specs[index].account;
-      const raw: string | undefined = this.drafts.get(account);
-      const value: string = raw === undefined ? '' : raw.trim();
-      if (value.length > 0) {
-        await Api.setCredential(account, value, this.editorChannelId);
+      values.push((this.drafts.get(specs[index].account) ?? '').trim());
+    }
+    if (kind !== 'omni' && name.length > 0 && name !== this.editorOriginalName) {
+      // Preserve a draft once a write starts; teardown cannot erase an in-flight save.
+      this.editorApplied = true;
+      await Api.renameChannel(kind, id, name);
+      if (!this.currentEditor(generation)) return false;
+      this.editorOriginalName = name;
+    }
+    for (let index = 0; index < specs.length; index++) {
+      if (values[index].length > 0) {
         this.editorApplied = true;
+        await Api.setCredential(specs[index].account, values[index], id);
+        if (!this.currentEditor(generation)) return false;
       }
     }
+    return this.currentEditor(generation);
   }
 
   private async saveEditor(): Promise<void> {
-    if (this.editorSaving || this.editorTesting) return;
-    if (this.editorChannelId.length === 0) return;
+    if (this.editorBusy() || !this.editorOpen || this.editorChannelId.length === 0) return;
+    const generation: number = this.editorGeneration;
     this.editorSaving = true;
     this.editorError = '';
     try {
-      await this.applyDrafts();
-      this.status = await Api.credentialStatus();
+      if (!await this.applyDrafts()) return;
+      const status: CredentialStatus = await Api.credentialStatus();
+      if (!this.currentEditor(generation)) return;
+      this.status = status;
       notify('已保存到系统密钥库');
-      this.editorCreated = false;
-      this.editorApplied = false;
-      this.editorConfirmDelete = false;
-      this.editorOpen = false;
-      await this.reload();
+      this.finishClose();
     } catch (error) {
-      this.editorError = (error as Error).message;
+      if (this.currentEditor(generation)) this.editorError = (error as Error).message;
     } finally {
-      this.editorSaving = false;
+      if (this.currentEditor(generation)) this.editorSaving = false;
     }
   }
 
   /** Saves the drafts first, then runs the real provider validation call. */
   private async runTest(): Promise<void> {
-    if (this.editorTesting || this.editorSaving) return;
-    if (this.editorChannelId.length === 0) return;
+    if (this.editorBusy() || !this.editorOpen || this.editorChannelId.length === 0) return;
+    const generation: number = this.editorGeneration;
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
     this.editorTesting = true;
     this.editorTest = 'testing';
     this.editorTestNote = '正在保存并按服务商真实接口校验…';
     this.editorError = '';
     const started: number = Date.now();
     try {
-      await this.applyDrafts();
-      const ok: boolean = await Api.validateChannel(this.editorKind, this.editorChannelId);
+      if (!await this.applyDrafts()) return;
+      const ok: boolean = await Api.validateChannel(kind, id);
+      if (!this.currentEditor(generation)) return;
       const latency: number = Date.now() - started;
-      await Api.recordChannelTest(this.editorKind, this.editorChannelId, ok, latency,
-        ok ? '' : '校验未通过');
+      if (kind !== 'omni') {
+        await Api.recordChannelTest(kind, id, ok, latency,
+          ok ? '' : '校验未通过');
+        if (!this.currentEditor(generation)) return;
+      }
       this.editorTest = ok ? 'ok' : 'fail';
       this.editorTestNote = ok
         ? '调用通过 · ' + latency.toString() + ' ms，配置已可用'
         : '调用失败：请检查密钥、接入点与模型名';
-      this.status = await Api.credentialStatus();
+      const status: CredentialStatus = await Api.credentialStatus();
+      if (!this.currentEditor(generation)) return;
+      this.status = status;
       await this.reload();
     } catch (error) {
-      this.editorTest = 'fail';
-      this.editorTestNote = '调用失败：' + (error as Error).message;
+      if (this.currentEditor(generation)) {
+        this.editorTest = 'fail';
+        this.editorTestNote = '调用失败：' + (error as Error).message;
+      }
     } finally {
-      this.editorTesting = false;
+      if (this.currentEditor(generation)) this.editorTesting = false;
     }
   }
 
   private async activateEditorChannel(): Promise<void> {
+    if (this.editorBusy() || !this.editorOpen || this.editorChannelId.length === 0) return;
+    const generation: number = this.editorGeneration;
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
+    this.editorSaving = true;
     try {
-      if (this.editorKind === 'asr') {
-        await Api.activateAsrProvider(this.editorChannelId);
-      } else {
-        await Api.activateLlmProvider(this.editorChannelId);
-      }
+      if (!await this.applyDrafts()) return;
+      // Explicit activation keeps this channel even if the page disappears mid-call.
+      this.editorApplied = true;
+      if (kind === 'asr') await Api.activateAsrProvider(id);
+      else if (kind === 'omni') await Api.activateOmniProvider(id);
+      else await Api.activateLlmProvider(id);
+      if (!this.currentEditor(generation)) return;
       this.editorActive = true;
+      this.editorCreated = false;
       notify('已设为当前使用');
       await this.reload();
     } catch (error) {
-      this.editorError = (error as Error).message;
+      if (this.currentEditor(generation)) this.editorError = (error as Error).message;
+    } finally {
+      if (this.currentEditor(generation)) this.editorSaving = false;
+    }
+  }
+
+  private currentDescriptor(): ProviderDescriptor | undefined {
+    const list: ProviderDescriptor[] = this.descriptorsOf(this.editorKind);
+    for (let index = 0; index < list.length; index++) {
+      if (list[index].providerType === this.editorProviderType) return list[index];
+    }
+    return undefined;
+  }
+
+  private presetEndpoints(): EndpointPreset[] {
+    const descriptor: ProviderDescriptor | undefined = this.currentDescriptor();
+    if (descriptor === undefined || descriptor.endpointPresets === undefined) return [];
+    return descriptor.endpointPresets;
+  }
+
+  private availableModels(): string[] {
+    const out: string[] = [];
+    const seen: Set<string> = new Set<string>();
+    const append = (items: string[] | undefined): void => {
+      if (items === undefined) return;
+      for (let index = 0; index < items.length; index++) {
+        const value: string = items[index].trim();
+        if (value.length > 0 && !seen.has(value)) {
+          seen.add(value);
+          out.push(value);
+        }
+      }
+    };
+    append(this.editorModels);
+    const descriptor: ProviderDescriptor | undefined = this.currentDescriptor();
+    if (descriptor !== undefined) {
+      append(descriptor.staticModels);
+      if (descriptor.defaultModel !== undefined && descriptor.defaultModel !== null && descriptor.defaultModel.length > 0) {
+        append([descriptor.defaultModel]);
+      }
+    }
+    return out;
+  }
+
+  private modelOptions(): SelectOption[] {
+    return this.availableModels().map((model: string): SelectOption => ({ value: model }));
+  }
+
+  private selectedModelIndex(): number {
+    return this.availableModels().indexOf(this.editorModelSeed.trim());
+  }
+
+  private selectModel(index: number): void {
+    const models: string[] = this.availableModels();
+    if (index < 0 || index >= models.length) return;
+    this.applyModelChoice(models[index]);
+  }
+
+  private updateDraft(account: string, value: string): void {
+    this.drafts.set(account, value);
+    if (account === this.modelAccountOf(this.editorKind)) this.editorModelSeed = value;
+  }
+
+  private endpointAccountOf(kind: string): string {
+    if (kind === 'asr') return 'asr.endpoint';
+    if (kind === 'omni') return 'omni.endpoint';
+    return 'ark.endpoint';
+  }
+
+  private modelAccountOf(kind: string): string {
+    if (kind === 'asr') return 'asr.model';
+    if (kind === 'omni') return 'omni.model';
+    return 'ark.model_id';
+  }
+
+  private fieldSeed(account: string): string {
+    if (account === this.endpointAccountOf(this.editorKind)) return this.editorEndpointSeed;
+    if (account === this.modelAccountOf(this.editorKind)) return this.editorModelSeed;
+    return '';
+  }
+
+  private applyPresetEndpoint(endpoint: string): void {
+    if (this.editorBusy()) return;
+    const account: string = this.endpointAccountOf(this.editorKind);
+    this.drafts.set(account, endpoint);
+    this.editorEndpointSeed = endpoint;
+    notify('已填入接入点');
+  }
+
+  private applyModelChoice(model: string): void {
+    if (this.editorBusy()) return;
+    const account: string = this.modelAccountOf(this.editorKind);
+    this.drafts.set(account, model);
+    this.editorModelSeed = model;
+    notify('已选择模型 ' + model);
+  }
+
+  private async fetchModels(): Promise<void> {
+    if (this.editorBusy() || this.editorLoadingModels || !this.editorOpen || this.editorChannelId.length === 0) return;
+    const generation: number = this.editorGeneration;
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
+    this.editorLoadingModels = true;
+    this.editorError = '';
+    try {
+      if (!await this.applyDrafts()) return;
+      const models: string[] = await Api.listModels(kind, id);
+      if (!this.currentEditor(generation)) return;
+      this.editorModels = models;
+      notify(models.length > 0 ? '已拉取 ' + models.length.toString() + ' 个模型' : '该服务商未返回可选模型');
+    } catch (error) {
+      if (this.currentEditor(generation)) this.editorError = (error as Error).message;
+    } finally {
+      if (this.currentEditor(generation)) this.editorLoadingModels = false;
+    }
+  }
+
+  private async toggleEditorEnabled(enabled: boolean): Promise<void> {
+    if (this.editorBusy() || !this.editorOpen || this.editorChannelId.length === 0 || this.editorKind === 'omni') return;
+    const generation: number = this.editorGeneration;
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
+    this.editorSaving = true;
+    this.editorError = '';
+    try {
+      this.editorApplied = true;
+      await Api.setChannelEnabled(kind, id, enabled);
+      if (!this.currentEditor(generation)) return;
+      this.editorEnabled = enabled;
+      notify(enabled ? '已启用该渠道' : '已停用该渠道');
+      await this.reload();
+    } catch (error) {
+      if (this.currentEditor(generation)) this.editorError = (error as Error).message;
+    } finally {
+      if (this.currentEditor(generation)) this.editorSaving = false;
     }
   }
 
   private async deleteEditorChannel(): Promise<void> {
-    if (this.editorChannelId.length === 0) return;
+    if (this.editorBusy() || !this.editorOpen || this.editorChannelId.length === 0 || this.editorKind === 'omni') return;
+    const generation: number = this.editorGeneration;
+    const kind: string = this.editorKind;
+    const id: string = this.editorChannelId;
+    this.editorSaving = true;
     try {
-      await Api.deleteChannel(this.editorKind, this.editorChannelId);
+      await Api.deleteChannel(kind, id);
+      if (!this.currentEditor(generation)) return;
       notify('已删除渠道');
-      this.editorOpen = false;
-      this.editorConfirmDelete = false;
-      this.editorCreated = false;
-      this.editorApplied = false;
-      await this.reload();
+      this.finishClose();
     } catch (error) {
-      this.editorError = (error as Error).message;
+      if (this.currentEditor(generation)) this.editorError = (error as Error).message;
+    } finally {
+      if (this.currentEditor(generation)) this.editorSaving = false;
     }
   }
 
@@ -557,15 +936,20 @@ export struct CredentialsPage {
             if (this.llmChannels.length > 0) {
               this.channelGroup('llm')
             }
+            if (this.omniChannels.length > 0) {
+              this.channelGroup('omni')
+            }
           }
         }
       }
       .width('100%')
       .height('100%')
+      .constraintSize({ maxWidth: Layout.contentMax(this.bp) })
       .enabled(!this.editorOpen)
 
       if (this.editorOpen) {
         Column()
+          .id('credentials-editor-scrim')
           .width('100%')
           .height('100%')
           .backgroundColor(Palette.scrim())
@@ -584,23 +968,36 @@ export struct CredentialsPage {
     Surface({ inset: Space.md }) {
       Column({ space: Space.sm }) {
         SectionTitle({
-          title: '状态',
+          title: '管线与状态',
           hint: '已配置 ' + this.totalChannels().toString() + ' 个渠道，密钥只写不读'
         })
-        Row({ space: Space.xs }) {
-          Tag({
-            text: this.status.asrConfigured === true ? '转写已配置' : '转写未配置',
-            tone: this.status.asrConfigured === true ? 'success' : 'warning'
-          })
-          Tag({
-            text: this.status.llmConfigured === true ? '润色已配置' : '润色未配置',
-            tone: this.status.llmConfigured === true ? 'success' : 'warning'
-          })
-        }
-        .width('100%')
-        Row({ space: Space.xs }) {
-          Tag({ text: '转写 · ' + Labels.provider(this.asrActive()), tone: 'accent' })
-          Tag({ text: '润色 · ' + Labels.provider(this.llmActive()), tone: 'accent' })
+        Segmented({
+          items: ['两段式（转写 + 润色）', '全模态（一次调用）'],
+          selected: this.isMultimodal() ? 1 : 0,
+          onSelect: (index: number) => {
+            this.switchPipeline(index === 1);
+          }
+        })
+        .id('credentials-pipeline-mode')
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+          if (this.isMultimodal()) {
+            Tag({
+              text: this.status.omniConfigured === true ? '全模态已配置' : '全模态未配置',
+              tone: this.status.omniConfigured === true ? 'success' : 'warning'
+            })
+            Tag({ text: '全模态 · ' + Labels.provider(this.omniActive()), tone: 'accent' })
+          } else {
+            Tag({
+              text: this.status.asrConfigured === true ? '转写已配置' : '转写未配置',
+              tone: this.status.asrConfigured === true ? 'success' : 'warning'
+            })
+            Tag({
+              text: this.status.llmConfigured === true ? '润色已配置' : '润色未配置',
+              tone: this.status.llmConfigured === true ? 'success' : 'warning'
+            })
+            Tag({ text: '转写 · ' + Labels.provider(this.asrActive()), tone: 'accent' })
+            Tag({ text: '润色 · ' + Labels.provider(this.llmActive()), tone: 'accent' })
+          }
         }
         .width('100%')
       }
@@ -618,6 +1015,7 @@ export struct CredentialsPage {
           this.openCreate();
         }
       })
+      .id('credentials-add')
     }
     .width('100%')
   }
@@ -642,7 +1040,7 @@ export struct CredentialsPage {
       Column() {
         Row() {
           SectionTitle({
-            title: kind === 'asr' ? '转写引擎' : '润色模型',
+            title: this.kindLabel(kind),
             hint: '当前：' + Labels.provider(this.activeOf(kind)) + ' · ' + this.channelsOf(kind).length.toString() + ' 个渠道'
           })
         }
@@ -651,10 +1049,10 @@ export struct CredentialsPage {
 
         ForEach(this.channelsOf(kind), (channel: Channel, index: number) => {
           RowItem({
-            symbol: kind === 'asr' ? 'localasr' : 'style',
+            symbol: kind === 'asr' ? 'localasr' : (kind === 'omni' ? 'sparkles' : 'style'),
             accentSymbol: channel.id === this.activeOf(kind),
             title: channel.name.length > 0 ? channel.name : Labels.provider(channel.providerType),
-            subtitle: this.channelSubtitle(channel),
+            subtitle: this.channelSubtitle(channel, kind),
             value: this.channelValue(channel, this.activeOf(kind)),
             showChevron: true,
             showDivider: index < this.channelsOf(kind).length - 1,
@@ -676,8 +1074,8 @@ export struct CredentialsPage {
       Row({ space: Space.sm }) {
         Column({ space: Space.xxs }) {
           Text(this.editorTitle())
-            .fontSize(Type.section)
-            .lineHeight(Leading.section)
+            .fontSize(Type.label)
+            .lineHeight(Leading.label)
             .fontWeight(FontWeight.Medium)
             .fontColor(Palette.text1())
           Text(this.editorSubtitle())
@@ -694,6 +1092,8 @@ export struct CredentialsPage {
             this.closeEditor();
           }
         })
+        .enabled(!this.editorBusy())
+        .id('credentials-editor-close')
       }
       .width('100%')
 
@@ -710,7 +1110,8 @@ export struct CredentialsPage {
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .constraintSize({ maxHeight: 400 })
+      .layoutWeight(1)
+      .enabled(!this.editorBusy())
       .align(Alignment.Top)
       .scrollBar(BarState.Auto)
 
@@ -731,11 +1132,12 @@ export struct CredentialsPage {
               this.saveEditor();
             }
           })
+          .id('credentials-save')
         }
         TextButton({
           label: '取消',
           tone: 'quiet',
-          usable: !this.editorSaving,
+          usable: !this.editorBusy(),
           onTap: () => {
             this.closeEditor();
           }
@@ -745,8 +1147,10 @@ export struct CredentialsPage {
       .justifyContent(FlexAlign.End)
       .padding({ top: Space.sm })
     }
+    .id('credentials-editor')
     .width('92%')
-    .constraintSize({ maxWidth: 560, maxHeight: 640 })
+    .height('88%')
+    .constraintSize({ maxWidth: 560 })
     .padding(Space.md)
     .backgroundColor(Palette.bgElevated())
     .borderRadius(Radius.sheet)
@@ -758,22 +1162,26 @@ export struct CredentialsPage {
   @Builder
   pickStep() {
     Column({ space: Space.md }) {
-      SectionTitle({ title: '类型', hint: '同一个覆盖层里配置转写引擎或润色模型' })
+      SectionTitle({ title: '类型', hint: '同一个覆盖层里配置润色模型、转写引擎或全模态模型' })
       Segmented({
-        items: ['润色模型', '转写引擎'],
-        selected: this.editorKind === 'llm' ? 0 : 1,
+        items: ['润色模型', '转写引擎', '全模态'],
+        selected: this.editorKindIndex(),
         onSelect: (index: number) => {
-          this.editorKind = index === 0 ? 'llm' : 'asr';
+          this.selectKind(index);
         }
       })
-      InputField({
-        label: '名称',
-        placeholder: '可选，例如「我的 GPT 渠道」',
-        value: this.editorName,
-        onInput: (value: string) => {
-          this.editorName = value;
-        }
-      })
+      .id('credentials-provider-kind')
+      // Omni uses provider-scoped slots, not named Core channels.
+      if (this.editorKind !== 'omni') {
+        InputField({
+          label: '名称',
+          placeholder: '可选，例如「我的 GPT 渠道」',
+          value: this.editorName,
+          onInput: (value: string) => {
+            this.editorName = value;
+          }
+        })
+      }
       SectionTitle({
         title: '服务商',
         hint: this.providerOptions(this.editorKind).length.toString() + ' 个可用（已隐藏本机不支持的服务商）'
@@ -807,11 +1215,57 @@ export struct CredentialsPage {
     .alignItems(HorizontalAlign.Start)
   }
 
+  // Huawei ArkUI Select: ts-basic-components-select (selected/value/onSelect).
+  // Keep the catalogue collapsed; selecting only fills the editable model field.
+  @Builder
+  modelPicker() {
+    Column({ space: Space.xs }) {
+      Text('可用模型')
+        .fontSize(Type.caption)
+        .lineHeight(Leading.caption)
+        .fontColor(Palette.text3())
+      Row({ space: Space.sm }) {
+        TextButton({
+          label: this.editorLoadingModels ? '拉取中…' : '拉取模型',
+          symbol: 'refresh',
+          usable: !this.editorBusy(),
+          onTap: () => {
+            this.fetchModels();
+          }
+        })
+        .id('credentials-model-fetch')
+        Select(this.modelOptions())
+          .id('credentials-model-select')
+          .selected(this.selectedModelIndex())
+          .value(this.editorModelSeed.length > 0 ? this.editorModelSeed : '选择模型')
+          .font({ size: Type.label })
+          .fontColor(Palette.text1())
+          .backgroundColor(Palette.bgElevated())
+          .borderRadius(Radius.control)
+          .layoutWeight(1)
+          .enabled(!this.editorBusy() && this.availableModels().length > 0)
+          .onSelect((index: number) => {
+            this.selectModel(index);
+          })
+      }
+      .width('100%')
+      Text(this.availableModels().length > 0
+        ? '拉取前会先保存已填写配置。选择后填入上方模型字段，也可手动输入。'
+        : '拉取前会先保存已填写配置；也可直接在上方手动输入模型 ID。')
+        .fontSize(Type.caption)
+        .lineHeight(Leading.caption)
+        .fontColor(Palette.text3())
+        .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
   @Builder
   editStep() {
     Column({ space: Space.md }) {
       Row({ space: Space.xs }) {
-        Tag({ text: this.editorKind === 'asr' ? '转写引擎' : '润色模型', tone: 'accent' })
+        Tag({ text: this.kindLabel(this.editorKind), tone: 'accent' })
         Tag({
           text: this.editorActive ? '当前使用' : '未启用',
           tone: this.editorActive ? 'success' : 'neutral'
@@ -831,14 +1285,16 @@ export struct CredentialsPage {
         .fontColor(Palette.text3())
         .width('100%')
 
-      InputField({
-        label: '名称',
-        placeholder: '给这个渠道起个名字',
-        value: this.editorName,
-        onInput: (value: string) => {
-          this.editorName = value;
-        }
-      })
+      if (this.editorKind !== 'omni') {
+        InputField({
+          label: '名称',
+          placeholder: '给这个渠道起个名字',
+          value: this.editorName,
+          onInput: (value: string) => {
+            this.editorName = value;
+          }
+        })
+      }
 
       if (!this.editorActive) {
         Row({ space: Space.sm }) {
@@ -849,8 +1305,21 @@ export struct CredentialsPage {
               this.activateEditorChannel();
             }
           })
+          .id('credentials-activate')
         }
         .width('100%')
+      }
+
+      if (this.editorKind !== 'omni') {
+        SettingSwitch({
+          label: '启用该渠道',
+          hint: '停用后保留凭据，不参与自动路由',
+          checked: this.editorEnabled,
+          showDivider: false,
+          onToggle: (value: boolean) => {
+            this.toggleEditorEnabled(value);
+          }
+        })
       }
 
       SectionTitle({ title: '凭据与接入点', hint: '写进系统密钥库，按渠道隔离' })
@@ -860,11 +1329,38 @@ export struct CredentialsPage {
           label: spec.label,
           placeholder: spec.placeholder,
           secret: spec.secret,
+          seed: this.fieldSeed(spec.account),
           onInput: (value: string) => {
-            this.drafts.set(spec.account, value);
+            this.updateDraft(spec.account, value);
           }
         })
       }, (spec: FieldSpec) => this.editorChannelId + '-' + spec.account)
+
+      if (this.presetEndpoints().length > 0) {
+        Column({ space: Space.xs }) {
+          Text('常用接入点')
+            .fontSize(Type.caption)
+            .lineHeight(Leading.caption)
+            .fontColor(Palette.text3())
+            .width('100%')
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+            ForEach(this.presetEndpoints(), (preset: EndpointPreset) => {
+              TextButton({
+                label: preset.name,
+                tone: 'quiet',
+                usable: !this.editorBusy(),
+                onTap: () => {
+                  this.applyPresetEndpoint(preset.endpoint);
+                }
+              })
+            }, (preset: EndpointPreset) => preset.name + ':' + preset.endpoint)
+          }
+          .width('100%')
+        }
+        .width('100%')
+      }
+
+      this.modelPicker()
 
       Row({ space: Space.sm }) {
         TonalButton({
@@ -875,6 +1371,7 @@ export struct CredentialsPage {
             this.runTest();
           }
         })
+        .id('credentials-test')
         Tag({ text: this.testLabel(), tone: this.testTone() })
       }
       .width('100%')
@@ -887,41 +1384,44 @@ export struct CredentialsPage {
           .width('100%')
       }
 
-      if (this.editorConfirmDelete) {
-        Column({ space: Space.sm }) {
-          Tag({ text: '确认删除这个渠道？', tone: 'danger' })
+      if (this.editorKind !== 'omni') {
+        if (this.editorConfirmDelete) {
+          Column({ space: Space.sm }) {
+            Tag({ text: '确认删除这个渠道？', tone: 'danger' })
+            Row({ space: Space.sm }) {
+              PrimaryButton({
+                label: '删除',
+                destructive: true,
+                onTap: () => {
+                  this.deleteEditorChannel();
+                }
+              })
+              .id('credentials-delete')
+              TextButton({
+                label: '取消',
+                tone: 'quiet',
+                onTap: () => {
+                  this.editorConfirmDelete = false;
+                }
+              })
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+        } else {
           Row({ space: Space.sm }) {
-            PrimaryButton({
-              label: '删除',
-              destructive: true,
-              onTap: () => {
-                this.deleteEditorChannel();
-              }
-            })
             TextButton({
-              label: '取消',
-              tone: 'quiet',
+              label: '删除这个渠道',
+              symbol: 'trash',
+              tone: 'danger',
               onTap: () => {
-                this.editorConfirmDelete = false;
+                this.editorConfirmDelete = true;
               }
             })
           }
           .width('100%')
         }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-      } else {
-        Row({ space: Space.sm }) {
-          TextButton({
-            label: '删除这个渠道',
-            symbol: 'trash',
-            tone: 'danger',
-            onTap: () => {
-              this.editorConfirmDelete = true;
-            }
-          })
-        }
-        .width('100%')
       }
     }
     .width('100%')

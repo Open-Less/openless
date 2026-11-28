@@ -7,33 +7,65 @@ interface LabelPair {
 
 const PROVIDERS: LabelPair[] = [
   { id: 'volcengine', label: '火山引擎' },
-  { id: 'apple-speech', label: 'Apple 语音' },
-  { id: 'local-qwen3', label: '本地 Qwen3' },
-  { id: 'openai-whisper', label: 'OpenAI Whisper' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'xfyun', label: '讯飞' },
-  { id: 'tencent', label: '腾讯云' },
+  { id: 'elevenlabs', label: 'ElevenLabs' },
+  { id: 'bailian', label: '阿里百炼' },
+  { id: 'bailian-qwen3-realtime', label: '百炼 Qwen3 实时' },
+  { id: 'bailian-fun-asr-flash', label: '百炼 Fun-ASR Flash' },
   { id: 'siliconflow', label: '硅基流动' },
+  { id: 'stepfun', label: '阶跃星辰' },
+  { id: 'stepfun-realtime', label: '阶跃星辰实时' },
+  { id: 'zhipu', label: '智谱 GLM' },
+  { id: 'minimax', label: 'MiniMax' },
+  { id: 'groq', label: 'Groq' },
+  { id: 'whisper', label: 'OpenAI Whisper' },
+  { id: 'openai-whisper', label: 'OpenAI Whisper' },
+  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'openrouterFree', label: 'OpenRouter 免费' },
+  { id: 'orcarouter', label: 'OrcaRouter' },
+  { id: 'zenmux', label: 'ZenMux' },
+  { id: 'openai-compatible', label: 'OpenAI 兼容接口' },
+  { id: 'xiaomi-mimo-asr', label: '小米 MiMo 语音' },
+  { id: 'iflytek', label: '讯飞 RTASR' },
+  { id: 'xfyun', label: '讯飞 RTASR' },
+  { id: 'tencent-cloud', label: '腾讯云' },
+  { id: 'tencent', label: '腾讯云' },
   { id: 'ark', label: '火山方舟' },
   { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'bailian', label: '阿里百炼' },
+  { id: 'openai', label: 'OpenAI' },
   { id: 'gemini', label: 'Gemini' },
-  { id: 'micyou', label: 'MicYou' },
+  { id: 'atlascloud', label: 'Atlas Cloud' },
+  { id: 'mimo', label: '小米 MiMo' },
+  { id: 'cometapi', label: 'CometAPI' },
+  { id: 'requesty', label: 'Requesty' },
+  { id: 'api-route', label: 'API Route' },
+  { id: 'alibabaCoding', label: '阿里云百炼 Coding' },
+  { id: 'codingPlanX', label: 'Coding Plan X' },
+  { id: 'opencode', label: 'OpenCode' },
+  { id: 'tencentTokenHub', label: '腾讯混元 TokenHub' },
+  { id: 'lmstudio', label: 'LM Studio' },
+  { id: 'dashscope-omni', label: '阿里百炼全模态' },
   { id: 'omni-volcengine', label: '火山全模态' },
   { id: 'omni-gemini', label: 'Gemini 全模态' },
+  { id: 'custom', label: '自定义接口' },
+  { id: 'custom_responses', label: '自定义 Responses' },
+  { id: 'custom_messages', label: '自定义 Messages' },
+  { id: 'apple-speech', label: 'Apple 语音' },
+  { id: 'local-qwen3', label: '本地 Qwen3' },
+  { id: 'micyou', label: 'MicYou' },
   { id: 'raw', label: '原文直出' }
 ];
 
 const PIPELINES: LabelPair[] = [
   { id: 'traditional', label: '两段式（转写 + 润色）' },
-  { id: 'multimodal', label: '全模态（一次调用）' }
+  { id: 'multimodal', label: '全模态（一次调用）' },
+  { id: 'deepseek', label: 'DeepSeek 大统一' }
 ];
 
 const POLISH_MODES: LabelPair[] = [
   { id: 'raw', label: '原文' },
-  { id: 'polish', label: '润色' },
-  { id: 'translate', label: '翻译' },
-  { id: 'structured', label: '结构化' }
+  { id: 'light', label: '轻度润色' },
+  { id: 'structured', label: '清晰结构' },
+  { id: 'formal', label: '正式表达' }
 ];
 
 const CHANNELS: LabelPair[] = [

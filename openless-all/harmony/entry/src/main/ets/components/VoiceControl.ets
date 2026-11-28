@@ -1,4 +1,5 @@
 import { Motion, Palette, Radius, Type, Leading } from '../common/Theme';
+import { activateOnKey } from './Kit';
 import { symbolOf } from './Icons';
 
 const BAR_PROFILE: number[] = [0.45, 0.7, 0.9, 1, 0.9, 0.7, 0.45];
@@ -72,28 +73,35 @@ export struct VoiceControl {
             Text(this.phase === 'starting' ? '准备中…' : '转写中…')
               .fontSize(Type.label)
               .fontWeight(FontWeight.Medium)
-              .fontColor(Palette.onAccent())
+              .fontColor(Palette.bg())
           }
         } else {
           Row({ space: 8 }) {
             SymbolGlyph(symbolOf('mic'))
               .fontSize(22)
-              .fontColor([Palette.onAccent()])
+              .fontColor([Palette.bg()])
             Text('开始说话')
               .fontSize(Type.body)
               .lineHeight(Leading.body)
               .fontWeight(FontWeight.Medium)
-              .fontColor(Palette.onAccent())
+              .fontColor(Palette.bg())
           }
         }
       }
       .width(this.recording() ? 112 : 152)
       .height(this.recording() ? 112 : 60)
       .justifyContent(FlexAlign.Center)
-      .backgroundColor(this.recording() ? Palette.danger() : Palette.accent())
+      .backgroundColor(this.recording() ? Palette.danger() : Palette.text1())
       .borderRadius(Radius.pill)
       .opacity(this.usable ? 1 : 0.5)
       .animation({ duration: Motion.base, curve: Curve.EaseOut })
+      .focusable(true)
+      .hoverEffect(HoverEffect.Highlight)
+      .onKeyEvent((event: KeyEvent) => activateOnKey(event, () => {
+        if (this.usable) this.onToggle();
+      }))
+      .accessibilityText(this.recording() ? '结束并上屏' : '开始说话')
+      .accessibilitySelected(this.recording())
       .onClick(() => {
         if (this.usable) this.onToggle();
       })

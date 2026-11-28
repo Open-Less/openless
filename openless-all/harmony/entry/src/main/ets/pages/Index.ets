@@ -1,6 +1,5 @@
 import { bundleManager, common } from '@kit.AbilityKit';
-import { window } from '@kit.ArkUI';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { KeyboardAvoidMode, window } from '@kit.ArkUI';
 import nativeHost from 'libopenless_harmony.so';
 import { Appearance } from '../common/Appearance';
 import { WindowWatcher } from '../common/Breakpoint';
@@ -34,17 +33,30 @@ interface NativeError {
 @Component
 struct Index {
   private watcher: WindowWatcher = new WindowWatcher();
+  private keyboardWindow?: window.Window;
+  private keyboardListener?: (height: number) => void;
   @StorageLink('route') route: string = Nav.OVERVIEW;
   @StorageLink('detailId') detailId: string = '';
   @StorageLink('bp') bp: string = 'md';
   @State private ready: boolean = false;
   @State private startupError: string = '';
+  /** A new Want while the app is running arrives here, not in aboutToAppear. */
+  @StorageLink('deepLinkRoute') @Watch('onDeepLink') deepLinkRoute: string = '';
+
+  onPageShow(): void {
+    Store.put<boolean>('appForeground', true);
+    // The window may have been resized (split, fold, free-form) while backgrounded.
+    this.watchWindow();
+  }
+
+  onPageHide(): void {
+    Store.put<boolean>('appForeground', false);
+  }
 
   aboutToAppear(): void {
+    Store.put<boolean>('appForeground', true);
     // A deep link (`aa start --ps route settings`) wins over the default tab.
     const deepLink: string = Boot.takeRoute();
-    const pinnedLayout: string = Boot.takeLayout();
-    if (pinnedLayout.length > 0) Store.put<string>('bpOverride', pinnedLayout);
     Store.put<string>('route', deepLink.length > 0 ? deepLink : Nav.OVERVIEW);
     Store.put<string>('detailId', '');
     console.info('[OpenLess Boot] route=' + (deepLink.length > 0 ? deepLink : Nav.OVERVIEW));
@@ -54,50 +66,91 @@ struct Index {
     AppStorage.setOrCreate<string>('dictError', '');
     AppStorage.setOrCreate<number>('backendRevision', 0);
     AppStorage.setOrCreate<number>('micLevel', 0);
+    AppStorage.setOrCreate<boolean>('reduceMotion', false);
     this.watchWindow();
     this.boot();
   }
 
   aboutToDisappear(): void {
+    Store.put<boolean>('appForeground', false);
     this.watcher.stop();
+    this.stopKeyboardWatch();
     Api.bridgeOf().release();
   }
 
-  /** Android-style back: leave a detail first, then return to the first tab. */
-  onBackPress(): boolean {
-    if (this.detailId.length > 0) {
-      Store.put<string>('detailId', '');
-      return true;
-    }
-    if (this.route !== Nav.OVERVIEW) {
-      Nav.go(Nav.OVERVIEW);
-      return true;
-    }
-    return false;
+  private onDeepLink(): void {
+    const route: string = this.deepLinkRoute;
+    if (route.length === 0) return;
+    Store.put<string>('deepLinkRoute', '');
+    Nav.go(Nav.known(route) ? route : Nav.OVERVIEW);
   }
 
-  /** Size class from the window rectangle: covers rotation, split and free-form resizing. */
+  /** Same owning-page policy for system back and the visible back affordance. */
+  onBackPress(): boolean {
+    // Nav requests dismissal from the modal owner; it never clears busy state.
+    return Nav.back();
+  }
+
+  /** Main-window changes are synchronous with the platform's rotation animation.
+   * Do not add a delayed whole-page fade/spring or remount AppShell on resize.
+   * https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/arkts-rotation-transition-animation
+   */
   private watchWindow(): void {
-    const pinned: string = AppStorage.get<string>('bpOverride') ?? '';
-    if (pinned.length > 0) {
-      Store.put<string>('bp', pinned);
-      console.info('[OpenLess Window] pinned size class ' + pinned);
-      return;
-    }
+    const mainWindow = Boot.mainWindow;
+    if (mainWindow === undefined) return;
+    // Floating input/toolbars need native viewport compression, not OFFSET's
+    // whole-page pan, which can carry their close controls out of the viewport.
+    // https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-arkui-1073
     try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      window.getLastWindow(context).then((win: window.Window) => {
-        this.watcher.start(win, (next: string) => {
-          AppStorage.setOrCreate<string>('bp', next);
-        });
-        AppStorage.setOrCreate<string>('bp', this.watcher.value());
-        console.info('[OpenLess Window] size class ' + this.watcher.value());
-      }).catch((error: BusinessError) => {
-        console.error('[OpenLess Window] ' + JSON.stringify(error));
-      });
+      mainWindow.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
     } catch (error) {
-      console.error('[OpenLess Window] ' + JSON.stringify(error));
+      console.warn('[OpenLess Window] keyboard resize avoidance unavailable');
     }
+    this.watchKeyboard(mainWindow);
+    this.watcher.start(mainWindow, (next: string, shortWindow: boolean, portrait: boolean) => {
+      Store.put<string>('bp', next);
+      Store.put<boolean>('shortWindow', shortWindow);
+      Store.put<boolean>('portrait', portrait);
+      Store.put<boolean>('phoneLayout', portrait);
+      console.info('[OpenLess Window] layout=' + next + ', portrait=' + portrait + ', short=' + shortWindow);
+    });
+  }
+
+  /** Observe the owning main window; never guess keyboard state from focus/resize.
+   * https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-arkui-1073
+   * Leave native avoidance enabled: this only removes the dock's hit targets.
+   */
+  private watchKeyboard(target: window.Window): void {
+    if (this.keyboardWindow === target) return;
+    this.stopKeyboardWatch();
+    const listener = (height: number): void => {
+      if (this.keyboardWindow !== target || this.keyboardListener !== listener) return;
+      Store.put<boolean>('keyboardVisible', height > 0);
+    };
+    try {
+      this.keyboardWindow = target;
+      this.keyboardListener = listener;
+      target.on('keyboardHeightChange', listener);
+    } catch (error) {
+      this.keyboardWindow = undefined;
+      this.keyboardListener = undefined;
+      console.warn('[OpenLess Window] keyboard listener unavailable');
+    }
+  }
+
+  private stopKeyboardWatch(): void {
+    const target = this.keyboardWindow;
+    const listener = this.keyboardListener;
+    this.keyboardWindow = undefined;
+    this.keyboardListener = undefined;
+    if (target !== undefined && listener !== undefined) {
+      try {
+        target.off('keyboardHeightChange', listener);
+      } catch (error) {
+        console.warn('[OpenLess Window] keyboard listener detach failed');
+      }
+    }
+    Store.put<boolean>('keyboardVisible', false);
   }
 
   private async boot(): Promise<void> {

@@ -137,6 +137,37 @@ try {
   });
   reset();
 
+  // Every native UI module and delivery script stays inside the Harmony gate;
+  // unknown host paths must not fall through to a desktop-only classification.
+  for (const path of [
+    'openless-all/harmony/entry/src/main/ets/components/ProductNavigation.ets',
+    'openless-all/harmony/entry/src/main/ets/common/Breakpoint.ets',
+    'openless-all/harmony/entry/src/main/resources/base/element/color.json',
+    'openless-all/harmony/scripts/build-harmony-app.sh',
+  ]) {
+    commit({ [path]: '// native Harmony input\n' }, 'native Harmony input');
+    expect(path, { ...every('false'), harmony: 'true' });
+    reset();
+  }
+
+  // Mixed browser/native changes still run both gates; removing the ArkWeb edge
+  // must never turn a real ArkTS change into a skipped HAP type-check.
+  commit(
+    {
+      'openless-all/app/src/features/style-packs/Style.tsx': 'export const x = 1;\n',
+      'openless-all/harmony/entry/src/main/ets/pages/OverviewPage.ets': 'export {};\n',
+    },
+    'mixed browser and ArkUI changes',
+  );
+  expect('mixed browser and ArkUI changes', {
+    tauri: 'true',
+    harmony: 'true',
+    frontend: 'true',
+    linux: 'false',
+    android: 'false',
+  });
+  reset();
+
   // The Linux workflow owns Harmony Rust unit tests as well as the egui host.
   commit({ 'openless-all/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
   expect('harmony rust', {
@@ -193,9 +224,8 @@ try {
   });
   reset();
 
-  // The rendered bundle is embedded by every shell that paints it; the Linux
-  // host draws a native egui UI and never reads `dist/`, and the Android job only
-  // compiles Rust, so neither is in scope.
+  // Browser-only changes do not reach native ArkUI/egui hosts. The Android
+  // compile gate builds Rust, so it is also outside a bundle-only change.
   commit(
     { 'openless-all/app/src/features/style-packs/Style.tsx': 'export const x = 1;\n' },
     'frontend only',
@@ -204,7 +234,7 @@ try {
     tauri: 'true',
     msrv: 'false',
     linux: 'false',
-    harmony: 'true',
+    harmony: 'false',
     frontend: 'true',
     android: 'false',
     'ios-device': 'false',
@@ -252,7 +282,7 @@ try {
     tauri: 'true',
     msrv: 'false',
     frontend: 'true',
-    harmony: 'true',
+    harmony: 'false',
     android: 'false',
     linux: 'false',
   });

@@ -11,12 +11,12 @@ This directory contains the cross-platform OpenLess source tree. Start with the 
 | `app/crates/openless-core` | Framework-independent shared Rust core (dictation engine, ASR/LLM/Multimodal/DeepSeek-suite pipelines, style packs, dictionary, cloud sync, backend contract `2.0.0`). |
 | `app/crates/micyou-dsp`, `app/crates/micyou-infer` | Audio DSP preprocessing and inference crates. |
 | `app/crates/openless-capsule`, `app/native-capsule` | Native recording capsule state and platform UI support. |
-| `app/src` | Shared React + TypeScript frontend for Tauri desktop/Android and HarmonyOS ArkWeb. |
+| `app/src` | Shared React + TypeScript frontend for Tauri desktop and Android. |
 | `app/src-tauri` | macOS, Windows, and Android Tauri host, native adapters, and vendored crates (`src-tauri/vendor/`). |
 | `app/ask-window` | Standalone Ask Anything desktop window assets and bridge. |
 | `linux/egui` | Native Linux host and `egui`/`eframe` UI (no Tauri or WebKitGTK dependency). |
 | `android` | Android host packaging, manifest merges, and native glue. |
-| `harmony` | HarmonyOS ArkTS + ArkWeb host and `harmony/rust` Node-API bridge. |
+| `harmony` | Native HarmonyOS ArkUI host and `harmony/rust` Node-API bridge. |
 | `app/mobile-ime` | Shared native input-method core for Android and HarmonyOS. |
 | `windows/ime` | Windows TSF/IME integration scripts and helpers. |
 | `windows/nsis`, `windows/wix`, `windows/scripts` | Windows installer assets and build/acceptance tools. |
@@ -137,17 +137,6 @@ powershell -ExecutionPolicy Bypass -File .\..\windows\scripts\windows-hotkey-inj
 ## Android Build
 
 See [`android/README.md`](android/README.md#build-and-ci) for Android SDK/NDK versions, generated Tauri Android scaffolding, APK builds across ABIs (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`), and device verification.
-
-## HarmonyOS Build
-
-Requirements: HarmonyOS Command Line Tools (`../harmony/scripts/prepare-harmony-sdk.sh` fetches the pinned archive with SHA-256 verification), Python 3, Node.js 22+, and `rustup target add aarch64-unknown-linux-ohos`.
-
-```bash
-cd openless-all/app
-bash ../harmony/scripts/build-harmony-frontend.sh
-```
-
-Unsigned HAP output is placed under `${OPENLESS_CACHE_ROOT:-/data-win/openless-cache}/harmony/openless-project/entry/build/default/outputs/default/`. The packaging script stages deliverables in `app/target/harmony-packages/`. See [`RELEASING.md`](../RELEASING.md) for release signing and AppGallery uploads.
 
 ## iOS Build
 

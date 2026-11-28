@@ -1,7 +1,7 @@
 /**
  * v2 design tokens for the native HarmonyOS UI.
  *
- * Rules (see docs/harmony-ui-v2.md):
+ * Rules:
  *   - Colors are semantic roles resolved through `app.color.c_*` resources, so
  *     light and dark stay in step and pages never hard-code a hex value.
  *   - Spacing is an 8vp grid with a 4vp step for tight pairs.
@@ -131,6 +131,11 @@ export class Palette {
     return $r('app.color.c_glass_lo');
   }
 
+  /** Soft tint layered on the dock's system material. */
+  static dockTint(): Resource {
+    return $r('app.color.c_dock_tint');
+  }
+
   static glassEdge(): Resource {
     return $r('app.color.c_glass_edge');
   }
@@ -158,31 +163,45 @@ export class Space {
 
 /** Corner radii (vp). */
 export class Radius {
-  static readonly control: number = 8;
-  static readonly card: number = 12;
-  static readonly sheet: number = 16;
+  /** One product radius (React `--ol-radius: 16`) plus a tighter control step. */
+  static readonly control: number = 12;
+  static readonly icon: number = 10;
+  static readonly card: number = 16;
+  static readonly sheet: number = 32;
   static readonly pill: number = 999;
 }
 
-/** Type scale (fp). Sizes only; use `Leading` next to them for block text. */
+/**
+ * Type scale copied 1:1 from the iOS AppDesign/SwiftUI text styles so the two
+ * apps read the same: body 17, subheadline 15, footnote 13, caption 12,
+ * caption2 11, title3 20, title2 22, largeTitle 34.
+ */
 export class Type {
-  static readonly pageTitle: number = 30;
+  /** Navigation bar title (iOS inline title, 17 semibold). */
+  static readonly navTitle: number = 17;
+  static readonly pageTitle: number = 34;
   static readonly section: number = 20;
   static readonly cardTitle: number = 17;
-  static readonly body: number = 16;
-  static readonly label: number = 14;
-  static readonly caption: number = 12;
+  static readonly body: number = 17;
+  /** subheadline: list values, hints, buttons. */
+  static readonly label: number = 15;
+  /** footnote: captions, section headers, secondary lines. */
+  static readonly caption: number = 13;
+  /** caption2: tile detail lines. */
+  static readonly caption2: number = 11;
   static readonly metric: number = 40;
 }
 
 /** Line heights paired with `Type`. */
 export class Leading {
-  static readonly pageTitle: number = 38;
-  static readonly section: number = 26;
-  static readonly cardTitle: number = 24;
-  static readonly body: number = 24;
+  static readonly navTitle: number = 22;
+  static readonly pageTitle: number = 41;
+  static readonly section: number = 25;
+  static readonly cardTitle: number = 22;
+  static readonly body: number = 22;
   static readonly label: number = 20;
-  static readonly caption: number = 16;
+  static readonly caption: number = 18;
+  static readonly caption2: number = 14;
   static readonly metric: number = 46;
 }
 
@@ -198,10 +217,28 @@ export class Size {
 }
 
 /** Motion durations (ms). Curves stay on `Curve.EaseOut` / `Curve.Friction`. */
+/**
+ * Motion tokens copied from iOS `ProductMotion` / `PressFeedbackStyle`:
+ * quick 160ms easeOut, standard spring(0.34, 0.88), reduced 120ms.
+ * ArkUI has no spring(response:damping:) constructor, so `standard` maps to a
+ * friction curve with the same visible settling time; reduce-motion callers use
+ * `reduced`.
+ * https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-animatorproperty
+ */
 export class Motion {
-  static readonly quick: number = 120;
-  static readonly base: number = 180;
+  /** iOS quick = easeOut 0.16. */
+  static readonly quick: number = 160;
+  /** Button press feedback (iOS 0.14s, scale 0.98 / opacity 0.8). */
+  static readonly press: number = 140;
+  /** iOS standard spring settles in roughly 340ms. */
+  static readonly base: number = 340;
   static readonly slow: number = 240;
+  /** iOS `reduced` = easeOut 0.12. */
+  static readonly reduced: number = 120;
+  /** iOS Dock expand: UIViewPropertyAnimator(duration: 0.28, dampingRatio: 1). */
+  static readonly dock: number = 280;
+  /** iOS Dock handoff: 0.12 easeOut. */
+  static readonly dockHandoff: number = 120;
 }
 
 /** Breakpoint-dependent layout metrics. */
@@ -211,11 +248,24 @@ export class Layout {
   static readonly LG: string = 'lg';
   static readonly XL: string = 'xl';
 
-  /** Page side margin: 16 / 24 / 32. */
+  /**
+   * Width of the centred column used while a device presents the phone-style UI
+   * (portrait tablet / folded phone). A phone keeps the full window; a tablet gets
+   * a wider but still bounded column so cards spread out instead of hugging a
+   * 393pt phone strip (Huawei Weather uses the same idea).
+   */
+  static columnMax(bp: string): number {
+    if (bp === Layout.XL) return 880;
+    if (bp === Layout.LG) return 720;
+    if (bp === Layout.MD) return 640;
+    return 10000;
+  }
+
+  /** iOS uses a 20pt page margin everywhere; wide windows get a little more. */
   static gutter(bp: string): number {
     if (bp === Layout.XL) return 32;
     if (bp === Layout.LG) return 24;
-    return 16;
+    return 20;
   }
 
   /** Max width of a single content column. */
@@ -226,27 +276,27 @@ export class Layout {
     return 880;
   }
 
-  /** Max width of a two-column page body. */
+  /** Floating dock + outer spacing; apply only to scrolling content tails. */
+  static dockClearance(): number {
+    return 62 + Space.xs * 2 + Space.sm;
+  }
+
+  /** Reading columns and multi-pane workspaces have separate width budgets. */
   static wideMax(bp: string): number {
-    return bp === Layout.XL ? 1200 : 1040;
+    return bp === Layout.XL ? 1320 : 1120;
   }
 
-  /** Navigation rail width; 0 means the bottom tab bar. */
-  static rail(bp: string): number {
-    if (bp === Layout.XL) return 264;
-    if (bp === Layout.LG) return 240;
-    if (bp === Layout.MD) return 88;
-    return 0;
-  }
-
-  /** True when navigation is a side rail rather than a bottom tab bar. */
-  static isRail(bp: string): boolean {
-    return bp === Layout.MD || bp === Layout.LG || bp === Layout.XL;
-  }
-
-  /** True when the rail carries labels instead of icons only. */
-  static isLabelledRail(bp: string): boolean {
+  static isWide(bp: string): boolean {
     return bp === Layout.LG || bp === Layout.XL;
+  }
+
+  static bodyMax(bp: string, route: string): number {
+    // Product destinations fill a tablet's window. Only long-form setup and
+    // credential forms keep a reading-width limit, not the page background.
+    if (route === 'credentials' || route === 'selection' || route === 'qa') {
+      return Layout.contentMax(bp);
+    }
+    return 10000;
   }
 
   static columnGap(bp: string): number {
@@ -263,10 +313,3 @@ export function floatShadow(): ShadowOptions {
     offsetY: 8
   };
 }
-
-/**
- * 目前不画侧栏/图标栏：手机和平板都用底部胶囊 Dock。宽度仍然按窗口自适应
- * （sm 单列 / md 两列 / lg-x 多列），横屏会利用弹性布局放大，而不是把内容
- * 强行拉满或锁死成一条窄列。
- */
-export const NO_RAIL: boolean = true;

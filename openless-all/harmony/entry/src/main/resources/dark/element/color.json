@@ -178,19 +178,19 @@
     },
     {
       "name": "c_bg",
-      "value": "#0B0B0D"
+      "value": "#0C0C0E"
     },
     {
       "name": "c_bg_elev",
-      "value": "#141518"
+      "value": "#141417"
     },
     {
       "name": "c_card",
-      "value": "#1A1B1F"
+      "value": "#1C1C1F"
     },
     {
       "name": "c_card_alt",
-      "value": "#202226"
+      "value": "#27272A"
     },
     {
       "name": "c_card_pressed",
@@ -198,27 +198,27 @@
     },
     {
       "name": "c_line",
-      "value": "#2A2C31"
+      "value": "#27272A"
     },
     {
       "name": "c_line_strong",
-      "value": "#3B3E45"
+      "value": "#3F3F46"
     },
     {
       "name": "c_text_1",
-      "value": "#F1F2F4"
+      "value": "#FAFAFA"
     },
     {
       "name": "c_text_2",
-      "value": "#A7ACB6"
+      "value": "#A1A1AA"
     },
     {
       "name": "c_text_3",
-      "value": "#7B808A"
+      "value": "#71717A"
     },
     {
       "name": "c_text_on_accent",
-      "value": "#FFFFFF"
+      "value": "#101A30"
     },
     {
       "name": "c_icon_1",
@@ -230,11 +230,11 @@
     },
     {
       "name": "c_accent",
-      "value": "#4C8DFF"
+      "value": "#74B7FF"
     },
     {
       "name": "c_accent_soft",
-      "value": "#14294A"
+      "value": "#1B2A3F"
     },
     {
       "name": "c_accent_pressed",
@@ -307,6 +307,10 @@
     {
       "name": "c_glass_edge",
       "value": "#33FFFFFF"
+    },
+    {
+      "name": "c_dock_tint",
+      "value": "#40000000"
     }
   ]
 }

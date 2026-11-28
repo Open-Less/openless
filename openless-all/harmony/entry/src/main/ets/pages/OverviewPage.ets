@@ -1,3 +1,4 @@
+import { LengthMetrics } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { Dashboard, DashboardCard } from '../common/Dashboard';
 import { Fmt } from '../common/Format';
@@ -5,26 +6,28 @@ import { Labels } from '../common/Labels';
 import { Store } from '../common/Store';
 import { Layout, Leading, Palette, Radius, Size, Space, Type } from '../common/Theme';
 import {
-  Banner,
   EmptyHint,
   Group,
-  MetricBlock,
-  PageScaffold,
   RowItem,
   SectionTitle,
-  Segmented,
   SettingSwitch,
   SheetTitle,
   Surface,
-  Tag,
   TextButton,
   TonalButton,
   notify
 } from '../components/Kit';
+import { symbolOf } from '../components/Icons';
 import { Nav } from '../components/Nav';
-import { VoiceControl } from '../components/VoiceControl';
+import { AdaptiveColumns } from '../components/AdaptiveLayout';
+import { BrandBar } from '../components/overview/BrandBar';
+import { VoiceSessionCard } from '../components/overview/VoiceSessionCard';
+import { SpeechErrorCard } from '../components/overview/SpeechErrorCard';
+import { TranscriptCard } from '../components/overview/TranscriptCard';
+import { TodayMetricsCard } from '../components/overview/TodayMetricsCard';
+import { ActivityBucket, ActivityTrendCard } from '../components/overview/ActivityTrendCard';
 import { Api } from '../data/Api';
-import { ActivityDay, HistoryEntry, PlatformCapabilities, SettingsSnapshot, UserPreferences } from '../data/Types';
+import { ActivityDay, HistoryEntry, NativeReply, PlatformCapabilities, SettingsSnapshot, UserPreferences } from '../data/Types';
 
 /** One day of the 12-week heat map. */
 interface DayCell {
@@ -37,58 +40,56 @@ interface WeekColumn {
   days: DayCell[];
 }
 
-/** One bar of the 7/30-day trend. */
-interface ActivityBucket {
-  date: string;
-  value: number;
-}
-
-/** One grid row: two or three card ids that share a line. */
-interface CardRow {
-  key: string;
-  ids: string[];
-}
-
 const HEAT_LEVELS: number[] = [0, 1, 2, 3, 4];
-const PERIOD_LABELS: string[] = ['近 7 天', '近 30 天'];
-const METRIC_LABELS: string[] = ['记录', '字数', '时长'];
 const METRIC_COUNT: number = 0;
 const METRIC_CHARS: number = 1;
 const METRIC_DURATION: number = 2;
-const BAR_MAX: number = 88;
-const BAR_GAP: number = 2;
+/** iOS resets 「已复制」 after two seconds. */
+const COPY_RESET_MS: number = 2000;
+const RECENT_LIMIT: number = 3;
 
 function pad2(value: number): string {
   return value < 10 ? '0' + value.toString() : value.toString();
 }
 
 /**
- * Overview v2: one primary action, then a composable grid of information cards.
+ * Overview page, a line-by-line port of iOS `HomeView.swift` (body 116-183) and
+ * `OverviewMetricsView.swift`:
  *
- *   voice card    status dot + timer, the microphone control, a phase hint, cancel
- *   setup banner  shown until an ASR key exists
- *   result card   the transcript that was just inserted, with copy
- *   card grid     今日 / 趋势 / 热力图 / 最近 / 配置 / 快捷入口, 1-3 columns by
- *                 breakpoint; which cards exist, and in what order, is the user's
- *                 choice (`Dashboard`, persisted in local preferences)
+ *   brand row      OpenLess mark 34 + wordmark + keyboard setup button
+ *   voice card     status dot / state / timer-language, mic control, hint, cancel
+ *   error card     only after a failed request (danger), optional system settings
+ *   result card    transcript with copy / 已复制, selectable text
+ *   概览            title3 heading + refresh, 2×2 metrics card, trend card
+ *   footnote       keyboard-voice boundary note
+ *   dashboard      Harmony-only user-selected cards, kept after the iOS content
  *
- * The page owns no dictation state: `dictPhase` / `dictLevel` / `dictError` come
- * from `AppStorage` (published by `HarmonyApi`), and `backendRevision` triggers a
- * reload when another page changed settings or credentials.
+ * The page owns every API call and all recording/timer state; the `overview/`
+ * components receive props and plain callbacks only. `dictPhase` / `dictLevel` /
+ * `dictError` still come from `AppStorage` (published by `HarmonyApi`), and
+ * `backendRevision` still triggers a reload when another page writes settings.
  */
 @Component
 export struct OverviewPage {
   @StorageLink('bp') bp: string = 'md';
+  @StorageLink('phoneLayout') phoneLayout: boolean = true;
   @StorageLink('dictPhase') @Watch('onPhase') phase: string = 'idle';
   @StorageLink('dictLevel') level: number = 0;
+  @StorageLink('reduceMotion') reduceMotion: boolean = false;
   @StorageLink('dictError') dictError: string = '';
   @StorageLink('backendRevision') @Watch('onRevision') revision: number = 0;
 
   @State private busy: boolean = false;
   @State private error: string = '';
   @State private result: string = '';
+  @State private copied: boolean = false;
+  @State private micDenied: boolean = false;
+  @State private loading: boolean = false;
+  @State private metricsLoaded: boolean = false;
+  @State private dataError: string = '';
   @State private activity: ActivityDay[] = [];
   @State private recent: HistoryEntry[] = [];
+  @State private totalRecords: number = 0;
   @State private prefs: UserPreferences = {};
   @State private online: boolean = true;
   @State private capabilities: PlatformCapabilities = { platform: 'harmony' };
@@ -96,8 +97,6 @@ export struct OverviewPage {
   @State private todayCount: number = 0;
   @State private todayChars: number = 0;
   @State private todayDuration: number = 0;
-  @State private totalCount: number = 0;
-  @State private totalChars: number = 0;
   @State private weeks: WeekColumn[] = [];
 
   /** Trend card: the selection is the view state, the series is derived from activity. */
@@ -107,29 +106,40 @@ export struct OverviewPage {
   @State private periodDays: number = 7;
   @State private periodMetric: number = METRIC_COUNT;
 
-  /** Home composition, edited from the 自定义 sheet. */
+  /** Harmony-only home composition, edited from the 自定义 sheet. */
   @State private visible: string[] = [];
   @State private customOpen: boolean = false;
 
   /** Elapsed seconds while the recorder / engine is busy, shown as mm:ss. */
   @State private elapsed: number = 0;
   private timerId: number = -1;
+  private copyTimer: number = -1;
   private busySince: number = 0;
+  private reloadPending: boolean = false;
 
   aboutToAppear(): void {
     Api.takeSplashPlayback();
     this.loadCards();
     this.reload();
+    this.loadMicPermission();
     if (this.phaseBusy()) {
       this.startTimer();
     }
   }
 
   aboutToDisappear(): void {
-    this.stopTimer();
+    // Teardown must not mutate @State (ArkUI custom-component lifecycle contract).
+    if (this.timerId >= 0) {
+      clearInterval(this.timerId);
+      this.timerId = -1;
+    }
+    if (this.copyTimer >= 0) {
+      clearTimeout(this.copyTimer);
+      this.copyTimer = -1;
+    }
   }
 
-  // ── state derivations ──────────────────────────────────────────────────────
+  // ── state derivations (iOS HomeView stateTitle / hint / statusColor) ───────
 
   private phaseBusy(): boolean {
     return this.phase === 'starting' || this.phase === 'recording' ||
@@ -146,26 +156,22 @@ export struct OverviewPage {
     if (this.phase === 'recording') return '正在聆听';
     if (this.phase === 'processing') return '正在转写与润色';
     if (this.phase === 'cancelling') return '正在取消';
-    if (this.failureText().length > 0) return '上次录音没有成功';
-    if (!this.configured) return '配好密钥就能开始';
-    return '点一下，开始说话';
+    return this.configured ? '可以开始了' : '首次使用，先启用语音';
   }
 
   private statusTone(): Resource {
     if (this.phase === 'recording') return Palette.danger();
     if (this.phaseBusy()) return Palette.accent();
-    if (this.failureText().length > 0) return Palette.danger();
     return this.configured ? Palette.accent() : Palette.text3();
   }
 
   private phaseHint(): string {
-    if (this.phase === 'starting') return '还没开始录音，现在仍可以取消';
-    if (this.phase === 'recording') return '再点一下结束并上屏，说完直接停也可以';
-    if (this.phase === 'processing') return '麦克风已释放，正在等引擎返回文字';
-    if (this.phase === 'cancelling') return '正在丢弃这一段录音';
-    if (this.failureText().length > 0) return '点「重新开始」再试一次，或先检查凭据';
-    if (!this.configured) return '去「凭据与密钥」填一个转写密钥，录音才能变成文字';
-    return '录音在本机完成，只有转写请求会上传音频';
+    if (this.phase === 'starting') return '还没开始录音，现在仍可以取消。';
+    if (this.phase === 'recording') return '轻点结束。';
+    if (this.phase === 'processing') return '麦克风已释放，请稍候。';
+    if (this.phase === 'cancelling') return '正在丢弃这一段录音。';
+    if (!this.configured) return '去「大模型配置」填一个语音渠道密钥，录音才能变成文字。';
+    return '轻点开始，再点结束。';
   }
 
   private clockText(): string {
@@ -174,29 +180,37 @@ export struct OverviewPage {
     return pad2(minutes) + ':' + pad2(seconds);
   }
 
-  private greeting(): string {
-    const hour: number = new Date().getHours();
-    if (hour < 6) return '夜深了';
-    if (hour < 12) return '早上好';
-    if (hour < 18) return '下午好';
-    return '晚上好';
-  }
-
-  private subtitleText(): string {
-    const suffix: string = this.configured ? '说一句就上屏' : '还差一个转写密钥';
-    return this.greeting() + ' · ' + suffix;
-  }
-
   private microphoneLabel(): string {
     const name: string | undefined = this.prefs.microphoneDeviceName;
     if (name === undefined || name.length === 0) return '系统默认';
     return name;
   }
 
-  private gridColumns(): number {
-    if (this.bp === Layout.XL) return 3;
-    if (this.bp === Layout.MD || this.bp === Layout.LG) return 2;
-    return 1;
+  private wide(): boolean {
+    return !this.phoneLayout && (this.bp === Layout.LG || this.bp === Layout.XL);
+  }
+
+  /** Cards the iOS design already owns; the Dashboard must not duplicate them. */
+  private fixedCard(id: string): boolean {
+    return id === Dashboard.TODAY || id === Dashboard.PERIOD;
+  }
+
+  /** Preserve user ordering and drop the two cards now rendered by the iOS sections. */
+  private dashboardIds(): string[] {
+    const ids: string[] = Dashboard.normalize(this.visible);
+    const selected: string[] = [];
+    for (let index = 0; index < ids.length; index++) {
+      if (!this.fixedCard(ids[index])) selected.push(ids[index]);
+    }
+    return selected;
+  }
+
+  private customCards(): DashboardCard[] {
+    const cards: DashboardCard[] = [];
+    for (let index = 0; index < Dashboard.CARDS.length; index++) {
+      if (!this.fixedCard(Dashboard.CARDS[index].id)) cards.push(Dashboard.CARDS[index]);
+    }
+    return cards;
   }
 
   private isVisible(id: string): boolean {
@@ -206,28 +220,44 @@ export struct OverviewPage {
   // ── loading ────────────────────────────────────────────────────────────────
 
   private async reload(): Promise<void> {
+    if (this.loading) {
+      this.reloadPending = true;
+      return;
+    }
+    this.loading = true;
     try {
       const activity: ActivityDay[] = await Api.activity();
       this.activity = activity;
       this.computeToday(activity);
       this.weeks = this.buildWeeks(activity);
       this.rebuildPeriod(activity);
+      this.metricsLoaded = true;
       const settings: SettingsSnapshot = await Api.settings();
       this.prefs = settings.preferences;
       const history: HistoryEntry[] = await Api.history();
-      this.recent = history.slice(0, 3);
+      this.recent = history.slice(0, RECENT_LIMIT);
+      this.totalRecords = history.length;
       const network = await Api.network();
       this.online = network.online;
       this.capabilities = await Api.platformCapabilities();
       try {
         const credentials = await Api.credentialStatus();
-        this.configured = credentials.asrConfigured === true;
+        this.configured = credentials.pipelineMode === 'multimodal'
+          ? credentials.omniConfigured === true
+          : credentials.asrConfigured === true;
       } catch (error) {
         this.configured = false;
       }
-      this.error = '';
+      this.dataError = '';
     } catch (error) {
-      this.error = (error as Error).message;
+      this.dataError = (error as Error).message;
+    } finally {
+      this.loading = false;
+      // A finished recording/settings write must not be lost behind an older refresh.
+      if (this.reloadPending) {
+        this.reloadPending = false;
+        this.reload();
+      }
     }
   }
 
@@ -282,6 +312,28 @@ export struct OverviewPage {
     notify('已恢复默认卡片');
   }
 
+  /** Real permission check, used only to decide the 「前往系统设置」 affordance. */
+  private async loadMicPermission(): Promise<void> {
+    try {
+      const raw: string = await Api.raw('check_microphone_permission', '{}');
+      const reply: NativeReply = JSON.parse(raw) as NativeReply;
+      if (reply.ok && reply.value !== undefined && reply.value !== null) {
+        const status: string = JSON.stringify(reply.value).split('"').join('');
+        this.micDenied = status !== 'granted';
+      }
+    } catch (error) {
+      this.micDenied = false;
+    }
+  }
+
+  private async openMicSettings(): Promise<void> {
+    try {
+      await Api.openSystemMicrophoneSettings();
+    } catch (error) {
+      notify('无法打开系统设置');
+    }
+  }
+
   // ── metrics ────────────────────────────────────────────────────────────────
 
   private computeToday(activity: ActivityDay[]): void {
@@ -289,25 +341,17 @@ export struct OverviewPage {
     let count: number = 0;
     let chars: number = 0;
     let duration: number = 0;
-    let sumCount: number = 0;
-    let sumChars: number = 0;
     for (let index = 0; index < activity.length; index++) {
       const day: ActivityDay = activity[index];
-      const dayCount: number = day.count;
-      const dayChars: number = day.chars ?? 0;
-      sumCount += dayCount;
-      sumChars += dayChars;
       if (day.date === today) {
-        count = dayCount;
-        chars = dayChars;
+        count = day.count;
+        chars = day.chars ?? 0;
         duration = day.durationMs ?? 0;
       }
     }
     this.todayCount = count;
     this.todayChars = chars;
     this.todayDuration = duration;
-    this.totalCount = sumCount;
-    this.totalChars = sumChars;
   }
 
   private metricValue(day: ActivityDay, metric: number): number {
@@ -359,24 +403,6 @@ export struct OverviewPage {
     return Fmt.count(this.periodTotal);
   }
 
-  private periodUnit(): string {
-    if (this.periodMetric === METRIC_COUNT) return '段';
-    if (this.periodMetric === METRIC_CHARS) return '字';
-    return '';
-  }
-
-  private periodSelect(): number {
-    return this.periodDays === 7 ? 0 : 1;
-  }
-
-  /** Bar height: proportional to the period max, but visible for smaller values. */
-  private barHeight(value: number): number {
-    if (value <= 0) return 3;
-    if (this.periodMax <= 0) return 3;
-    const height: number = 3 + (value / this.periodMax) * (BAR_MAX - 6);
-    return height < 4 ? 4 : height;
-  }
-
   private isoOf(date: Date): string {
     return date.getFullYear().toString() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
   }
@@ -408,21 +434,6 @@ export struct OverviewPage {
     if (count <= 5) return 2;
     if (count <= 9) return 3;
     return 4;
-  }
-
-  /** Visible cards, chunked into grid rows of `gridColumns()`. */
-  private gridRows(): CardRow[] {
-    const columns: number = this.gridColumns();
-    const ids: string[] = Dashboard.normalize(this.visible);
-    const rows: CardRow[] = [];
-    for (let index = 0; index < ids.length; index += columns) {
-      const group: string[] = [];
-      for (let offset = 0; offset < columns && index + offset < ids.length; offset++) {
-        group.push(ids[index + offset]);
-      }
-      rows.push({ key: 'row-' + index.toString(), ids: group });
-    }
-    return rows;
   }
 
   // ── busy timer ─────────────────────────────────────────────────────────────
@@ -461,6 +472,7 @@ export struct OverviewPage {
     try {
       if (this.phase === 'idle' || this.dictError.length > 0) {
         this.result = '';
+        this.copied = false;
         await Api.startDictation();
       } else {
         const voice = await Api.stopDictation();
@@ -469,6 +481,7 @@ export struct OverviewPage {
       }
     } catch (error) {
       this.error = (error as Error).message;
+      await this.loadMicPermission();
     } finally {
       this.busy = false;
     }
@@ -485,35 +498,247 @@ export struct OverviewPage {
   private async copyResult(): Promise<void> {
     try {
       await Api.copyText(this.result);
+      this.copied = true;
+      if (this.copyTimer >= 0) clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => {
+        this.copied = false;
+        this.copyTimer = -1;
+      }, COPY_RESET_MS);
       notify('已复制');
     } catch (error) {
       notify('复制失败');
     }
   }
 
-  // ── view ───────────────────────────────────────────────────────────────────
+  // ── view: iOS HomeView body, then the Harmony-only dashboard ───────────────
 
   build() {
-    PageScaffold({
-      title: '概览',
-      subtitle: this.subtitleText(),
-      actionLabel: '自定义',
-      actionSymbol: 'settings',
-      onAction: () => {
-        this.customOpen = true;
+    Column() {
+      Scroll() {
+        Column() {
+          AdaptiveColumns({
+            bp: this.bp,
+            singleColumn: this.phoneLayout,
+            secondaryWidth: this.bp === Layout.XL ? 380 : 340,
+            primary: () => {
+              this.primaryContent();
+            },
+            secondary: () => {
+              this.secondaryContent();
+            }
+          })
+        }
+        .width('100%')
+        .padding({ top: Space.sm, bottom: Layout.dockClearance() })
       }
-    }) {
+      .layoutWeight(1)
+      .width('100%')
+      .align(Alignment.Top)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+
+      this.sheetHost()
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: Layout.gutter(this.bp), right: Layout.gutter(this.bp) })
+  }
+
+  @Builder
+  primaryContent() {
+    Column({ space: Space.lg }) {
+      BrandBar({
+        onKeyboard: () => {
+          Nav.go(Nav.SETTINGS);
+        }
+      })
       this.voiceCard()
-      if (!this.configured) {
-        this.setupBanner()
+      if (this.failureText().length > 0) {
+        this.errorCard()
       }
       this.resultCard()
-      this.grid()
-      this.sheetHost()
+      this.overviewSection()
+      this.keyboardFootnote()
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  secondaryContent() {
+    Column({ space: Space.lg }) {
+      this.dashboardHeader()
+      ForEach(this.dashboardIds(), (id: string) => {
+        this.cardFor(id)
+      }, (id: string) => 'dash-' + id)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  voiceCard() {
+    VoiceSessionCard({
+      phase: this.phase,
+      level: this.level,
+      busy: this.busy,
+      active: this.phaseBusy(),
+      title: this.statusTitle(),
+      tone: this.statusTone(),
+      clock: this.clockText(),
+      hint: this.phaseHint(),
+      configured: this.configured,
+      onToggle: () => {
+        this.toggleDictation();
+      },
+      onCancel: () => {
+        this.cancelDictation();
+      },
+      onSetup: () => {
+        Nav.go(Nav.CREDENTIALS);
+      }
+    })
+  }
+
+  @Builder
+  errorCard() {
+    SpeechErrorCard({
+      message: this.failureText(),
+      denied: this.micDenied,
+      onSettings: () => {
+        this.openMicSettings();
+      }
+    })
+  }
+
+  @Builder
+  resultCard() {
+    if (this.result.length > 0) {
+      TranscriptCard({
+        text: this.result,
+        copied: this.copied,
+        active: this.phaseBusy(),
+        onCopy: () => {
+          this.copyResult();
+        }
+      })
     }
   }
 
-  /** Zero-size hosts: sheets are page-level, their content reads the state above. */
+  /** iOS OverviewMetricsView: heading + refresh, 2×2 card, trend card. */
+  @Builder
+  overviewSection() {
+    Column({ space: Space.sm }) {
+      Row() {
+        Text('概览')
+          .fontSize(Type.section)
+          .lineHeight(Leading.section)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Palette.text1())
+        Blank()
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph(symbolOf('refresh'))
+            .fontSize(Type.navTitle)
+            .fontColor([Palette.text2()])
+        }
+        .width(Size.touch)
+        .height(Size.touch)
+        .backgroundColor(Color.Transparent)
+        .enabled(!this.loading)
+        .opacity(this.loading ? 0.4 : 1)
+        .hoverEffect(HoverEffect.Highlight)
+        .accessibilityText('刷新概览')
+        .onClick(() => {
+          this.reload();
+        })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      if (this.dataError.length > 0) {
+        Row({ space: Space.xxs }) {
+          SymbolGlyph(symbolOf('close'))
+            .fontSize(Type.caption)
+            .fontColor([Palette.text2()])
+          Text('统计暂时无法载入。')
+            .fontSize(Type.caption)
+            .lineHeight(Leading.caption)
+            .fontColor(Palette.text2())
+        }
+        .width('100%')
+      }
+
+      TodayMetricsCard({
+        loaded: this.metricsLoaded,
+        todayChars: this.todayChars,
+        todayDuration: this.todayDuration,
+        todayCount: this.todayCount,
+        totalRecords: this.totalRecords
+      })
+
+      ActivityTrendCard({
+        reduceMotion: this.reduceMotion,
+        buckets: this.buckets,
+        periodDays: this.periodDays,
+        periodMetric: this.periodMetric,
+        periodMax: this.periodMax,
+        total: this.periodTotalValue(),
+        loaded: this.metricsLoaded,
+        empty: this.metricsLoaded && this.periodTotal === 0,
+        onPeriod: (days: number) => {
+          this.setPeriod(days);
+        },
+        onMetric: (metric: number) => {
+          this.setMetric(metric);
+        }
+      })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** iOS HomeView.swift:167-172, the closing footnote (plain text, no control). */
+  @Builder
+  keyboardFootnote() {
+    Text('启用键盘语音后，可在其他应用中录音')
+      .fontSize(Type.caption)
+      .lineHeight(Leading.caption)
+      .fontColor(Palette.text2())
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .width('100%')
+  }
+
+  /** Harmony-only: the dashboard stays reachable after the iOS content. */
+  @Builder
+  dashboardHeader() {
+    Row({ space: Space.sm }) {
+      Column({ space: Space.xxs }) {
+        Text('自定义卡片')
+          .fontSize(Type.label)
+          .lineHeight(Leading.label)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Palette.text1())
+        Text('按需显示，改动立刻生效')
+          .fontSize(Type.caption)
+          .lineHeight(Leading.caption)
+          .fontColor(Palette.text2())
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      TextButton({
+        label: '自定义',
+        onTap: () => {
+          this.customOpen = true;
+        }
+      })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** Zero-size host: the sheet is page-level, its content reads the state above. */
   @Builder
   sheetHost() {
     Column() {
@@ -521,8 +746,14 @@ export struct OverviewPage {
         .width(0)
         .height(0)
         .bindSheet($$this.customOpen, this.customSheet, {
-          height: SheetSize.MEDIUM,
+          // Wide windows use a centred dialog; bottom sheets above 600vp are
+          // re-typed by the system and ignore the height below.
+          // https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-universal-attributes-sheet-transition
+          preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+          width: this.wide() ? 520 : '100%',
+          height: this.wide() ? SheetSize.LARGE : SheetSize.MEDIUM,
           dragBar: true,
+          radius: LengthMetrics.vp(Radius.sheet),
           showClose: true,
           onDisappear: () => {
             this.customOpen = false;
@@ -532,162 +763,11 @@ export struct OverviewPage {
     .width('100%')
   }
 
-  /** One tap target for the whole dictation loop; no second, competing button. */
-  @Builder
-  voiceCard() {
-    Surface({ inset: Space.md }) {
-      Column({ space: Space.sm }) {
-        Row({ space: Space.xs }) {
-          Column()
-            .width(8)
-            .height(8)
-            .borderRadius(Radius.pill)
-            .backgroundColor(this.statusTone())
-          Text(this.statusTitle())
-            .fontSize(Type.label)
-            .lineHeight(Leading.label)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(Palette.text1())
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-          if (this.phaseBusy()) {
-            Text(this.clockText())
-              .fontSize(Type.label)
-              .lineHeight(Leading.label)
-              .fontColor(Palette.text2())
-          } else {
-            Text('中英混合自动识别')
-              .fontSize(Type.label)
-              .lineHeight(Leading.label)
-              .fontColor(Palette.text3())
-              .maxLines(1)
-          }
-        }
-        .width('100%')
-        .constraintSize({ minHeight: Size.touch })
-        .alignItems(VerticalAlign.Center)
-
-        VoiceControl({
-          phase: this.phase,
-          level: this.level,
-          usable: !this.busy,
-          onToggle: () => {
-            this.toggleDictation();
-          }
-        })
-
-        if (this.phaseHint().length > 0) {
-          Text(this.phaseHint())
-            .fontSize(Type.label)
-            .lineHeight(Leading.label)
-            .fontColor(Palette.text3())
-            .textAlign(TextAlign.Center)
-            .width('100%')
-        }
-
-        if (this.phaseBusy()) {
-          Row() {
-            TextButton({
-              label: '取消',
-              tone: 'danger',
-              onTap: () => {
-                this.cancelDictation();
-              }
-            })
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-        }
-
-        if (this.failureText().length > 0) {
-          Banner({
-            title: '这次没有成功',
-            text: this.failureText(),
-            tone: 'danger',
-            action: '重新开始',
-            actionSymbol: 'mic',
-            onAction: () => {
-              this.toggleDictation();
-            }
-          })
-        }
-
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
-          Tag({ text: this.prefs.polishMode === 'raw' ? '原文模式' : '润色模式', tone: 'accent' })
-          Tag({ text: Labels.provider(this.prefs.activeAsrProvider), tone: 'neutral' })
-          Tag({ text: this.online ? '在线' : '离线', tone: this.online ? 'success' : 'warning' })
-        }
-        .width('100%')
-      }
-      .width('100%')
-    }
-  }
-
-  @Builder
-  setupBanner() {
-    Banner({
-      title: '先配一个转写密钥',
-      text: '鸿蒙端把转写交给云端引擎，密钥保存在系统密钥库。没有密钥时录音会失败，历史里只会留下错误码。',
-      action: '去配凭据',
-      actionSymbol: 'settings',
-      onAction: () => Nav.go(Nav.CREDENTIALS)
-    })
-  }
-
-  @Builder
-  resultCard() {
-    if (this.result.length > 0) {
-      Surface({ inset: Space.md }) {
-        Column({ space: Space.xs }) {
-          SectionTitle({
-            title: '识别结果',
-            action: '复制',
-            onAction: () => {
-              this.copyResult();
-            }
-          })
-          Text(this.result)
-            .fontSize(Type.body)
-            .lineHeight(Leading.body)
-            .fontColor(Palette.text1())
-            .width('100%')
-            .copyOption(CopyOptions.LocalDevice)
-        }
-        .width('100%')
-      }
-    }
-  }
-
-  // ── card grid ──────────────────────────────────────────────────────────────
-
-  @Builder
-  grid() {
-    Column({ space: Space.md }) {
-      ForEach(this.gridRows(), (row: CardRow) => {
-        Row({ space: Space.md }) {
-          ForEach(row.ids, (id: string) => {
-            Column() {
-              this.cardFor(id)
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-          }, (id: string) => 'grid-' + id)
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Top)
-      }, (row: CardRow) => row.key)
-    }
-    .width('100%')
-  }
+  // ── Harmony-only user-selected information cards ───────────────────────────
 
   @Builder
   cardFor(id: string) {
-    if (id === Dashboard.TODAY) {
-      this.todayCard()
-    } else if (id === Dashboard.PERIOD) {
-      this.periodCard()
-    } else if (id === Dashboard.HEATMAP) {
+    if (id === Dashboard.HEATMAP) {
       this.heatmapCard()
     } else if (id === Dashboard.RECENT) {
       this.recentCard()
@@ -695,83 +775,6 @@ export struct OverviewPage {
       this.configCard()
     } else if (id === Dashboard.SHORTCUTS) {
       this.shortcutsCard()
-    }
-  }
-
-  @Builder
-  todayCard() {
-    Surface({ inset: Space.md }) {
-      Column({ space: Space.sm }) {
-        SectionTitle({ title: '今日数据', hint: '统计只留在这一台设备' })
-        Row({ space: Space.sm }) {
-          MetricBlock({ value: Fmt.count(this.todayChars), label: '字数' })
-          MetricBlock({ value: Fmt.duration(this.todayDuration), label: '时长' })
-          MetricBlock({ value: this.todayCount.toString(), label: '段数' })
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Bottom)
-
-        Divider()
-          .color(Palette.line())
-          .strokeWidth(0.5)
-
-        Row({ space: Space.sm }) {
-          MetricBlock({ value: Fmt.count(this.totalCount), label: '累计记录', unit: '段' })
-          MetricBlock({ value: Fmt.count(this.totalChars), label: '累计字数', unit: '字' })
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Bottom)
-      }
-      .width('100%')
-    }
-  }
-
-  @Builder
-  periodCard() {
-    Surface({ inset: Space.md }) {
-      Column({ space: Space.sm }) {
-        SectionTitle({ title: '最近趋势', hint: '把听写量按天摊开' })
-        Segmented({
-          items: PERIOD_LABELS,
-          selected: this.periodSelect(),
-          onSelect: (index: number) => {
-            this.setPeriod(index === 0 ? 7 : 30);
-          }
-        })
-        Segmented({
-          items: METRIC_LABELS,
-          selected: this.periodMetric,
-          onSelect: (index: number) => {
-            this.setMetric(index);
-          }
-        })
-
-        Row({ space: BAR_GAP }) {
-          ForEach(this.buckets, (bucket: ActivityBucket) => {
-            Column() {
-              Column()
-                .width('100%')
-                .height(this.barHeight(bucket.value))
-                .backgroundColor(Palette.accent())
-                .borderRadius(Radius.control)
-                .opacity(0.85)
-            }
-            .layoutWeight(1)
-            .height(BAR_MAX)
-            .justifyContent(FlexAlign.End)
-          }, (bucket: ActivityBucket) => 'bar-' + bucket.date)
-        }
-        .width('100%')
-        .height(BAR_MAX)
-        .alignItems(VerticalAlign.Bottom)
-
-        Row({ space: Space.sm }) {
-          MetricBlock({ value: this.periodTotalValue(), label: '总计', unit: this.periodUnit() })
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Bottom)
-      }
-      .width('100%')
     }
   }
 
@@ -941,18 +944,18 @@ export struct OverviewPage {
     Column({ space: Space.sm }) {
       SheetTitle({
         title: '自定义主页',
-        hint: '关掉的卡片不会显示在主页上，改动会立刻生效'
+        hint: '关掉的卡片不会显示在主页上，改动会立刻生效；今日数据与使用趋势固定显示'
       })
       Scroll() {
         Column() {
           Column() {
             Group() {
-              ForEach(Dashboard.CARDS, (card: DashboardCard, index: number) => {
+              ForEach(this.customCards(), (card: DashboardCard, index: number) => {
                 SettingSwitch({
                   label: card.title,
                   hint: card.hint,
                   checked: this.isVisible(card.id),
-                  showDivider: index < Dashboard.CARDS.length - 1,
+                  showDivider: index < this.customCards().length - 1,
                   onToggle: (value: boolean) => {
                     this.setCardVisible(card.id, value);
                   }

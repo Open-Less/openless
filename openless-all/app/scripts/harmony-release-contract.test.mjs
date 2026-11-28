@@ -1,9 +1,8 @@
 // Contract test for the HarmonyOS release path.
 //
-// The HAP cannot be built on a hosted runner (the DevEco SDK is account-gated),
-// so the risks this test guards are structural: the entry point must pin the tag,
-// run on the SDK-bearing runner by default, keep every credential in Secrets, and
-// hand the signed HAP to both the GitHub Release and AppGallery Connect.
+// Hosted runners obtain checksum-pinned Harmony tools. This contract guards the
+// native build entry, immutable tag source, draft-only asset writes, and signing
+// separation: unsigned HAPs go to GitHub; signed App Packs go only to AppGallery.
 // Text-based so it also runs in the Linux contract job (no node_modules).
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
@@ -41,11 +40,9 @@ assert.match(workflow, /does not match package\.json version/);
 assert.match(workflow, /default: '\["ubuntu-latest"\]'/);
 assert.match(workflow, /prepare-harmony-sdk\.sh/);
 
-// A hosted runner ships neither the app's `node_modules` (`build-harmony-frontend.sh`
-// runs `npm run build`) nor the Tier-2 OHOS target std (`build-harmony-backend.sh`
-// runs `cargo build --target aarch64-unknown-linux-ohos`). CI installs both; the
-// first real dispatch of this workflow did not and died with `can't find crate for
-// `core`` (error[E0463]) after the Rime/NDK compile.
+// Node dependencies support tag tooling/contract tests; the native HAP does not
+// build a React bundle. Both CI and release must install the Tier-2 OHOS target
+// before compiling the shared Rust host.
 assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
 assert.match(workflow, /targets: aarch64-unknown-linux-ohos/);
 assert.match(workflow, /run: npm ci/);
@@ -66,6 +63,50 @@ assert.match(prepare, /DEFAULT_SHA256=[0-9a-f]{64}/);
 assert.match(prepare, /checksum mismatch/);
 // No DevEco install: the standalone hvigor CLI must be usable.
 assert.match(packaging, /@ohos\/hvigor\/bin\/hvigor\.js/);
+const nativeBuild = readFileSync(join(appRoot, '../harmony/scripts/build-harmony-app.sh'), 'utf8');
+assert.match(packaging, /bash "\$HARMONY_ROOT\/scripts\/build-harmony-app\.sh"/);
+assert.match(nativeBuild, /bash "\$HARMONY_ROOT\/scripts\/build-harmony-backend\.sh"/);
+// Source versions are placeholders; packaging injects and restores the release identity.
+const sourceApp = JSON.parse(
+  readFileSync(join(appRoot, '../harmony/AppScope/app.json5'), 'utf8'),
+).app;
+assert.equal(sourceApp.versionCode, 1);
+assert.equal(sourceApp.versionName, '0.1.0');
+assert.match(nativeBuild, /trap restore_app_json EXIT/);
+assert.doesNotMatch(nativeBuild, /npm run build|web-dist|dist\/index\.html/);
+assert.ok(
+  !existsSync(join(appRoot, 'scripts/build-harmony-app.sh')),
+  'no retired app-local builder',
+);
+assert.ok(
+  !existsSync(join(appRoot, '../harmony/scripts/build-harmony-frontend.sh')),
+  'no second frontend builder',
+);
+// Reused Hvigor staging must discard deleted modules and obsolete web assets.
+assert.match(nativeBuild, /shutil\.rmtree\(staged_ets\)/);
+assert.match(nativeBuild, /shutil\.rmtree\(stale_web\)/);
+const verify = readFileSync(join(appRoot, '../harmony/scripts/verify-harmony-hap.sh'), 'utf8');
+assert.match(verify, /require_entry 'libs\/arm64-v8a\/libopenless_harmony_host\.so'/);
+assert.match(verify, /HAP still carries the removed ArkWeb bundle/);
+
+// Both manual and automatic publication are draft-only. Check at the beginning
+// and again immediately before writing, so publishing during a build is safe.
+const preflightIndex = workflow.indexOf('- name: Require a draft before publishing');
+const buildIndex = workflow.indexOf('- name: Build, sign and stage the HAP');
+assert.ok(preflightIndex > 0 && preflightIndex < buildIndex);
+const attachStep = workflow.slice(
+  workflow.indexOf('- name: Attach the HAP to the GitHub Release'),
+  workflow.indexOf('- name: Upload to HUAWEI AppGallery Connect'),
+);
+for (const guard of [
+  workflow.slice(preflightIndex, workflow.indexOf('- uses: actions/setup-java@v4')),
+  attachStep,
+]) {
+  assert.match(guard, /if: inputs\.publish/);
+  assert.match(guard, /if \[ "\$draft" != true \]; then/);
+  assert.doesNotMatch(guard, /github\.event_name/, 'manual dispatch cannot bypass the draft guard');
+}
+assert.match(attachStep, /exit 1[\s\S]*gh release upload/);
 
 // Distribution policy: the repository only ever carries the unsigned package,
 // AppGallery gets the signed one, and the test channel signs with its own

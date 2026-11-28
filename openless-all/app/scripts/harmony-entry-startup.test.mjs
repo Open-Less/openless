@@ -15,30 +15,13 @@ const requests = [],
 class UIAbility {
   context = { resourceManager: { getBooleanByName: () => clipboardAccess } };
 }
-// `onCreate` records launch parameters for the page (`--ps route`, `--ps layout`)
-// instead of touching AppStorage before a UI instance exists.
-const boot = { route: '', layout: '' };
+// Launch hints are routes only; window geometry is owned by the stage.
 const Boot = {
-  get route() {
-    return boot.route;
-  },
-  set route(value) {
-    boot.route = value;
-  },
-  get layout() {
-    return boot.layout;
-  },
-  set layout(value) {
-    boot.layout = value;
-  },
-  takeRoute: () => {
-    const value = boot.route;
-    boot.route = '';
-    return value;
-  },
-  takeLayout: () => {
-    const value = boot.layout;
-    boot.layout = '';
+  route: '',
+  mainWindow: undefined,
+  takeRoute() {
+    const value = this.route;
+    this.route = '';
     return value;
   },
 };
@@ -65,8 +48,11 @@ vm.runInNewContext(
     },
   },
 );
+const mainWindow = { name: 'owning-main-window' };
 const stage = {
+  getMainWindowSync: () => mainWindow,
   loadContent: (page, ready) => {
+    assert.equal(Boot.mainWindow, mainWindow, 'window is available before loading Index');
     pages.push(page);
     ready();
   },
@@ -99,16 +85,19 @@ assert.deepEqual(
   [['ohos.permission.READ_PASTEBOARD']],
   'authorized builds request only once per explicit action',
 );
-// Launch parameters are forwarded for the page to honour, and never for a plain
-// launch: `--ps route`/`--ps layout` are the launcher and QA entry points.
+// Old QA layout arguments are deliberately ignored, including on a warm launch.
 {
   const ability = new exports.default();
   ability.onCreate({ parameters: { route: 'settings', layout: 'sm' } });
   assert.equal(Boot.takeRoute(), 'settings');
-  assert.equal(Boot.takeLayout(), 'sm');
-  const plain = new exports.default();
-  plain.onCreate({ parameters: { route: 'settings' } });
-  assert.equal(Boot.takeLayout(), '', 'an unrelated launch must not pin a layout');
+  stored.delete('bpOverride');
+  ability.onNewWant({ parameters: { route: 'history', layout: 'xl' } });
+  assert.equal(stored.get('deepLinkRoute'), 'history');
+  assert.equal(stored.has('bpOverride'), false, 'launch arguments cannot lock responsive layout');
+  ability.onWindowStageCreate(stage);
+  assert.equal(Boot.mainWindow, mainWindow);
+  ability.onWindowStageDestroy();
+  assert.equal(Boot.mainWindow, undefined, 'destroyed window references must be released');
 }
 console.log(
   'Harmony entry startup: absent launch arguments, page loading, deep links and clipboard capability gating passed',

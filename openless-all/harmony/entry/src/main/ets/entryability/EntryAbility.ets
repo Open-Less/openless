@@ -5,6 +5,7 @@ import { Store } from '../common/Store';
 
 export default class EntryAbility extends UIAbility {
   private clipboardRequested: boolean = false;
+  private pageLoaded: boolean = false;
 
   /**
    * `aa start --ps route settings` (or any future notification/deep link) opens
@@ -16,41 +17,34 @@ export default class EntryAbility extends UIAbility {
     return typeof value === 'string' ? value : '';
   }
 
-  /**
-   * `aa start --ps layout sm|md|lg` pins the size class. One UI ships for phone,
-   * tablet and 2-in-1, and QA can then verify all three layouts on a single
-   * device instead of rotating, splitting or resizing a window by hand.
-   */
-  private static layoutOf(want?: Want): string {
-    const value = want?.parameters?.layout;
-    if (typeof value !== 'string') return '';
-    if (value === 'sm' || value === 'md' || value === 'lg') return value;
-    return '';
-  }
-
   private initialRoute: string = '';
 
   onCreate(want?: Want): void {
     this.clipboardRequested = want?.parameters?.requestClipboardPermission === true;
     this.initialRoute = EntryAbility.routeOf(want);
     Boot.route = this.initialRoute;
-    Boot.layout = EntryAbility.layoutOf(want);
   }
 
   onNewWant(want?: Want): void {
     this.clipboardRequested = want?.parameters?.requestClipboardPermission === true;
     const route = EntryAbility.routeOf(want);
     if (route.length > 0) Store.put<string>('deepLinkRoute', route);
-    const layout = EntryAbility.layoutOf(want);
-    if (layout.length > 0) Store.put<string>('bpOverride', layout);
   }
 
   onWindowStageDestroy(): void {
+    Boot.mainWindow = undefined;
+    if (this.pageLoaded) Store.put<boolean>('appForeground', false);
+    this.pageLoaded = false;
     this.initialRoute = '';
   }
 
   onForeground(): void {
+    if (this.pageLoaded) Store.put<boolean>('appForeground', true);
     if (this.clipboardRequested) this.requestClipboard();
+  }
+
+  onBackground(): void {
+    if (this.pageLoaded) Store.put<boolean>('appForeground', false);
   }
 
   private requestClipboard(): void {
@@ -62,9 +56,18 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    // `Boot.layout` was recorded in onCreate; keep the window-stage path minimal.
+    // Bind before loadContent so Index observes the owning main window, never
+    // an overlay returned by getLastWindow. Huawei rotation animation guide:
+    // https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/arkts-rotation-transition-animation
+    try {
+      Boot.mainWindow = windowStage.getMainWindowSync();
+    } catch (error) {
+      Boot.mainWindow = undefined;
+      console.error('[OpenLess Window] main window unavailable: ' + JSON.stringify(error));
+    }
     Boot.route = this.initialRoute;
     windowStage.loadContent('pages/Index', () => {
+      this.pageLoaded = true;
       if (this.clipboardRequested) { this.clipboardRequested = false; this.requestClipboard(); }
     });
   }

@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import nativeHost from 'libopenless_harmony.so';
 import { HarmonyApi } from '../HarmonyApi';
+import { StyleEditing } from './StyleEditing';
 import {
   ActivityDay,
   Channel,
@@ -10,6 +11,7 @@ import {
   DictionaryEntry,
   HistoryEntry,
   MarketplacePack,
+  MarketplaceLikeResult,
   NativeReply,
   PlatformCapabilities,
   ProviderDescriptor,
@@ -78,8 +80,9 @@ export class Api {
     await Api.value('clear_history', '{}');
   }
 
-  static async retranscribe(id: string): Promise<HistoryEntry> {
-    return JSON.parse(await Api.value('retranscribe_recording', '{"id":' + JSON.stringify(id) + '}')) as HistoryEntry;
+  static async retranscribe(sessionId: string): Promise<RetranscribeResult> {
+    return JSON.parse(await Api.value('retranscribe_recording',
+      '{"sessionId":' + JSON.stringify(sessionId) + '}')) as RetranscribeResult;
   }
 
   static async activity(): Promise<ActivityDay[]> {
@@ -120,6 +123,14 @@ export class Api {
     return await Api.writeSetting(pointer, value.toString());
   }
 
+  /** Switches traditional/multimodal pipeline atomically so effective_pipeline_mode stays aligned. */
+  static async writePipelineMode(mode: string): Promise<SettingsSnapshot> {
+    const multimodal: boolean = mode === 'multimodal';
+    const args = '{"edits":{"/pipelineMode":' + JSON.stringify(mode) +
+      ',"/multimodalPipelineEnabled":' + (multimodal ? 'true' : 'false') + '}}';
+    return JSON.parse(await Api.value('update_setting_fields', args)) as SettingsSnapshot;
+  }
+
   // ── Vocabulary ─────────────────────────────────────────────────────────────
   static async vocabulary(): Promise<DictionaryEntry[]> {
     return JSON.parse(await Api.value('list_vocab', '{}')) as DictionaryEntry[];
@@ -136,6 +147,11 @@ export class Api {
   static async setVocabularyEnabled(id: string, enabled: boolean): Promise<void> {
     await Api.value('set_vocab_enabled',
       '{"id":' + JSON.stringify(id) + ',"enabled":' + (enabled ? 'true' : 'false') + '}');
+  }
+
+  static async updateVocabulary(id: string, phrase: string): Promise<void> {
+    await Api.value('update_vocab',
+      '{"id":' + JSON.stringify(id) + ',"phrase":' + JSON.stringify(phrase) + '}');
   }
 
   // ── Correction rules ───────────────────────────────────────────────────────
@@ -180,6 +196,15 @@ export class Api {
     return JSON.parse(await Api.value('list_channels', '{"kind":' + JSON.stringify(kind) + '}')) as Channel[];
   }
 
+  /**
+   * Provider ids with at least one saved non-empty `omni.*` field, read from the
+   * hydrated system-keystore vault. Ids only: no secret, no catalogue, no network.
+   * Endpoint- or model-only drafts count; unknown ids survive so config is not lost.
+   */
+  static async configuredOmniProviders(): Promise<string[]> {
+    return JSON.parse(await Api.value('list_configured_omni_providers', '{}')) as string[];
+  }
+
   static async activateAsrProvider(provider: string): Promise<SettingsSnapshot> {
     return JSON.parse(await Api.value('set_active_asr_provider', '{"provider":' + JSON.stringify(provider) + '}')) as SettingsSnapshot;
   }
@@ -209,9 +234,18 @@ export class Api {
   }
 
   static async createChannel(kind: string, providerType: string, name: string): Promise<Channel> {
-    return JSON.parse(await Api.value('create_channel',
+    const wire: string = await Api.value('create_channel',
       '{"kind":' + JSON.stringify(kind) + ',"providerType":' + JSON.stringify(providerType) +
-        ',"name":' + JSON.stringify(name) + '}')) as Channel;
+        ',"name":' + JSON.stringify(name) + '}');
+    if (wire.startsWith('"')) {
+      const id: string = JSON.parse(wire) as string;
+      const channels: Channel[] = await Api.channels(kind);
+      for (let index = 0; index < channels.length; index++) {
+        if (channels[index].id === id) return channels[index];
+      }
+      return { id: id, name: name, providerType: providerType, enabled: true, order: channels.length };
+    }
+    return JSON.parse(wire) as Channel;
   }
 
   static async renameChannel(kind: string, id: string, name: string): Promise<void> {
@@ -261,8 +295,9 @@ export class Api {
     return JSON.parse(await Api.value('reset_builtin_style_pack', '{"id":' + JSON.stringify(id) + '}')) as StylePack[];
   }
 
-  static async likePack(packId: string): Promise<void> {
-    await Api.value('marketplace_like', '{"packId":' + JSON.stringify(packId) + '}');
+  static async likePack(packId: string): Promise<MarketplaceLikeResult> {
+    return JSON.parse(await Api.value('marketplace_like',
+      '{"packId":' + JSON.stringify(packId) + '}')) as MarketplaceLikeResult;
   }
 
   /**
@@ -306,13 +341,47 @@ export class Api {
   }
 
   static async readRecording(sessionId: string): Promise<RecordingPayload> {
-    return JSON.parse(await Api.value('read_audio_recording',
-      '{"sessionId":' + JSON.stringify(sessionId) + '}')) as RecordingPayload;
+    const wire: string = await Api.value('read_audio_recording',
+      '{"sessionId":' + JSON.stringify(sessionId) + '}');
+    if (wire.startsWith('"')) {
+      const dataUrl: string = JSON.parse(wire) as string;
+      const marker: number = dataUrl.indexOf(';base64,');
+      return { base64: marker >= 0 ? dataUrl.slice(marker + 8) : dataUrl };
+    }
+    const payload: RecordingPayload = JSON.parse(wire) as RecordingPayload;
+    const marker: number = payload.base64.indexOf(';base64,');
+    if (marker >= 0) {
+      return {
+        mime: payload.mime,
+        fileName: payload.fileName,
+        base64: payload.base64.slice(marker + 8),
+        size: payload.size
+      };
+    }
+    return payload;
   }
 
-  static async saveStylePack(pack: StylePackPayload): Promise<StylePack> {
+  static async saveStylePack(pack: StylePack): Promise<StylePack> {
     return JSON.parse(await Api.value('save_style_pack',
       '{"stylePack":' + JSON.stringify(pack) + '}')) as StylePack;
+  }
+
+  static async createStylePack(name: string, prompt: string): Promise<StylePack> {
+    const template: StylePack = StyleEditing.create(name, prompt);
+    return JSON.parse(await Api.value('create_style_pack_from_template',
+      '{"template":' + JSON.stringify(template) + '}')) as StylePack;
+  }
+
+  static async updateStylePrompt(id: string, prompt: string): Promise<StylePack> {
+    // Fetch the complete current pack, not the filtered/possibly stale UI selection.
+    const packs: StylePack[] = await Api.stylePacks();
+    const original: StylePack | undefined = packs.find((pack: StylePack) => pack.id === id);
+    if (original === undefined) throw new Error('风格已不存在，请刷新列表');
+    return await Api.saveStylePack(StyleEditing.withPrompt(original, prompt));
+  }
+
+  static async openExternalUrl(url: string): Promise<void> {
+    await Api.value('open_external_url', '{"url":' + JSON.stringify(url) + '}');
   }
 
   // ── Microphone test, diagnostics, GitHub ───────────────────────────────────
@@ -332,6 +401,10 @@ export class Api {
 
   static async githubDeviceFlowStart(): Promise<GithubDeviceFlow> {
     return JSON.parse(await Api.value('github_device_flow_start', '{}')) as GithubDeviceFlow;
+  }
+
+  static async githubDeviceFlowCancel(flowId: string): Promise<void> {
+    await Api.value('github_device_flow_cancel', '{"flowId":' + JSON.stringify(flowId) + '}');
   }
 
   static async githubDeviceFlowPoll(flowId: string): Promise<GithubDeviceFlowPoll> {
@@ -462,6 +535,32 @@ export class Api {
   static async openSystemMicrophoneSettings(): Promise<void> {
     await Api.raw('open_system_settings', '{}');
   }
+
+  // ── Updates ────────────────────────────────────────────────────────────────
+  static async getUpdateChannel(): Promise<string> {
+    return JSON.parse(await Api.value('get_update_channel', '{}')) as string;
+  }
+
+  static async setUpdateChannel(channel: string): Promise<string> {
+    return JSON.parse(await Api.value('set_update_channel',
+      '{"channel":' + JSON.stringify(channel) + '}')) as string;
+  }
+
+  static async checkUpdate(currentVersion: string, channel: string): Promise<UpdateCheckResult> {
+    const payload = '{"currentVersion":' + JSON.stringify(currentVersion) +
+      ',"channel":' + JSON.stringify(channel) + '}';
+    return JSON.parse(await Api.value('app_check_update_with_channel', payload)) as UpdateCheckResult;
+  }
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string;
+  tagName: string;
+  channel: string;
+  hasUpdate: boolean;
+  publishedAt: string;
+  releaseUrl: string;
 }
 
 interface DeviceName {
@@ -499,22 +598,28 @@ interface PendingBackend {
 }
 
 export interface MarketplaceAuth {
-  loggedIn?: boolean;
-  login?: string | null;
+  signedIn: boolean;
 }
 
 export interface GithubDeviceFlow {
   flowId: string;
   userCode: string;
   verificationUri: string;
-  interval: number;
-  expiresIn: number;
+  intervalSecs?: number;
+  expiresInSecs?: number;
+  interval?: number;
+  expiresIn?: number;
+}
+
+export interface RetranscribeResult {
+  text: string;
+  updatedEntry?: HistoryEntry | null;
 }
 
 export interface GithubDeviceFlowPoll {
-  state: string;
+  kind: string;
   login?: string;
-  error?: string;
+  message?: string;
 }
 
 export interface ModelList {
@@ -533,14 +638,6 @@ export interface RecordingPayload {
   fileName?: string;
   base64: string;
   size?: number;
-}
-
-export interface StylePackPayload {
-  id?: string;
-  name: string;
-  description: string;
-  systemPrompt: string;
-  enabled?: boolean;
 }
 
 export interface NetworkState {

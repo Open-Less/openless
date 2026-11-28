@@ -144,6 +144,9 @@ case "$name" in
       *'emu kill'*) kill -TERM "$(cat "$RUNNER_TEMP/emulator.pid")" 2>/dev/null || true ;;
     esac
     ;;
+  node)
+    [ "\${1:-}" != "\${FAKE_NODE_FAIL_ON:-}" ] || exit 19
+    ;;
   cargo)
     [ "\${FAKE_CARGO_EXIT:-0}" = 0 ] || exit "$FAKE_CARGO_EXIT"
     if [ "\${FAKE_HOTKEY_MATCH:-1}" = 1 ]; then
@@ -152,7 +155,13 @@ case "$name" in
       echo 'test result: ok. 0 passed; 1381 filtered out'
     fi
     ;;
-  gh) [ "$GH_REPO" = 'example/openless' ] ;;
+  gh)
+    [ "$GH_REPO" = 'example/openless' ]
+    if [ "\${1:-}" = release ] && [ "\${2:-}" = view ]; then
+      [ "\${FAKE_GH_VIEW_EXIT:-0}" = 0 ] || exit "$FAKE_GH_VIEW_EXIT"
+      printf '%s\\n' "\${FAKE_RELEASE_DRAFT-true}"
+    fi
+    ;;
 esac
 `;
 function fixture(name) {
@@ -170,6 +179,7 @@ function fixture(name) {
     'timeout',
     'adb',
     'cargo',
+    'node',
     'gh',
     'sudo',
   ])
@@ -224,6 +234,60 @@ function fixture(name) {
   return { dir, sdk, run, trace, count, seed };
 }
 try {
+  {
+    const job = ci.jobs['harmony-check'];
+    const steps = job.steps;
+    const contracts = steps.find((step) => step.name === 'Harmony ArkTS contracts');
+    const build = steps.find(
+      (step) => step.name === 'Build the HAP (compiles ArkTS and the Rust host)',
+    );
+    const expected = [
+      'entry-startup',
+      'app-dictation',
+      'voice-configuration',
+      'siwc',
+      'panel-layout',
+      'editor-compat',
+      'clipboard-history',
+      'symbol-gesture',
+      'rime-startup',
+      'native-ui',
+      'responsive-ui',
+      'system-speech',
+      'ios-parity',
+      'window-layout',
+      'release-contract',
+      'history-actions',
+      'library-actions',
+      'credential-actions',
+      'core-contracts',
+      'click-surfaces',
+    ].map((name) => `scripts/harmony-${name}.test.mjs`);
+    const invoked = [...contracts.run.matchAll(/^\s*node (\S+)\s*$/gm)].map((match) => match[1]);
+    assert.deepEqual(invoked, expected, 'every native Harmony regression runs in CI');
+    assert.ok(
+      steps.indexOf(contracts) < steps.indexOf(build),
+      'fast contracts precede SDK compilation',
+    );
+    assert.equal(
+      build.env.OPENLESS_HARMONY_CHANNEL,
+      'none',
+      'CI must not consume store signing material',
+    );
+    assert.match(build.run, /bash \.\.\/harmony\/scripts\/package-harmony-hap\.sh/);
+    assert.match(build.run, /--allow-unsigned/);
+    assert.doesNotMatch(build.run, /npm run build|build-harmony-frontend/);
+    for (const [label, failed, count, status] of [
+      ['all-pass', '', expected.length, 0],
+      ['ui-failure', expected[9], 10, 19],
+      ['rotation-failure', expected[13], 14, 19],
+    ]) {
+      const test = fixture('harmony-contracts-' + label);
+      const result = test.run(contracts.run, { FAKE_NODE_FAIL_ON: failed });
+      assert.equal(result.status, status, label + ': ' + result.stderr);
+      assert.equal(test.count('node'), count, 'a failed contract stops the job: ' + label);
+    }
+  }
   {
     const test = fixture('emulator-disk-cleanup');
     const cache = join(test.dir, 'openless-cache/mobile-rime');
@@ -310,6 +374,34 @@ try {
         test.trace(),
         /gradle .*:app:connectedX86_64DebugAndroidTest -x :app:rustBuildX86_64Debug --no-daemon/,
       );
+  }
+  // Execute the actual Harmony workflow guards with a fake GitHub CLI. Both
+  // early preflight and the final write must reject published or unreadable
+  // state, including manual repair runs; a tag build may only mutate a draft.
+  for (const stepName of [
+    'Require a draft before publishing',
+    'Attach the HAP to the GitHub Release',
+  ]) {
+    const step = harmony.jobs['build-harmony-hap'].steps.find((item) => item.name === stepName);
+    assert.ok(step, stepName);
+    assert.equal(step.if, 'inputs.publish');
+    for (const [name, env, expected] of [
+      ['draft', { FAKE_RELEASE_DRAFT: 'true' }, 0],
+      ['published', { FAKE_RELEASE_DRAFT: 'false' }, 1],
+      ['empty', { FAKE_RELEASE_DRAFT: '' }, 1],
+      ['malformed', { FAKE_RELEASE_DRAFT: 'null' }, 1],
+      ['api-failure', { FAKE_GH_VIEW_EXIT: '7' }, 7],
+    ]) {
+      const test = fixture('harmony-draft-' + stepName.replaceAll(' ', '-') + '-' + name);
+      const result = test.run(step.run, env);
+      assert.equal(result.status, expected, stepName + '/' + name + ': ' + result.stderr);
+      assert.equal(test.count('gh'), expected === 0 && stepName.startsWith('Attach') ? 2 : 1);
+      assert.equal(
+        /gh release upload/.test(test.trace()),
+        expected === 0 && stepName.startsWith('Attach'),
+        'a failed draft guard must never upload assets',
+      );
+    }
   }
   {
     const test = fixture('signing-passwords');

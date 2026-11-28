@@ -61,16 +61,35 @@ export interface CorrectionRule {
   source?: string;
 }
 
+/** Exact Core StylePack wire value. Updates are whole values, not field patches. */
 export interface StylePack {
   id: string;
   name: string;
-  description?: string;
-  enabled?: boolean;
-  builtIn?: boolean;
-  systemPrompt?: string;
-  icon?: string | null;
-  mode?: string | null;
-  mine?: boolean;
+  description: string;
+  author: string | null;
+  version: string;
+  kind: string;
+  baseMode: string;
+  selectionPrompt: string;
+  voiceEditPrompt: string;
+  prompt: string;
+  examples: StylePackExample[];
+  tags: string[];
+  iconPath: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  enabled: boolean;
+  active: boolean;
+  recommendedModel: string | null;
+  compatibleAppVersion: string | null;
+  originPackId: string | null;
+  originAuthorLogin: string | null;
+}
+
+export interface StylePackExample {
+  title: string | null;
+  input: string;
+  output: string;
 }
 
 export interface Channel {
@@ -201,23 +220,40 @@ export interface DictationEvent {
   error: string;
 }
 
+/** MarketplaceListItem does not report device-local installation state. */
 export interface MarketplacePack {
   id: string;
+  slug: string;
   name: string;
-  description?: string;
-  author?: string;
-  downloads?: number;
-  likes?: number;
-  tags?: string[];
-  installed?: boolean;
+  description: string;
+  authorLogin: string;
+  version: string;
+  baseMode: string;
+  tags: string[];
+  likeCount: number;
+  downloadCount: number;
+  publishedAt: string;
+  updatedAt: string;
+  originPackId?: string | null;
+  originAuthorLogin?: string | null;
+}
+
+export interface MarketplaceLikeResult {
+  likeCount: number;
+  alreadyLiked: boolean;
+}
+
+export interface CloudSyncCounts {
+  dictionary?: number;
+  corrections?: number;
+  stylePacks?: number;
 }
 
 export interface CloudSyncStatus {
-  enabled?: boolean;
-  loggedIn?: boolean;
-  account?: string | null;
-  lastSyncAt?: string | null;
-  pending?: number;
+  schemaVersion?: number;
   /** Server revision the next upload must be based on. */
   revision?: number;
+  updatedAt?: string | null;
+  hasSnapshot?: boolean;
+  counts?: CloudSyncCounts;
 }
