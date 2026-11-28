@@ -8,6 +8,8 @@ rust-version = "1.99"
 publish = false
 
 [features]
+# Used only by the isolated macOS host; formal builds retain their model namespace.
+dev-build = []
 ask-attachments = ["dep:image", "dep:lopdf"]
 
 [dependencies]

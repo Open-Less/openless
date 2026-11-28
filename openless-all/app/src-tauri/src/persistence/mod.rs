@@ -68,7 +68,7 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
         Ok(PathBuf::from(home)
             .join("Library")
             .join("Application Support")
-            .join("OpenLess"))
+            .join(crate::build_identity::DIRECTORY))
     }
 
     #[cfg(target_os = "windows")]
@@ -108,7 +108,13 @@ fn fallback_store_path(file_name: &str) -> PathBuf {
     }
     #[cfg(not(target_os = "android"))]
     {
-        std::env::temp_dir().join(file_name)
+        if crate::build_identity::DEV {
+            std::env::temp_dir()
+                .join(crate::build_identity::DIRECTORY)
+                .join(file_name)
+        } else {
+            std::env::temp_dir().join(file_name)
+        }
     }
 }
 

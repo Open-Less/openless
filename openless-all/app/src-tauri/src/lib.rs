@@ -131,6 +131,8 @@ mod windows_ime_session;
 #[cfg(target_os = "windows")]
 mod windows_ime_target;
 
+mod build_identity;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
@@ -139,7 +141,7 @@ use std::time::Duration;
 
 const LOG_ROTATE_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(target_os = "macos")]
-const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
+const OPENLESS_BUNDLE_ID: &str = build_identity::BUNDLE_ID;
 
 #[cfg(target_os = "macos")]
 static LESS_COMPUTER_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
@@ -891,9 +893,13 @@ fn run_desktop() {
     let builder = builder.plugin(tauri_nspanel::init());
     // Keep one instance across installed and development copies sharing the same app identifier.
     let builder = builder.plugin(tauri_plugin_single_instance::init(single_instance_callback));
+    let builder = builder.plugin(tauri_plugin_shell::init());
+    let builder = if build_identity::UPDATES_ENABLED {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
     builder
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         // 桌面开机自启：mac 写 LaunchAgent plist，windows 写
         // HKCU\Software\Microsoft\Windows\CurrentVersion\Run。前端 toggle 直接
@@ -2095,7 +2101,7 @@ pub fn log_dir_path() -> std::path::PathBuf {
             return std::path::PathBuf::from(home)
                 .join("Library")
                 .join("Logs")
-                .join("OpenLess");
+                .join(build_identity::DIRECTORY);
         }
     }
     #[cfg(target_os = "windows")]
@@ -2127,7 +2133,7 @@ pub fn log_dir_path() -> std::path::PathBuf {
     }
     #[cfg(not(target_os = "android"))]
     {
-        std::env::temp_dir().join("OpenLess")
+        std::env::temp_dir().join(build_identity::DIRECTORY)
     }
 }
 
@@ -2164,6 +2170,20 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 fn main_window_frame_ready(window: tauri::WebviewWindow) {
     if window.label() == "main" {
         desktop_resources::main_frame_ready(&window);
+        if build_identity::DEV {
+            let ready = window
+                .app_handle()
+                .try_state::<Arc<openless_core::OpenLessBackend>>()
+                .is_some_and(|backend| backend.ensure_runtime_ready().is_ok());
+            if ready {
+                log::info!("[dev-ready] version={} source={} updater_enabled={} data={} keychain={} siwc={}",
+                    window.app_handle().package_info().version,
+                    option_env!("OPENLESS_BUILD_ID").unwrap_or("unknown"),
+                    build_identity::UPDATES_ENABLED,
+                    persistence::data_dir().map(|p| p.display().to_string()).unwrap_or_default(),
+                    build_identity::BUNDLE_ID, build_identity::SIWC_SERVICE);
+            }
+        }
     }
 }
 

@@ -9,7 +9,7 @@ import { Row } from '../../../components/ui/Row';
 import { getPlatformCapabilities } from '../../../runtime/platform';
 import { openExternal } from '../../../api/files';
 import type { PlatformCapabilities } from '../../../api/contracts';
-import { APP_VERSION_LABEL } from '../../../lib/appVersion';
+import { APP_VERSION_LABEL, IS_DEV_BUILD } from '../../../lib/appVersion';
 import { Card } from '../../../ui/layout/Card';
 import { useConservativeLayout, useLayoutStack } from '../../../lib/useMobileLayout';
 import { btnGhostStyle } from '../../../ui/controls/settingsFieldStyles';
@@ -75,7 +75,7 @@ export function AboutSection() {
                 whiteSpace: 'nowrap',
               }}
             >
-              OpenLess
+              {IS_DEV_BUILD ? 'OpenLess Dev' : 'OpenLess'}
             </div>
             <div
               style={{

@@ -459,7 +459,11 @@ fn shared_backend_from_stores(
 ) -> Arc<openless_core::OpenLessBackend> {
     let data_dir = crate::persistence::data_dir().unwrap_or_else(|error| {
         log::warn!("[core] data directory unavailable, using fallback config path: {error}");
-        std::env::temp_dir().join("openless-core-fallback")
+        std::env::temp_dir().join(if crate::build_identity::DEV {
+            "openless-dev-core-fallback"
+        } else {
+            "openless-core-fallback"
+        })
     });
     let locale = std::env::var("LANG")
         .ok()
@@ -472,7 +476,7 @@ fn shared_backend_from_stores(
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from),
         resource_dir: None,
-        platform: crate::types::PlatformCapabilities::current(),
+        platform: crate::build_identity::platform_capabilities(),
         locale,
     };
     if let Some(error) = startup_error {

@@ -98,7 +98,9 @@ pub fn default_models_root() -> Result<PathBuf> {
 pub fn models_root_for_base_dir(base_dir: Option<&str>) -> Result<PathBuf> {
     let trimmed = base_dir.map(str::trim).filter(|value| !value.is_empty());
     let dir = match trimmed {
-        Some(base) => PathBuf::from(base).join("OpenLess").join("models"),
+        Some(base) => PathBuf::from(base)
+            .join(crate::build_identity::DIRECTORY)
+            .join("models"),
         None => return default_models_root(),
     };
     ensure_dir(&dir)?;
@@ -304,7 +306,10 @@ mod tests {
         let root = models_root_for_base_dir(Some(tmp.to_string_lossy().as_ref()))
             .expect("build custom models root");
 
-        assert_eq!(root, tmp.join("OpenLess").join("models"));
+        assert_eq!(
+            root,
+            tmp.join(crate::build_identity::DIRECTORY).join("models")
+        );
         assert!(root.is_dir());
 
         let _ = fs::remove_dir_all(&tmp);

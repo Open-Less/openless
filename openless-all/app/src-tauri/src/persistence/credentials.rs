@@ -56,7 +56,11 @@ use anyhow::anyhow;
 
 /// Legacy plaintext JSON credentials path. Migration source only; deleted
 /// once the system credential store write succeeds.
-const LEGACY_CREDS_DIR: &str = ".openless";
+const LEGACY_CREDS_DIR: &str = if crate::build_identity::DEV {
+    ".openless-dev"
+} else {
+    ".openless"
+};
 const LEGACY_CREDS_FILE: &str = "credentials.json";
 
 const KEYRING_CREDENTIALS_ACCOUNT: &str = "credentials.v1";
@@ -3547,7 +3551,7 @@ impl CredentialsVault {
     }
 
     /// System credential store service name; maps to the Keychain service on macOS.
-    pub const SERVICE_NAME: &'static str = "com.openless.app";
+    pub const SERVICE_NAME: &'static str = crate::build_identity::BUNDLE_ID;
 
     pub(crate) fn bind_sync_gate(
         gate: std::sync::Arc<openless_core::credentials::SyncWriteGate>,

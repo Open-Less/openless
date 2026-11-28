@@ -23,7 +23,8 @@ fn check_key(key: &str) -> Result<(), SiwcError> {
 #[cfg(not(target_os = "android"))]
 fn entry(key: &str) -> Result<keyring::Entry, SiwcError> {
     check_key(key)?;
-    keyring::Entry::new("com.openless.app.siwc", key).map_err(|_| error("storage_failed"))
+    keyring::Entry::new(crate::build_identity::SIWC_SERVICE, key)
+        .map_err(|_| error("storage_failed"))
 }
 #[cfg(target_os = "android")]
 fn item_path(key: &str) -> Result<std::path::PathBuf, SiwcError> {

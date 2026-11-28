@@ -130,7 +130,7 @@ pub(crate) fn backend_dependencies(
     #[cfg(target_os = "macos")]
     {
         // File-only, idempotent retirement. Do this before Core migrates old roots.
-        if let Some(store) = &model_store {
+        if let Some(store) = model_store.as_ref().filter(|_| !crate::build_identity::DEV) {
             let mut roots = vec![store.models_root_dir()];
             if let Ok(root) = crate::persistence::default_models_root() {
                 roots.push(root);
@@ -1748,7 +1748,7 @@ impl openless_core::PlatformApi for TauriPlatformApi {
     fn capabilities(
         &self,
     ) -> BoxFuture<'static, Result<openless_core::PlatformCapabilities, BackendError>> {
-        Box::pin(async { Ok(openless_core::PlatformCapabilities::current()) })
+        Box::pin(async { Ok(crate::build_identity::platform_capabilities()) })
     }
 
     fn microphone_devices(

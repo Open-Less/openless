@@ -785,6 +785,10 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 ) -> Result<Option<AppUpdateMetadata>, String> {
     use tauri_plugin_updater::UpdaterExt;
 
+    if !crate::build_identity::UPDATES_ENABLED {
+        log::info!("[dev-update] check_disabled");
+        return Ok(None);
+    }
     let prefs = coord.backend().get_preferences();
     let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
     let check_timeout =
@@ -879,6 +883,9 @@ pub async fn app_update_github_fallback<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
     rid: tauri::ResourceId,
 ) -> Result<AppUpdateMetadata, String> {
+    if !crate::build_identity::UPDATES_ENABLED {
+        return Err("Updates are disabled for Dev builds".into());
+    }
     let resource = webview
         .resources_table()
         .get::<tauri_plugin_updater::Update>(rid)

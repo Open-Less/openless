@@ -865,7 +865,14 @@ impl LocalAsrApi for LocalAsrService {
             }
             let next_root = next
                 .as_ref()
-                .map(|path| path.join("OpenLess").join("models"))
+                .map(|path| {
+                    let namespace = if cfg!(all(feature = "dev-build", target_os = "macos")) {
+                        "OpenLess Dev"
+                    } else {
+                        "OpenLess"
+                    };
+                    path.join(namespace).join("models")
+                })
                 .unwrap_or(default_models_root);
             let previous_root = model_store.models_root_dir();
             model_store.cancel_all_downloads_and_wait().await?;

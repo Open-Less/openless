@@ -190,6 +190,7 @@ window-vibrancy = "0.7"
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 issue-1266-diagnostics = []
+dev-build = ["openless-core/dev-build"]
 
 [profile.release]
 # 之前没有 [profile.release] —— 发布版走 Cargo 默认（无 LTO、不 strip、

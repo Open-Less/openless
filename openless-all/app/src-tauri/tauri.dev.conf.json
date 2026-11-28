@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenLess Dev",
+  "identifier": "com.openless.app.dev",
+  "version": "2.0.3-Dev.1",
+  "build": {
+    "beforeBuildCommand": "npx --no-install tsc && npx --no-install vite build"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "dmg": {
+        "background": null,
+        "windowPosition": null,
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 }
+      }
+    }
+  },
+  "plugins": { "updater": { "endpoints": [] } }
+}
