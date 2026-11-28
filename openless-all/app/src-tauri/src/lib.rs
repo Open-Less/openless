@@ -2180,20 +2180,7 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 fn main_window_frame_ready(window: tauri::WebviewWindow) {
     if window.label() == "main" {
         desktop_resources::main_frame_ready(&window);
-        if build_identity::DEV {
-            let ready = window
-                .app_handle()
-                .try_state::<Arc<openless_core::OpenLessBackend>>()
-                .is_some_and(|backend| backend.ensure_runtime_ready().is_ok());
-            if ready {
-                log::info!("[dev-ready] version={} source={} updater_enabled={} data={} keychain={} siwc={}",
-                    window.app_handle().package_info().version,
-                    option_env!("OPENLESS_BUILD_ID").unwrap_or("unknown"),
-                    build_identity::UPDATES_ENABLED,
-                    persistence::data_dir().map(|p| p.display().to_string()).unwrap_or_default(),
-                    build_identity::BUNDLE_ID, build_identity::SIWC_SERVICE);
-            }
-        }
+
     }
 }
 

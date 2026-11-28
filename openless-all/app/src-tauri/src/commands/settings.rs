@@ -786,7 +786,6 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
     use tauri_plugin_updater::UpdaterExt;
 
     if !crate::build_identity::UPDATES_ENABLED {
-        log::info!("[dev-update] check_disabled");
         return Ok(None);
     }
     let prefs = coord.backend().get_preferences();

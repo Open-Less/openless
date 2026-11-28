@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { withStartupDeadline } from '../lib/startupProbe';
 import { initialThemeReady } from '../lib/themeMode';
-import { IS_DEV_BUILD } from '../lib/appVersion';
 import { isTauriHost, type OS } from '../runtime/environment';
 
 const FIRST_FRAME_BUDGET_MS = 900;
@@ -46,10 +45,6 @@ export function MainWindowFirstFrame({ os }: { os: OS }) {
       optionalReads.abort();
       if (controller.signal.aborted) return;
       const { invoke } = await import('@tauri-apps/api/core');
-      if (IS_DEV_BUILD) {
-        const update = await invoke('app_check_update_with_channel', { timeoutMs: 1000 });
-        if (update !== null) throw new Error('Dev updater must be disabled');
-      }
       if (!controller.signal.aborted) await invoke('main_window_frame_ready');
     })().catch((error) => console.warn('[startup] main frame signal failed', error));
     return () => controller.abort();

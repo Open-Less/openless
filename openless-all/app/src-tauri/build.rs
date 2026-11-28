@@ -2,7 +2,6 @@
 mod build_target;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=OPENLESS_BUILD_ID");
     // In build.rs, `#[cfg(target_os)]` tests the build-script host, not
     // Cargo's target platform. Prefer Cargo's target OS; fall back to parsing
     // TARGET for old toolchains missing the variable, so cross-compiling

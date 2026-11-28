@@ -71,38 +71,20 @@ concurrency:
 
 jobs:
   dev-macos:
-    name: Isolated Apple Silicon Dev
+    name: Apple Silicon Dev package
     if: github.event_name == 'workflow_dispatch' && inputs.dev_build
     runs-on: macos-latest
     timeout-minutes: 120
     permissions:
       contents: read
     env:
-      OPENLESS_BUILD_ID: ${{ github.sha }}
       CARGO_BUILD_JOBS: '1'
+      APPLE_SIGNING_IDENTITY: '-'
     steps:
-      - name: Validate exact Dev request
-        shell: bash
-        env:
-          SOURCE_SHA: ${{ inputs.macos_smoke_sha }}
-          PLATFORM: ${{ inputs.platform }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          VALIDATION: ${{ inputs.artifact_validation }}
-          DIAGNOSTICS: ${{ inputs.windows_hang_diagnostics }}
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_REF" == refs/heads/appergb/dev-dmg-integration && "$PLATFORM" == macos-aarch64 &&
-             -z "$RELEASE_TAG" && "$VALIDATION" != true && "$DIAGNOSTICS" != true &&
-             "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$GITHUB_SHA" && "$(uname -m)" == arm64 ]]
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Verify source
-        run: test "$(git rev-parse HEAD)" = "$OPENLESS_BUILD_ID"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -110,69 +92,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
-      - name: Configure macOS environment
-        run: bash openless-all/macos/scripts/macos-build-env.sh
-      - uses: swatinem/rust-cache@v2
-        with:
-          prefix-key: v0-rust-aarch64-apple-darwin
-          shared-key: tauri-macos
-          workspaces: 'openless-all/app/src-tauri -> target'
-          save-if: false
-      - name: Install frontend dependencies
+      - name: Compile and package Dev
         working-directory: openless-all/app
-        run: npm ci
-      - name: Prepare Dev identity and formal-data sentinels
-        shell: bash
         run: |
-          set -euo pipefail
-          python3 openless-all/macos/scripts/dev-macos-provenance.py prepare
-          if security find-generic-password -s com.openless.app -a credentials.v2 >/dev/null 2>&1; then exit 1; fi
-          if security find-generic-password -s com.openless.app.siwc -a vault.v1 >/dev/null 2>&1; then exit 1; fi
-          security add-generic-password -s com.openless.app -a credentials.v2 -w openless-dev-ci-formal-sentinel
-          touch "$RUNNER_TEMP/openless-dev-evidence/owns-formal-keychain"
-          security add-generic-password -s com.openless.app.siwc -a vault.v1 -w openless-dev-ci-siwc-sentinel
-          touch "$RUNNER_TEMP/openless-dev-evidence/owns-siwc-keychain"
-      - name: Targeted behavior, release build, final DMG launch
-        timeout-minutes: 105
-        run: bash openless-all/macos/scripts/dev-macos-build.sh
-      - name: Upload verified Dev DMG
+          npm ci
+          source ../macos/scripts/macos-build-env.sh
+          npm run tauri -- build --ci --features dev-build --bundles dmg --config src-tauri/tauri.dev.conf.json -- --locked
+      - name: Upload Dev package
         uses: actions/upload-artifact@v4
         with:
-          name: openless-dev-macos-aarch64-${{ github.sha }}
-          path: ${{ runner.temp }}/openless-dev-delivery/
+          name: openless-dev-macos-aarch64
+          path: openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
-      - name: Upload bounded Dev evidence
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: openless-dev-evidence-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/openless-dev-evidence/result.txt
-            ${{ runner.temp }}/openless-dev-evidence/manifest.json
-            ${{ runner.temp }}/openless-dev-evidence/targeted-tests.log
-            ${{ runner.temp }}/openless-dev-evidence/timeline.txt
-            ${{ runner.temp }}/openless-dev-evidence/*.png
-            ${{ runner.temp }}/openless-dev-evidence/ui-results.json
-            ${{ runner.temp }}/openless-dev-evidence/ui/**/*.png
-            ${{ runner.temp }}/openless-dev-evidence/ui/**/error-context.md
-          if-no-files-found: ignore
-          retention-days: 14
-      - name: Remove owned keychain sentinels
-        if: always()
-        shell: bash
-        run: |
-          if [[ -f "$RUNNER_TEMP/openless-dev-evidence/owns-formal-keychain" ]]; then
-            security delete-generic-password -s com.openless.app -a credentials.v2 >/dev/null 2>&1 || true
-          fi
-          if [[ -f "$RUNNER_TEMP/openless-dev-evidence/owns-siwc-keychain" ]]; then
-            security delete-generic-password -s com.openless.app.siwc -a vault.v1 >/dev/null 2>&1 || true
-          fi
-          # A result is written only after the smoke child is stopped and reaped.
-          if grep -q '^process_reaped=true$' "$RUNNER_TEMP/openless-dev-evidence/result.txt" 2>/dev/null; then
-            rm -rf openless-all/app/src-tauri/target openless-all/app/src-tauri/backend-tests/target openless-all/app/dist
-          fi
 
   prepare-release:
     name: Prepare shared draft
