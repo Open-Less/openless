@@ -21,7 +21,7 @@ test('history rows and detail views recover complete originals and results', asy
 
   await expect(history.getByRole('checkbox')).toHaveCount(0);
   await expect(history.getByRole('button', { name: '复制所选原文' })).toHaveCount(0);
-  await history.getByRole('button', { name: /润色 ·/ }).click();
+  await history.getByRole('button', { name: /^选区润色/ }).click();
   await history.locator('.ol-history-copy-btn').click();
   await expect.poll(() => page.evaluate(() => (window as any).startupFixture.copiedTexts[1]))
     .toEqual(await page.evaluate(() => (window as any).startupFixture.results[0]));

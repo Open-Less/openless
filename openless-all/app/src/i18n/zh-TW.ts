@@ -748,6 +748,10 @@ export const zhTW: typeof zhCN = {
     },
   },
   history: {
+    selectionPolish: '選取範圍潤色',
+    selectionPolishStyle: '選取範圍潤色：{{style}}',
+    selectionVoiceEdit: '選取範圍語音編輯',
+    voiceEdit: '語音編輯',
     exportError: '匯出錄音失敗，請重試。',
     kicker: 'HISTORY',
     title: '歷史記錄',

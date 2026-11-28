@@ -32,13 +32,21 @@ export const TRUNCATED_PILL_STYLE = {
 // packDisplayName; old history without stylePackId, or a deleted pack, falls back to the mode
 // name too.
 export function styleLabelFor(
-  session: DictationSession,
+  session: Pick<DictationSession, 'source' | 'stylePackId' | 'mode'>,
   allPacks: StylePack[] | null,
   modeLabel: Record<PolishMode, string>,
+  t: ReturnType<typeof useTranslation>['t'],
 ): string {
   const pack = session.stylePackId
     ? allPacks?.find((candidate) => candidate.id === session.stylePackId)
     : undefined;
+  if (session.source === 'selection_polish') {
+    return pack
+      ? t('history.selectionPolishStyle', { style: packDisplayName(pack, modeLabel) })
+      : t('history.selectionPolish');
+  }
+  if (session.source === 'selection_voice_edit') return t('history.selectionVoiceEdit');
+  if (session.source === 'voice_edit') return t('history.voiceEdit');
   return pack ? packDisplayName(pack, modeLabel) : modeLabel[session.mode];
 }
 

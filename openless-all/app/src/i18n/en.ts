@@ -788,6 +788,10 @@ export const en: typeof zhCN = {
     },
   },
   history: {
+    selectionPolish: 'Selection polish',
+    selectionPolishStyle: 'Selection polish: {{style}}',
+    selectionVoiceEdit: 'Selection voice edit',
+    voiceEdit: 'Voice edit',
     exportError: 'Failed to export the recording. Please try again.',
     kicker: 'HISTORY',
     title: 'History',

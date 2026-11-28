@@ -91,7 +91,9 @@ export function HistoryDetail({
   const activeCopied = showingRaw ? justCopiedRaw : justCopied;
   const hasAsr = Boolean(item.asrProvider || item.asrMs != null);
   const hasPolish = Boolean(item.llmProvider || item.llmModel || item.polishMs != null);
-  const polishSummaryLabel = `${t('history.stepPolish')} · ${styleLabel(item)}`;
+  const polishSummaryLabel = ['selection_polish', 'selection_voice_edit', 'voice_edit'].includes(item.source ?? '')
+    ? styleLabel(item)
+    : `${t('history.stepPolish')} · ${styleLabel(item)}`;
 
   useLayoutEffect(() => {
     if (contentScroll.current) contentScroll.current.scrollTop = 0;

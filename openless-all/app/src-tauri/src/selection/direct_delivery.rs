@@ -1,5 +1,5 @@
-//! Selection delivery never uses paste. A native failure is the only path that
-//! may replace the protected original on the clipboard.
+//! Native delivery first; macOS may recover through one guarded paste only when
+//! the complete original still occupies the frozen selection.
 
 use openless_core::{BackendError, BackendErrorCode, InsertOutcome};
 
@@ -38,5 +38,31 @@ pub(crate) fn deliver<T, E>(
     match direct() {
         Ok(outcome) => Ok(outcome),
         Err(error) => fallback(error),
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn recover_with_paste(
+    error: BackendError,
+    confirmed: impl FnOnce() -> bool,
+    paste: impl FnOnce() -> crate::types::InsertStatus,
+    fallback: impl FnOnce() -> Result<InsertOutcome, BackendError>,
+) -> Result<InsertOutcome, BackendError> {
+    use crate::types::InsertStatus;
+    if error.code == BackendErrorCode::OutcomeUnknown && confirmed() {
+        return Ok(InsertOutcome::Inserted);
+    }
+    match paste() {
+        InsertStatus::Inserted => Ok(InsertOutcome::Inserted),
+        InsertStatus::CopiedFallback => Ok(InsertOutcome::CopiedFallback),
+        InsertStatus::PasteSent => {
+            // Dispatch is not completion. Never retry an unconfirmed paste;
+            // retain its result on the clipboard and settle the session.
+            fallback_result(
+                BackendError::new(BackendErrorCode::OutcomeUnknown, "selectionPolishWriteUnconfirmed"),
+                Ok(InsertOutcome::CopiedFallback),
+            )
+        }
+        _ => fallback_result(error, fallback()),
     }
 }

@@ -3,6 +3,13 @@
 #![allow(dead_code)]
 #[path = "../../src/selection/bound_native.rs"]
 mod bound_native;
+mod types {
+    pub use openless_core::shared_types::InsertStatus;
+}
+#[path = "../../src/insertion/clipboard_delivery.rs"]
+mod clipboard_delivery;
+#[path = "../../src/selection/direct_delivery.rs"]
+mod direct_delivery;
 use bound_native::{Binding, Failure, Native, TextRange};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -20,6 +27,7 @@ struct Desktop {
     switch_during_gate: Cell<bool>,
     switch_after_submit: Cell<bool>,
     submit_error_after_write: Cell<bool>,
+    submit_noop: Cell<bool>,
     reads: RefCell<Vec<u32>>,
     writes: RefCell<Vec<u32>>,
     focus_trace: RefCell<Vec<u32>>,
@@ -47,6 +55,7 @@ impl Desktop {
                 switch_during_gate: Cell::new(false),
                 switch_after_submit: Cell::new(false),
                 submit_error_after_write: Cell::new(false),
+                submit_noop: Cell::new(false),
                 reads: RefCell::new(Vec::new()),
                 writes: RefCell::new(Vec::new()),
                 focus_trace: RefCell::new(vec![1]),
@@ -98,6 +107,7 @@ impl Native for Desktop {
     }
     fn submit(&self, control: &u32, replacement: &str) -> Result<(), Failure> {
         self.writes.borrow_mut().push(*control);
+        if self.submit_noop.get() { return Err(Failure::WriteUnconfirmed); }
         let mut fields = self.fields.borrow_mut();
         let field = fields.get_mut(control).unwrap();
         let replacement: Vec<u16> = replacement.encode_utf16().collect();
@@ -210,4 +220,143 @@ fn unexpected_cf_type_and_non_range_axvalue_never_reach_the_range_decoder() {
         assert_eq!(decode_calls.get(), usize::from(is_ax_value && is_range));
         assert_eq!(result.is_some(), is_ax_value && is_range);
     }
+}
+
+struct RecoveryClipboard<'a> {
+    desktop: &'a Desktop,
+    text: String,
+    revision: u64,
+    writes: Vec<String>,
+    pastes: usize,
+    accept_paste: bool,
+}
+
+impl clipboard_delivery::ClipboardDelivery for RecoveryClipboard<'_> {
+    fn text(&mut self) -> Result<Option<String>, String> { Ok(Some(self.text.clone())) }
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        self.text = text.into();
+        self.revision += 1;
+        self.writes.push(text.into());
+        Ok(())
+    }
+    fn sequence(&self) -> Option<u64> { Some(self.revision) }
+    fn paste(&mut self) -> Result<(), clipboard_delivery::DispatchError> {
+        self.pastes += 1;
+        if self.accept_paste {
+            self.desktop.submit_noop.set(false);
+            self.desktop.submit(&1, &self.text).unwrap();
+        }
+        Ok(())
+    }
+    fn wait_for_consumption(&mut self) {}
+}
+
+fn recover(
+    desktop: &Desktop,
+    binding: &Binding<u32, u32>,
+    original: &str,
+    clipboard: &RefCell<RecoveryClipboard<'_>>,
+) -> Result<openless_core::InsertOutcome, openless_core::BackendError> {
+    use openless_core::{BackendError, BackendErrorCode, InsertOutcome};
+    direct_delivery::deliver(
+        || direct_delivery::native_result(
+            bound_native::replace(desktop, binding, original, "replacement😀")
+                .map_err(|failure| failure.message().into()),
+        ),
+        |error| direct_delivery::recover_with_paste(
+            error,
+            || bound_native::confirm_replacement(desktop, binding, "replacement😀").is_ok(),
+            || clipboard_delivery::insert_with_confirmation(
+                &mut *clipboard.borrow_mut(), "replacement😀", false, Some(1),
+                || bound_native::verify(desktop, binding, original).is_ok(),
+                Some(|| bound_native::confirm_replacement(desktop, binding, "replacement😀").is_ok()),
+            ),
+            || {
+                let copied = clipboard_delivery::copy_if_current_with(
+                    &mut *clipboard.borrow_mut(), "replacement😀", Some(1), || true,
+                ).unwrap();
+                if copied { Ok(InsertOutcome::CopiedFallback) }
+                else { Err(BackendError::new(BackendErrorCode::InvalidState, "selectionResultInHistory")) }
+            },
+        ),
+    )
+}
+
+#[test]
+fn unconfirmed_ax_noop_recovers_with_one_guarded_paste_and_no_post_success_copy() {
+    let (desktop, binding, original) = Desktop::fixture();
+    desktop.submit_noop.set(true);
+    let clipboard = RefCell::new(RecoveryClipboard {
+        desktop: &desktop, text: original.clone(), revision: 1,
+        writes: Vec::new(), pastes: 0, accept_paste: true,
+    });
+    assert_eq!(recover(&desktop, &binding, &original, &clipboard).unwrap(), openless_core::InsertOutcome::Inserted);
+    let clipboard = clipboard.borrow();
+    assert_eq!(clipboard.pastes, 1);
+    assert_eq!(clipboard.writes, ["replacement😀"]);
+    assert_eq!(String::from_utf16(&desktop.fields.borrow()[&1].text).unwrap(), "前replacement😀后");
+    assert!(String::from_utf16(&desktop.fields.borrow()[&2].text).unwrap().contains(&original));
+}
+
+#[test]
+fn ax_already_wrote_despite_setter_error_is_confirmed_without_duplicate_paste_or_copy() {
+    let (desktop, binding, original) = Desktop::fixture();
+    desktop.submit_error_after_write.set(true);
+    let clipboard = RefCell::new(RecoveryClipboard {
+        desktop: &desktop, text: original.clone(), revision: 1,
+        writes: Vec::new(), pastes: 0, accept_paste: true,
+    });
+    assert_eq!(recover(&desktop, &binding, &original, &clipboard).unwrap(), openless_core::InsertOutcome::Inserted);
+    assert_eq!(clipboard.borrow().pastes, 0);
+    assert!(clipboard.borrow().writes.is_empty());
+    assert_eq!(*desktop.writes.borrow(), [1]);
+}
+
+#[test]
+fn changed_focus_or_window_copies_result_without_native_write_or_paste() {
+    for changed_window in [false, true] {
+        let (desktop, mut binding, original) = Desktop::fixture();
+        if changed_window { binding.window = 20; } else { desktop.focus.set(2); }
+        let clipboard = RefCell::new(RecoveryClipboard {
+            desktop: &desktop, text: original.clone(), revision: 1,
+            writes: Vec::new(), pastes: 0, accept_paste: true,
+        });
+        assert_eq!(recover(&desktop, &binding, &original, &clipboard).unwrap(), openless_core::InsertOutcome::CopiedFallback);
+        assert!(desktop.writes.borrow().is_empty());
+        assert_eq!(clipboard.borrow().pastes, 0);
+        assert_eq!(clipboard.borrow().writes, ["replacement😀"]);
+    }
+}
+
+#[test]
+fn unconfirmed_paste_retains_result_reports_unknown_and_never_retries() {
+    let (desktop, binding, original) = Desktop::fixture();
+    desktop.submit_noop.set(true);
+    let clipboard = RefCell::new(RecoveryClipboard {
+        desktop: &desktop, text: original.clone(), revision: 1,
+        writes: Vec::new(), pastes: 0, accept_paste: false,
+    });
+    let error = recover(&desktop, &binding, &original, &clipboard).unwrap_err();
+    assert_eq!(error.code, openless_core::BackendErrorCode::OutcomeUnknown);
+    assert_eq!(error.message, "selectionPolishWriteUnconfirmed");
+    assert_eq!(error.details.unwrap()["result_copied"], true);
+    assert_eq!(clipboard.borrow().pastes, 1);
+    assert_eq!(clipboard.borrow().writes, ["replacement😀"]);
+    assert_eq!(*desktop.writes.borrow(), [1], "only the original AX attempt was made");
+}
+
+#[test]
+fn recovery_respects_a_newer_user_clipboard_revision() {
+    let (desktop, binding, original) = Desktop::fixture();
+    desktop.submit_noop.set(true);
+    let clipboard = RefCell::new(RecoveryClipboard {
+        desktop: &desktop, text: "user copy".into(), revision: 2,
+        writes: Vec::new(), pastes: 0, accept_paste: true,
+    });
+    let error = recover(&desktop, &binding, &original, &clipboard).unwrap_err();
+    assert_eq!(error.code, openless_core::BackendErrorCode::OutcomeUnknown);
+    assert_eq!(error.details.unwrap()["result_copied"], false);
+    assert_eq!(clipboard.borrow().text, "user copy");
+    assert_eq!(clipboard.borrow().pastes, 0);
+    assert!(clipboard.borrow().writes.is_empty());
 }

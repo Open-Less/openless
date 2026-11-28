@@ -139,6 +139,9 @@ pub(crate) fn replace_selection_direct(
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) use macos::{selection_paste_is_safe, selection_replacement_confirmed};
+
 /// Restore the original app, compare the exact control, full text and selection, then write.
 /// The inserter must recheck the prepared target predicate after acquiring the delivery gate.
 /// Call only on the blocking native insertion thread.

@@ -80,6 +80,27 @@ impl TextInserter {
     }
 
     /// Borrow the clipboard through dispatch, the consumption window and optional restore.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn insert_selection_guarded(
+        &self,
+        text: &str,
+        expected_clipboard: Option<u64>,
+        still_current: impl FnMut() -> bool,
+        confirm: impl FnOnce() -> bool,
+    ) -> InsertStatus {
+        let mut clipboard = match NativeClipboardDelivery::new(PasteShortcut::CtrlV) {
+            Ok(clipboard) => clipboard,
+            Err(_) => return InsertStatus::Failed,
+        };
+        // Successful selection delivery leaves the clipboard alone after paste;
+        // the protected original is already durable in history. An uncertain
+        // dispatch retains the result and must never be retried automatically.
+        clipboard_delivery::insert_with_confirmation(
+            &mut clipboard, text, false, expected_clipboard, still_current, Some(confirm),
+        )
+    }
+
+    /// Borrow the clipboard through dispatch, the consumption window and optional restore.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) fn insert_guarded(
         &self,

@@ -747,6 +747,10 @@ export const zhCN = {
     },
   },
   history: {
+    selectionPolish: '选区润色',
+    selectionPolishStyle: '选区润色：{{style}}',
+    selectionVoiceEdit: '选区语音编辑',
+    voiceEdit: '语音编辑',
     exportError: '导出录音失败，请重试。',
     kicker: '历史记录',
     title: '历史记录',

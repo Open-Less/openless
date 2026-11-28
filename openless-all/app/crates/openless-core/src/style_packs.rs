@@ -116,7 +116,7 @@ pub struct StylePack {
     pub version: String,
     pub kind: StylePackKind,
     pub base_mode: PolishMode,
-    /// Separate prompt for written selection polish. Empty when older style packs lack the field; the runtime falls back to a safe default.
+    /// Separate selection prompt. Legacy/custom packs fall back to their authored prompt.
     pub selection_prompt: String,
     /// Selection voice editing EditPlan system prompt. Empty = fall back to user prefs / built-in default (issue #1076).
     #[serde(default)]
@@ -154,7 +154,11 @@ pub fn style_pack_prompt(pack: &StylePack, kind: StylePromptKind) -> String {
         StylePromptKind::DictationAsr => pack.prompt.clone(),
         StylePromptKind::Selection => {
             if pack.selection_prompt.trim().is_empty() {
-                default_selection_polish_style_prompt_for_mode(pack.base_mode)
+                if !pack.prompt.trim().is_empty() {
+                    pack.prompt.clone()
+                } else {
+                    default_selection_polish_style_prompt_for_mode(pack.base_mode)
+                }
             } else {
                 pack.selection_prompt.clone()
             }
@@ -1165,8 +1169,12 @@ pub(crate) fn legacy_structured_prompt() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_style_pack_runtime_diagnostics, StylePack};
+    use super::{
+        build_style_pack_runtime_diagnostics, default_selection_polish_style_prompt_for_mode,
+        style_pack_prompt, StylePack, StylePackKind, StylePromptKind,
+    };
     use crate::shared_types::UserPreferences;
+    use crate::types::PolishMode;
 
     #[test]
     fn runtime_diagnostics_use_the_core_prompt_composer() {
@@ -1191,5 +1199,25 @@ mod tests {
         );
         assert!(diagnostics.single_turn_prompt.contains("OpenLess"));
         assert!(diagnostics.preview_omits_front_app);
+    }
+
+    #[test]
+    fn selection_prompt_preserves_explicit_and_legacy_imported_authorship() {
+        let mut pack: StylePack = serde_json::from_value(serde_json::json!({
+            "name": "Legacy imported", "kind": "imported", "prompt": "AUTHORED STYLE",
+            "baseMode": "light"
+        })).unwrap();
+        assert!(pack.selection_prompt.is_empty());
+        assert_eq!(style_pack_prompt(&pack, StylePromptKind::Selection), "AUTHORED STYLE");
+        pack.selection_prompt = "SELECTION ONLY".into();
+        assert_eq!(style_pack_prompt(&pack, StylePromptKind::Selection), "SELECTION ONLY");
+        assert_eq!(style_pack_prompt(&pack, StylePromptKind::DictationAsr), "AUTHORED STYLE");
+        pack.selection_prompt = " \n ".into();
+        pack.prompt.clear();
+        assert_eq!(style_pack_prompt(&pack, StylePromptKind::Selection),
+            default_selection_polish_style_prompt_for_mode(PolishMode::Light));
+        pack.kind = StylePackKind::Builtin;
+        pack.prompt = "DICTATION ONLY".into();
+        assert_eq!(style_pack_prompt(&pack, StylePromptKind::Selection), "DICTATION ONLY");
     }
 }

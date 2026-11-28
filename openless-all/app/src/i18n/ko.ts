@@ -768,6 +768,10 @@ export const ko: typeof zhCN = {
     },
   },
   history: {
+    selectionPolish: '선택 영역 다듬기',
+    selectionPolishStyle: '선택 영역 다듬기: {{style}}',
+    selectionVoiceEdit: '선택 영역 음성 편집',
+    voiceEdit: '음성 편집',
     exportError: '녹음을 내보내지 못했습니다. 다시 시도해 주세요.',
     kicker: '기록',
     title: '기록',

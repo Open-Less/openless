@@ -577,9 +577,10 @@ pub(crate) fn selection_result_fallback(
 
 #[path = "selection/recovery_notice.rs"]
 mod recovery_notice;
-pub(crate) use recovery_notice::{capacity_failure_message, original_recovery_message, uncertain_write_message};
+pub(crate) use recovery_notice::{capacity_failure_message, no_selection_message, original_recovery_message, uncertain_write_message};
 
-/// Final native handoff. Successful selection writes never touch the clipboard.
+/// Native handoff, followed on macOS by at most one paste into the still-bound
+/// original selection. No clipboard changes follow a confirmed replacement.
 pub(crate) fn insert_selection_result(
     target: &SelectionInsertionTarget,
     source_text: &str,
@@ -597,7 +598,27 @@ pub(crate) fn insert_selection_result(
                 target,
             ))
         },
-        |error| direct_delivery::fallback_result(error, selection_result_fallback(target, text)),
+        |error| {
+            #[cfg(target_os = "macos")]
+            {
+                direct_delivery::recover_with_paste(
+                    error,
+                    || crate::host_document::selection_replacement_confirmed(target, text),
+                    || {
+                        let expected = *target.original_clipboard.lock();
+                        crate::insertion::TextInserter::new().insert_selection_guarded(
+                            text,
+                            expected,
+                            || crate::host_document::selection_paste_is_safe(target, source_text),
+                            || crate::host_document::selection_replacement_confirmed(target, text),
+                        )
+                    },
+                    || selection_result_fallback(target, text),
+                )
+            }
+            #[cfg(not(target_os = "macos"))]
+            direct_delivery::fallback_result(error, selection_result_fallback(target, text))
+        },
     )
 }
 

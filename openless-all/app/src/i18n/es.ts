@@ -797,6 +797,10 @@ export const es: typeof zhCN = {
     },
   },
   history: {
+    selectionPolish: 'Pulir selección',
+    selectionPolishStyle: 'Pulir selección: {{style}}',
+    selectionVoiceEdit: 'Edición por voz de la selección',
+    voiceEdit: 'Edición por voz',
     exportError: 'No se pudo exportar la grabación. Inténtalo de nuevo.',
     kicker: 'HISTORIAL',
     title: 'Historial',
