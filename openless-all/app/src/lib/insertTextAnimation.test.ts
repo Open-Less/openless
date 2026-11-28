@@ -261,9 +261,13 @@ assertEqual(
 const correctionSource = 'a'.repeat(40) + 'weather today';
 let correctionUnits = diffInsertWindowUnits([], correctionSource, { maxUnits: 20 });
 const stableTailKey = correctionUnits[correctionUnits.length - 1]?.key;
-  correctionUnits = diffInsertWindowUnits(correctionUnits, correctionSource.replace('weather', 'whether'), {
-  maxUnits: 20,
-});
+correctionUnits = diffInsertWindowUnits(
+  correctionUnits,
+  correctionSource.replace('weather', 'whether'),
+  {
+    maxUnits: 20,
+  },
+);
 assertEqual(
   correctionUnits[correctionUnits.length - 1]?.key,
   stableTailKey,

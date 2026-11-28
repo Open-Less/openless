@@ -59,6 +59,12 @@ export function appCheckUpdateWithChannel(
   });
 }
 
+export function appUpdateGithubFallback(rid: number): Promise<AppUpdateMetadata> {
+  return invokeOrMock('app_update_github_fallback', { rid }, () => {
+    throw new Error('Desktop update fallback requires Tauri');
+  });
+}
+
 export function appDownloadAndInstallAndroidUpdate(args: {
   url: string;
   signature: string;

@@ -1,52 +1,58 @@
-# OpenLess 移动端 Rime
+# OpenLess Mobile Rime
 
-Android 和鸿蒙直接链接 librime 1.17.0，共用本目录 C ABI 会话实现；不依赖 Fcitx / Fcitx5。Linux 现有插件不在本次迁移范围。
+[English](README.md) | [简体中文](README.zh.md)
 
-`rime_engine.cpp` 提供初始化、创建会话、按键、候选选择、确认、读取状态、取消、提交确认和销毁。原生客户端对象不跨平台传递。待提交文本保留至平台写入成功后 ack；重试或取消由宿主处理。密码框不进入中文路径，禁用学习时使用 `enable_user_dict: false` 的独立拼音方案。
+Android and HarmonyOS link directly against librime 1.17.0 and share the C ABI session implementation in this directory; they do not depend on Fcitx / Fcitx5. The existing Linux plugins are out of scope for this migration.
 
-鸿蒙通过 `libopenless_harmony.so` 的 `rimeAsync` 在工作线程调用 C ABI；Android 通过 `libopenless_rime.so` 的 JNI 调用。两端都保留各自原生 IME 生命周期及文本提交接口。
+`rime_engine.cpp` provides initialization, session creation, key events, candidate selection, confirmation, state reading, cancellation, commit acknowledgment, and destruction. Native client objects are not passed across platforms. Pending commit text is retained until the platform acknowledges a successful write; retries or cancellation are handled by the host. Password fields never enter the Chinese path, and when learning is disabled a separate pinyin scheme with `enable_user_dict: false` is used.
 
-构建使用 `scripts/build-mobile-rime.py`，依赖、词库、编译产物在 `/data-win/openless-cache/mobile-rime`，可通过 `OPENLESS_CACHE_ROOT` 覆盖。引擎版本和输入资源修订固定在脚本中；开发构建不下载个人词库或上传按键数据。
+HarmonyOS calls the C ABI from a worker thread through `rimeAsync` in `libopenless_harmony.so`; Android calls it through JNI in `libopenless_rime.so`. Both keep their own native IME lifecycle and text commit interfaces.
 
-首次构建：
+Builds use `scripts/build-mobile-rime.py`; dependencies, dictionaries, and build outputs live in `/data-win/openless-cache/mobile-rime`, which can be overridden with `OPENLESS_CACHE_ROOT`. The engine version and input resource revision are pinned in the script; development builds neither download personal dictionaries nor upload keystroke data.
+
+First build:
 
 ```bash
 python3 scripts/build-mobile-rime.py harmony
 python3 scripts/build-mobile-rime.py android --ndk /path/to/android-ndk
 ```
 
-Android 支持 `--abi arm64-v8a|armeabi-v7a|x86|x86_64`。`--stage` 将对应 ABI 原生库、libc++ 和词库复制到已生成的 Android 工程；正常 `npm run tauri:android:build` 自动执行该步骤。
+Android supports `--abi arm64-v8a|armeabi-v7a|x86|x86_64`. `--stage` copies the native library, libc++, and dictionaries for the corresponding ABI into the generated Android project; a normal `npm run tauri:android:build` runs this step automatically.
 
-鸿蒙签名包和真机自检已通过；Android arm64 Release APK 已构建，x86_64 的真实 JNI、词库及 Android 控制器通过 CI 模拟器测试。Android 实机手感、其余 ABI 和旧学习词库迁移尚待验证。
+The HarmonyOS signed package and on-device self-checks have passed; the Android arm64 release APK has been built, and real JNI, dictionaries, and the Android controller on x86_64 pass CI emulator tests. Android real-device feel, the remaining ABIs, and migration of older learned dictionaries still need verification.
 
-当前使用官方 `pinyin_simp` 的原生处理链，接入固定修订 `da1fbe60` 的雾凇拼写规则与中文字表、基础、扩展、腾讯、杂项词库，保留上游版权和 GPL-3.0 许可。生成资源将 `cn_dicts/*` 的名称展平，避免移动资源路径差异；没有引入雾凇 Lua 日期、计算器、置顶等工具，也未打包语法模型。它不是 Linux 所有 Rime 方案与自定义词库的完整替代；更多方案、用户词库迁移和键盘体验需要逐步完善。
+The current setup uses the native processing chain of the official `pinyin_simp`, combined with the Rime Ice spelling rules pinned at revision `da1fbe60` plus Chinese character tables and the base, extended, Tencent, and miscellaneous dictionaries, retaining upstream copyright and the GPL-3.0 license. Generated resources flatten the names of `cn_dicts/*` to avoid differences in mobile resource paths; Rime Ice Lua tools such as date, calculator, and pinning are not included, and no grammar model is bundled. It is not a complete replacement for all Linux Rime schemes and custom dictionaries; more schemes, user dictionary migration, and keyboard experience still need to be improved step by step.
 
-Android 保留现有键盘布局和候选展开列表。后端通过 `candidates` 返回原生顺序的前 64 个候选，通过 `select_absolute` 按绝对索引及版本选择；鸿蒙使用 `candidates(offset@revision)` 按需读取后续最多 32 个候选，并返回 `candidateOffset` 和 `candidateHasNext`，再通过 `select_absolute` 选词。该读取直接使用 librime 候选迭代器，不翻动当前菜单页或改变高亮，确保预加载不影响空格和标点确认；旧版本的范围请求会拒绝。分页 `select` 接口仍按当前页索引工作。只读 `state` / `candidates` 不增加候选版本，避免后台刷新使可见候选失效。Android 现有展开列表仍最多显示 64 个；鸿蒙按需追加范围，直到当前拼音的候选耗尽，不代表穷举词库或增加词条。
+Android keeps the existing keyboard layout and expanded candidate list. The backend returns the first 64 candidates in native order through `candidates`, and selects by absolute index and revision through `select_absolute`; HarmonyOS uses `candidates(offset@revision)` to read up to 32 further candidates on demand, returning `candidateOffset` and `candidateHasNext`, then selects through `select_absolute`. That read uses the librime candidate iterator directly and neither flips the current menu page nor changes the highlight, ensuring preloading cannot affect space and punctuation confirmation; range requests from older revisions are rejected. The paged `select` interface still works with current-page indices. Read-only `state` / `candidates` do not bump the candidate revision, preventing background refreshes from invalidating visible candidates. The existing Android expanded list still shows at most 64 candidates; HarmonyOS appends ranges on demand until the candidates for the current pinyin are exhausted, which does not mean exhausting the dictionary or adding entries.
 
-Android 的空格、删除、回车与字母在同一个串行队列中执行，是否仍有拼音组合由执行时的 Rime 状态决定；拼音中的单引号作为音节分隔符处理。刷新键盘重新读取组合和候选。上屏失败保留待提交文字及其后的标点，成功才确认，输入会话切换则清除队列所属状态。回归测试覆盖快打后连续空格/删除/回车、首屏以外的候选选择、只读刷新、分隔符、写入失败重试及编辑器切换。
+On Android, space, backspace, Enter, and letters run in the same serial queue; dictionary import, export, and fuzzy-sound deployment also run in this queue, and nothing can be inserted between key handling and commit confirmation. The queue is shared per process, so closing one controller does not stop other controllers or dictionary tasks. Whether a pinyin composition is still active is decided by the Rime state at execution time; a single quote inside pinyin is treated as a syllable separator. Refreshing the keyboard re-reads the composition and candidates. A failed commit keeps the pending text and the punctuation that follows it, and only success confirms it; switching input sessions clears the state owned by the queue. Regression tests cover rapid typing followed by consecutive space/backspace/Enter, candidate selection beyond the first page, read-only refresh, separators, write-failure retries, editor switching, and requesting a dictionary export during commit.
 
-普通输入框使用共同的 `openless_pinyin_learning` 方案：启用 Rime 原生用户词典、组句和补全，沿用 `rime-user/pinyin_simp.userdb`，保留此前 Android 已学到的数据。鸿蒙普通输入框也使用该方案。选词调频和从分段选词学习新词均由 Rime 完成，宿主不另存完整输入历史或上传按键。会话销毁时由 Rime 提交用户词典事务，下一会话继续使用。当前未打包语法模型，因此不启用依赖该模型的上下文重新排序，也不声称已达到商业输入法的语境预测能力。
+Ordinary input fields use the shared `openless_pinyin_learning` scheme: it enables the native Rime user dictionary, sentence composition, and completion, reuses `rime-user/pinyin_simp.userdb`, and preserves the data Android has already learned. HarmonyOS also uses this scheme for ordinary input fields. Candidate frequency adjustment and learning new words from segmented selections are both done by Rime; the host does not store a separate full input history or upload keystrokes. When a session is destroyed, Rime commits the user dictionary transaction, and the next session continues from it. No grammar model is bundled yet, so context re-ranking that depends on such a model is not enabled, and we do not claim the contextual prediction ability of a commercial IME.
 
-Android 继续遵守 `IME_FLAG_NO_PERSONALIZED_LEARNING` 和密码字段策略；不学习的会话使用独立 `openless_pinyin_private` 方案，既不训练也不读取个人词典。鸿蒙密码框不创建中文会话；普通字段的本地学习在获取系统输入框属性后才启用，自检始终使用私密会话。共享资源目录升级为 `rime-shared-1.17.0-ice-da1fbe60-v1`，避免已安装应用因旧资源缓存而漏装学习方案；个人词典目录保持原位。
+Android continues to honor `IME_FLAG_NO_PERSONALIZED_LEARNING` and the password-field policy; sessions without learning use a separate `openless_pinyin_private` scheme that neither trains nor reads the personal dictionary. HarmonyOS does not create a Chinese session for password fields; local learning for ordinary fields is enabled only after the system input field attributes are obtained, and self-checks always use a private session. The shared resource directory is upgraded to `rime-shared-1.17.0-ice-da1fbe60-v1`, so installed apps do not miss the learning scheme because of stale resource caches; the personal dictionary directory stays in place.
 
-旧 Android LitePinyin 算法及内置 TSV 已删除；旧备份格式只保留一个不参与输入的兼容适配器。
+The legacy Android LitePinyin algorithm, the built-in TSV, and its backup adapter have all been removed; the `pinyinLearnedPhrases` field in the migration file is kept for format compatibility but is always empty and is ignored on import.
 
-可评估的上游扩展（当前未启用）：[librime-predict](https://github.com/rime/librime-predict) 提供下一个词预测，需额外预测数据；[librime-lua](https://github.com/hchunhui/librime-lua) 用于复用成熟方案脚本；[librime-octagram](https://github.com/lotem/librime-octagram) 及其模型可用于语法加权。扩展与数据需分别验证 OHOS / Android 构建、版本兼容及安装体积，不自行实现平行算法。当前个人学习直接使用 librime 原生用户词典。
+User dictionary and fuzzy sounds: `user_dict_export` / `user_dict_import` read and write a text snapshot of `pinyin_simp` (`.userdb.txt`) through the librime levers `backup_user_dict` / `restore_user_dict`; import merges, taking the larger use count and weight for the same entry. `redeploy` redeploys both pinyin schemes after changes to `rime-user/<方案>.custom.yaml`. All three first destroy every session (committing the user dictionary transaction and releasing the database lock), so callers must recreate sessions. Android offers export / import and a fuzzy-sound toggle in keyboard settings; these do not enter the migration file or encrypted sync. `rime_levers_api.h` is copied verbatim from librime 1.17.0 because its install step only exports `rime_api.h`.
 
-## 云候选
+Android keyboard import first validates and normalizes the snapshot: it rejects the `# no comment` directive, duplicate dictionary name/type headers, and ambiguous use counts, keeping only entries with a positive use count plus metadata. Native restore still preserves Rime's sync deletion semantics, but keyboard import never applies deletion markers from the file to local entries. Export checkboxes are saved with the Activity state; if no valid checkboxes are restored, the user must select again and the app must not export everything automatically.
 
-初次核对时，本机默认是开启云拼音的 libime；2026-10-18 再次核对时已改为 Rime / 雾凇，且额外启用万象 LTS 语法模型。移动端保留 librime；两端通过 `openless-core::ime_cloud` 使用 Fcitx5 默认的 GoogleCN 拼音协议。参考来源：[Fcitx5 cloudpinyin](https://github.com/fcitx/fcitx5-chinese-addons/tree/master/modules/cloudpinyin)。仅发送当前 2–64 字节的小写拼音及分隔符，不发送上下文、账号或个人词典，不记录查询或响应内容。没有可用性承诺；失败返回空候选，离线 Rime 不等待网络。
+Upstream extensions worth evaluating (currently disabled): [librime-predict](https://github.com/rime/librime-predict) provides next-word prediction and needs additional prediction data; [librime-lua](https://github.com/hchunhui/librime-lua) is for reusing mature scheme scripts; [librime-octagram](https://github.com/lotem/librime-octagram) and its model can be used for grammar weighting. Each extension and dataset must be validated separately for OHOS / Android builds, version compatibility, and install size, and no parallel algorithms are implemented here. Personal learning currently uses the native librime user dictionary directly.
 
-默认关闭。鸿蒙在键盘工具中显示 Google 来源和发送说明，Android 在键盘设置中提供相同说明和开关。密码框、属性未知/私密输入及 Android 禁止个性化学习字段不查询。180 毫秒防抖、1.2 秒网络超时、64 KiB 响应上限；每次输入/切框均验证版本，旧结果不得显示或提交。开启开关后，首选本地候选保留，去重的云候选从第二位开始补充。
+## Cloud candidates
 
-云候选选中后通过共用 `external` 请求携带候选版本，保留待提交文字至宿主 ack；不直接学习为 Rime 用户词条。它不属于原生词典的选词调频，不能声称云候选已自动训练到本地。已有 Rime 用户词典路径和名称保持不变，旧 LitePinyin 数据仍未迁移。
+At the first check, this machine defaulted to libime with cloud pinyin enabled; at the re-check on 2026-10-18 it had been switched to Rime / Rime Ice, with the Wanxiang LTS grammar model additionally enabled. Mobile keeps librime; both platforms use Fcitx5's default GoogleCN pinyin protocol through `openless-core::ime_cloud`. Reference: [Fcitx5 cloudpinyin](https://github.com/fcitx/fcitx5-chinese-addons/tree/master/modules/cloudpinyin). Only the current 2–64 bytes of lowercase pinyin and its separators are sent; no context, account, or personal dictionary is sent, and queries or responses are not logged. There is no availability promise; failures return no candidates, and offline Rime never waits for the network.
 
-## 公共词库更新与本地学习
+Off by default. HarmonyOS shows the Google source and the sending explanation in the keyboard tools, and Android offers the same explanation and toggle in keyboard settings. No query is made for password fields, inputs with unknown/private attributes, or Android fields that forbid personalized learning. 180 ms debounce, 1.2 s network timeout, 64 KiB response limit; the revision is validated on every input/focus change, and stale results must not be displayed or committed. When the toggle is on, the top local candidate is kept and de-duplicated cloud candidates are appended from the second position.
 
-两端通过共用 `openless-core::ime_dictionary` 定期检查上游 `iDvel/rime-ice` 的公开版本，固定到同一个提交后下载五张兼容的中文字表及许可证，不下载或执行上游脚本。自动更新默认开启，可在键盘工具/设置中关闭；成功检查后每周再查，失败每日重试，鸿蒙支持手动检查。调度发生在应用使用期间，不要求系统后台定时权限。
+When a cloud candidate is selected, it is carried through the shared `external` request together with the candidate revision, and the pending text is retained until the host acknowledges it; it is not learned directly as a Rime user entry. It is not part of the native dictionary's candidate frequency adjustment, so we cannot claim cloud candidates have been automatically trained into the local dictionary. Existing Rime user dictionary paths and names stay unchanged, and legacy LitePinyin data is still not migrated.
 
-公开版本号、词表大小、UTF-8、表名和头部结构经过检查，下载写入独立快照，全部完成后才发布。正在使用的引擎不重载；下次初始化时选择新快照，部署失败退回此前版本或内置资源。保留运行版本和回退版本，清理本模块创建的过期公共快照。公共文件位于共享资源目录的 `public-updates-v1`，不覆盖相邻的 `rime-user`。更新不会改变 Rime 原生用户词典的名字、路径或学习策略。
+## Public dictionary updates and local learning
 
-更新网络请求只有公共版本/文件地址，不包含按键、拼音、个人词条或用户词典。不上传个人数据，也不会把逐次云候选下载为一个离线服务。关闭云候选后仍能使用离线词库及原生选词调频、分段造词。万象模型和 octagram 依赖仍未集成，不能仅靠公共词表更新就宣称与本机模型配置具有相同的长句排序。
+Both platforms use the shared `openless-core::ime_dictionary` to periodically check the public releases of upstream `iDvel/rime-ice`; after pinning to a single commit they download five compatible Chinese character tables and the license, without downloading or executing upstream scripts. Automatic updates are on by default and can be turned off in keyboard tools/settings; after a successful check it checks weekly, after a failure it retries daily, and HarmonyOS supports manual checks. Scheduling happens while the app is in use and requires no system background timer permission.
 
-回归包括更新间隔、失败回退、快照选择、错误路径/元数据、保留个人数据及初始化失败重试。真实公共下载验证使用 `ime_dictionary::tests::live_public_snapshot`（默认忽略，显式运行）；Android 词库与学习测试禁用网络更新，保持确定性。
+Public release numbers, table sizes, UTF-8, table names, and header structure are validated; downloads go into a separate snapshot and are published only after everything completes. The engine in use is not reloaded; the new snapshot is chosen at the next initialization, and a failed deployment falls back to the previous version or the built-in resources. The running version and the fallback version are both retained, and stale public snapshots created by this module are cleaned up. Public files live in `public-updates-v1` in the shared resource directory and do not overwrite the adjacent `rime-user`. Updates do not change the name, path, or learning policy of the native Rime user dictionary.
+
+Update network requests contain only public release/file addresses, never keystrokes, pinyin, personal entries, or user dictionaries. No personal data is uploaded, and per-query cloud candidates are not downloaded into an offline service. With cloud candidates off, offline dictionaries, native candidate frequency adjustment, and segmented word creation still work. The Wanxiang model and the octagram dependency are still not integrated, so public table updates alone cannot be claimed to give the same long-sentence ranking as this machine's model configuration.
+
+Regression coverage includes update intervals, failure fallback, snapshot selection, bad paths/metadata, preservation of personal data, and retrying after initialization failure. The real public download check uses `ime_dictionary::tests::live_public_snapshot` (ignored by default, run explicitly); Android dictionary and learning tests disable network updates to stay deterministic.

@@ -24,6 +24,12 @@ use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 
+#[path = "shift_translation.rs"]
+mod shift_translation;
+use shift_translation::ShiftTranslationGesture;
+pub use shift_translation::{ShiftTranslationContext, ShiftTranslationSource};
+pub type SkipAutoStyleSource = Arc<dyn Fn() -> Option<(ShiftTranslationContext, HotkeyTrigger)> + Send + Sync>;
+
 use crate::types::HotkeyTrigger;
 use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyInstallError};
 
@@ -46,12 +52,15 @@ pub enum HotkeyEvent {
     Released {
         at: Instant,
         press_id: u64,
+        /// Native per-press verdict, independent of the asynchronous abort bridge.
+        combined: bool,
     },
     // Combo abort is not in this enum: it goes through the separate `combo_abort` channel to avoid
     // being queued behind the Pressed → begin_session synchronous mic-open flow (see module docs).
-    /// Shift (or a future config-selected modifier) press edge. Can occur at any time during
-    /// recording; the upper layer switches to the translation output pipeline. See issue #4.
+    /// Explicit custom translation shortcut; preserves the existing arm-only behavior.
     TranslationModifierPressed,
+    TranslationShiftTapped(ShiftTranslationContext),
+    SkipAutoStyleTapped(ShiftTranslationContext),
     QaShortcutPressed,
     SelectionPolishShortcutPressed,
     SelectionPolishShortcutReleased,
@@ -84,7 +93,12 @@ mod tests {
             selection_polish_trigger_held: AtomicBool::new(true),
             translation_trigger: RwLock::new(None),
             translation_trigger_held: AtomicBool::new(true),
-            translation_modifier_held: AtomicBool::new(true),
+            skip_style_source: RwLock::new(None),
+            skip_style_gesture: parking_lot::Mutex::new(crate::hotkey::shift_translation::ShiftTranslationGesture::default()),
+            shift_source: RwLock::new(None),
+            shift_gesture: parking_lot::Mutex::new(
+                crate::hotkey::shift_translation::ShiftTranslationGesture::default(),
+            ),
             recording_active: AtomicBool::new(false),
             recording_fn_held: AtomicBool::new(false),
         }
@@ -101,7 +115,6 @@ mod tests {
         assert!(!shared.qa_trigger_held.load(Ordering::SeqCst));
         assert!(!shared.selection_polish_trigger_held.load(Ordering::SeqCst));
         assert!(!shared.translation_trigger_held.load(Ordering::SeqCst));
-        assert!(!shared.translation_modifier_held.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -122,7 +135,6 @@ mod tests {
         assert!(shared.qa_trigger_held.load(Ordering::SeqCst));
         assert!(shared.selection_polish_trigger_held.load(Ordering::SeqCst));
         assert!(shared.translation_trigger_held.load(Ordering::SeqCst));
-        assert!(shared.translation_modifier_held.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -149,7 +161,6 @@ mod tests {
         assert!(!shared.qa_trigger_held.load(Ordering::SeqCst));
         assert!(!shared.selection_polish_trigger_held.load(Ordering::SeqCst));
         assert!(!shared.translation_trigger_held.load(Ordering::SeqCst));
-        assert!(shared.translation_modifier_held.load(Ordering::SeqCst));
     }
 }
 
@@ -163,6 +174,8 @@ pub trait HotkeyAdapter: Send + Sync {
         translation_trigger: Option<HotkeyTrigger>,
     );
     fn reset_held_state(&self);
+    fn set_shift_translation_source(&self, _source: ShiftTranslationSource) {}
+    fn set_skip_auto_style_source(&self, _source: SkipAutoStyleSource) {}
     /// Shortcut-recording mode switch. While active the listener reports Fn press edges
     /// (`FnRecordingPressed`) so the frontend recorder can commit an Fn binding (the browser never
     /// delivers Fn keydown to the web layer).
@@ -185,9 +198,10 @@ struct Shared {
     selection_polish_trigger_held: AtomicBool,
     translation_trigger: RwLock<Option<HotkeyTrigger>>,
     translation_trigger_held: AtomicBool,
-    /// Whether Shift (translation modifier) is currently held. Used to detect the down edge on
-    /// FLAGS_CHANGED (only false → true emits TranslationModifierPressed). See issue #4.
-    translation_modifier_held: AtomicBool,
+    skip_style_source: RwLock<Option<SkipAutoStyleSource>>,
+    skip_style_gesture: parking_lot::Mutex<ShiftTranslationGesture>,
+    shift_source: RwLock<Option<ShiftTranslationSource>>,
+    shift_gesture: parking_lot::Mutex<ShiftTranslationGesture>,
     /// Whether shortcut recording is active (ShortcutRecorder capturing). While active the
     /// CGEventTap reports Fn press edges (`FnRecordingPressed`) for the frontend recorder.
     recording_active: AtomicBool,
@@ -235,6 +249,14 @@ impl HotkeyMonitor {
             selection_polish_trigger,
             translation_trigger,
         );
+    }
+
+    pub fn set_skip_auto_style_source(&self, source: SkipAutoStyleSource) {
+        self.adapter.set_skip_auto_style_source(source);
+    }
+
+    pub fn set_shift_translation_source(&self, source: ShiftTranslationSource) {
+        self.adapter.set_shift_translation_source(source);
     }
 
     pub fn kind(&self) -> HotkeyAdapterKind {
@@ -350,7 +372,12 @@ where
         selection_polish_trigger_held: AtomicBool::new(false),
         translation_trigger: RwLock::new(None),
         translation_trigger_held: AtomicBool::new(false),
-        translation_modifier_held: AtomicBool::new(false),
+        skip_style_source: RwLock::new(None),
+        skip_style_gesture: parking_lot::Mutex::new(crate::hotkey::shift_translation::ShiftTranslationGesture::default()),
+        shift_source: RwLock::new(None),
+        shift_gesture: parking_lot::Mutex::new(
+            crate::hotkey::shift_translation::ShiftTranslationGesture::default(),
+        ),
         recording_active: AtomicBool::new(false),
         recording_fn_held: AtomicBool::new(false),
     });
@@ -381,6 +408,8 @@ fn update_shared_binding(shared: &Shared, binding: HotkeyBinding) {
             return;
         }
         *current = binding;
+        shared.shift_gesture.lock().reset();
+    shared.skip_style_gesture.lock().reset();
     }
     shared
         .trigger_held
@@ -432,9 +461,93 @@ fn reset_shared_held_state(shared: &Shared) {
     shared
         .translation_trigger_held
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    shared
-        .translation_modifier_held
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+    shared.shift_gesture.lock().reset();
+    shared.skip_style_gesture.lock().reset();
+}
+
+fn held_recording_trigger(shared: &Shared) -> Option<HotkeyTrigger> {
+    if !shared
+        .trigger_held
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return None;
+    }
+    let trigger = shared.binding.read().trigger;
+    (!matches!(
+        trigger,
+        HotkeyTrigger::Custom | HotkeyTrigger::LeftShift | HotkeyTrigger::RightShift
+    ))
+    .then_some(trigger)
+}
+
+fn observe_shift(
+    shared: &Shared,
+    tx: &Sender<HotkeyEvent>,
+    key: u16,
+    shift: bool,
+    down: bool,
+    other: bool,
+) {
+    let context = if shared
+        .recording_active
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        None
+    } else {
+        shared
+            .shift_source
+            .read()
+            .as_ref()
+            .and_then(|source| source())
+    };
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let context = context.map(|mut context| {
+        context.held_recording_key = platform::held_recording_key(shared);
+        context
+    });
+    if let Some(context) =
+        shared
+            .shift_gesture
+            .lock()
+            .observe(context, key, shift, down, other, Instant::now())
+    {
+        send_or_log(tx, HotkeyEvent::TranslationShiftTapped(context));
+    }
+}
+
+fn skip_style_context(shared: &Shared) -> Option<(ShiftTranslationContext, HotkeyTrigger)> {
+    // Windows modifier interception is disabled pending real hook-chain and
+    // menu validation. Custom combinations use the existing global registrar.
+    if cfg!(target_os = "windows") { return None; }
+    if shared.recording_active.load(std::sync::atomic::Ordering::SeqCst) { return None; }
+    shared.skip_style_source.read().as_ref().and_then(|source| source())
+}
+
+/// Observe only. Every real modifier edge must continue downstream, including
+/// releases after cancellation, a binding change, or a successor session.
+fn observe_skip_style(
+    shared: &Shared,
+    tx: &Sender<HotkeyEvent>,
+    key: u16,
+    down: bool,
+    other: bool,
+) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (context, target) = match skip_style_context(shared) {
+        Some((mut context, trigger)) => {
+            context.held_recording_key = platform::held_recording_key(shared);
+            context.tap_count = 1;
+            (Some(context), Some(platform::skip_style_key(trigger)))
+        },
+        None => (None, None),
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (context, target): (Option<ShiftTranslationContext>, Option<u16>) = (None, None);
+    let now = Instant::now();
+    let mut gesture = shared.skip_style_gesture.lock();
+    if let Some(context) = gesture.observe(context, key, target == Some(key), down, other, now) {
+        send_or_log(tx, HotkeyEvent::SkipAutoStyleTapped(context));
+    }
 }
 
 // ─────────────────────────── macOS implementation ───────────────────────────
@@ -463,7 +576,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-mod platform {
+pub(crate) mod platform {
     use std::ffi::c_void;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc::Sender;
@@ -545,11 +658,24 @@ mod platform {
             );
         }
 
+        fn set_skip_auto_style_source(&self, source: super::SkipAutoStyleSource) {
+            *self.shared.skip_style_source.write() = Some(source);
+            self.shared.skip_style_gesture.lock().reset();
+        }
+
+        fn set_shift_translation_source(&self, source: super::ShiftTranslationSource) {
+            *self.shared.shift_source.write() = Some(source);
+            self.shared.shift_gesture.lock().reset();
+            self.shared.skip_style_gesture.lock().reset();
+        }
+
         fn reset_held_state(&self) {
             reset_shared_held_state(&self.shared);
         }
         fn set_recording_active(&self, active: bool) {
             self.shared.recording_active.store(active, Ordering::SeqCst);
+            self.shared.shift_gesture.lock().reset();
+            self.shared.skip_style_gesture.lock().reset();
             if !active {
                 self.shared.recording_fn_held.store(false, Ordering::SeqCst);
             }
@@ -618,6 +744,12 @@ mod platform {
     const TAP_DISABLED_BY_USER_INPUT: CgEventType = 0xFFFF_FFFF;
 
     const KEYBOARD_EVENT_KEYCODE: CgEventField = 9;
+    const SPACE_KEYCODE: i64 = 49;
+    const SOURCE_PID_FIELD: CgEventField = 41;
+    const SOURCE_USER_DATA_FIELD: CgEventField = 42;
+    const REPLAYED_SPACE: i64 = 0x4f4c5350414345;
+    const SPACE_FIRST_GRACE: std::time::Duration = std::time::Duration::from_millis(32);
+    const MOUSE_DOWN: [CgEventType; 3] = [1, 3, 25];
 
     const FLAG_MASK_SHIFT: CgEventFlags = 0x0002_0000;
     const FLAG_MASK_CONTROL: CgEventFlags = 0x0004_0000;
@@ -657,6 +789,14 @@ mod platform {
         fn CGEventTapEnable(tap: CfMachPortRef, enable: bool);
         fn CGEventGetIntegerValueField(event: CgEventRef, field: CgEventField) -> i64;
         fn CGEventGetFlags(event: CgEventRef) -> CgEventFlags;
+        fn CGEventCreateCopy(event: CgEventRef) -> CgEventRef;
+        fn CGEventSetIntegerValueField(event: CgEventRef, field: CgEventField, value: i64);
+        fn CGEventTapPostEvent(proxy: *mut c_void, event: CgEventRef);
+        fn CGEventPost(tap: CgEventTapLocation, event: CgEventRef);
+        #[cfg(test)]
+        fn CGEventCreateKeyboardEvent(source: *mut c_void, key: u16, down: bool) -> CgEventRef;
+        #[cfg(test)]
+        fn CGEventSetFlags(event: CgEventRef, flags: CgEventFlags);
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -670,7 +810,67 @@ mod platform {
         fn CFRunLoopAddSource(rl: CfRunLoopRef, source: CfRunLoopSourceRef, mode: CfStringRef);
         fn CFRunLoopRun();
         fn CFRunLoopStop(rl: CfRunLoopRef);
+        fn CFAbsoluteTimeGetCurrent() -> f64;
+        fn CFRunLoopTimerCreate(
+            allocator: CfAllocatorRef, fire: f64, interval: f64, flags: usize, order: isize,
+            callback: extern "C" fn(*mut c_void, *mut c_void), context: *mut TimerContext,
+        ) -> *mut c_void;
+        fn CFRunLoopAddTimer(rl: CfRunLoopRef, timer: *mut c_void, mode: CfStringRef);
+        fn CFRunLoopTimerSetNextFireDate(timer: *mut c_void, fire: f64);
+        fn CFRunLoopTimerInvalidate(timer: *mut c_void);
+        fn CFRelease(value: *const c_void);
         static kCFRunLoopCommonModes: CfStringRef;
+    }
+
+    #[repr(C)]
+    struct TimerContext {
+        version: isize,
+        data: *mut c_void,
+        retain: *const c_void,
+        release: *const c_void,
+        description: *const c_void,
+    }
+
+    struct PendingSpace {
+        event: CgEventRef,
+        foreground: u32,
+        space_epoch: u64,
+        deadline: std::time::Instant,
+    }
+
+    impl Drop for PendingSpace {
+        fn drop(&mut self) {
+            unsafe { CFRelease(self.event.cast()) };
+        }
+    }
+
+    impl PendingSpace {
+        fn current(&self) -> bool {
+            self.space_epoch == crate::ask_window::active_space_epoch()
+                && crate::ask_window::foreground_pid() == Some(self.foreground)
+                && !crate::unicode_keystroke::is_secure_input_enabled()
+        }
+
+        fn replay(&self, proxy: *mut c_void) {
+            if !self.current() {
+                return;
+            }
+            unsafe {
+                CGEventSetIntegerValueField(self.event, SOURCE_USER_DATA_FIELD, REPLAYED_SPACE);
+                if proxy.is_null() {
+                    CGEventPost(SESSION_EVENT_TAP, self.event);
+                } else {
+                    CGEventTapPostEvent(proxy, self.event);
+                }
+            }
+        }
+    }
+
+    extern "C" fn flush_space_timer(_: *mut c_void, data: *mut c_void) {
+        let ctx = unsafe { &*(data as *const CallbackContext) };
+        if let Some(pending) = ctx.pending_space.lock().take() {
+            pending.replay(std::ptr::null_mut());
+        }
     }
 
     struct CallbackContext {
@@ -686,6 +886,9 @@ mod platform {
         /// (tap, runloop) refs shared with MacHotkeyAdapter. Tap re-enable on
         /// TAP_DISABLED_BY_TIMEOUT goes through handles.tap; adapter shutdown uses both locks.
         handles: Arc<MacShutdownHandles>,
+        pending_space: parking_lot::Mutex<Option<PendingSpace>>,
+        space_timer: *mut c_void,
+        space_down: std::sync::atomic::AtomicBool,
     }
 
     unsafe impl Send for CallbackContext {}
@@ -701,7 +904,15 @@ mod platform {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
             | (1u64 << KEY_DOWN)
             | (1u64 << KEY_UP)
-            | (1u64 << SYSTEM_DEFINED);
+            | (1u64 << SYSTEM_DEFINED)
+            | (1u64 << 1)
+            | (1u64 << 2)
+            | (1u64 << 3)
+            | (1u64 << 4)
+            | (1u64 << 22)
+            | (1u64 << 25)
+            | (1u64 << 26)
+            | (1u64 << 27);
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
@@ -713,6 +924,9 @@ mod platform {
             combo_tx,
             fn_pressed_at: parking_lot::Mutex::new(None),
             handles: Arc::clone(&handles),
+            pending_space: parking_lot::Mutex::new(None),
+            space_timer: std::ptr::null_mut(),
+            space_down: std::sync::atomic::AtomicBool::new(false),
         }));
 
         unsafe {
@@ -739,6 +953,21 @@ mod platform {
 
             let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
             let runloop = CFRunLoopGetCurrent();
+            let mut timer_context = TimerContext {
+                version: 0,
+                data: context.cast(),
+                retain: std::ptr::null(),
+                release: std::ptr::null(),
+                description: std::ptr::null(),
+            };
+            let parked = CFAbsoluteTimeGetCurrent() + 1.0e8;
+            let timer = CFRunLoopTimerCreate(
+                std::ptr::null(), parked, 1.0e8, 0, 0, flush_space_timer, &mut timer_context,
+            );
+            (*context).space_timer = timer;
+            if !timer.is_null() {
+                CFRunLoopAddTimer(runloop, timer, kCFRunLoopCommonModes);
+            }
             *handles.runloop.lock().unwrap() = Some(runloop);
             CFRunLoopAddSource(runloop, source, kCFRunLoopCommonModes);
             CGEventTapEnable(tap, true);
@@ -749,12 +978,16 @@ mod platform {
             // MacHotkeyAdapter::shutdown). After it returns, the listener thread drops the context
             // and exits naturally.
             CFRunLoopRun();
+            if !timer.is_null() {
+                CFRunLoopTimerInvalidate(timer);
+                CFRelease(timer);
+            }
             let _ = Box::from_raw(context);
         }
     }
 
     extern "C" fn tap_callback(
-        _proxy: *mut c_void,
+        proxy: *mut c_void,
         event_type: CgEventType,
         event: CgEventRef,
         user_info: *mut c_void,
@@ -764,20 +997,140 @@ mod platform {
         }
         let ctx = unsafe { &*(user_info as *const CallbackContext) };
 
+        observe_shift_event(ctx, event_type, event);
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
-                crate::recording_companion::reset_held();
+                crate::capsule_style_menu::invalidate();
+                reset_shared_held_state(&ctx.shared);
+                if let Some(pending) = ctx.pending_space.lock().take() {
+                    pending.replay(std::ptr::null_mut());
+                }
+                ctx.space_down.store(false, Ordering::Relaxed);
+                crate::ask_window::hotkey::reset_physical_state();
                 if let Some(tap) = *ctx.handles.tap.lock().unwrap() {
                     unsafe { CGEventTapEnable(tap, true) };
                 }
                 return event;
             }
-            FLAGS_CHANGED => handle_flags_changed(ctx, event),
+            _ if event.is_null() => return event,
+            _ => {}
+        }
+
+        if unsafe { CGEventGetIntegerValueField(event, SOURCE_USER_DATA_FIELD) } == REPLAYED_SPACE {
+            return event;
+        }
+        let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+        let flags = unsafe { CGEventGetFlags(event) };
+        let hardware = unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } == 0;
+        if hardware && matches!(event_type, KEY_DOWN | KEY_UP) {
+            let key = match keycode {
+                126 => Some(crate::capsule_style_menu::Key::ArrowUp),
+                125 => Some(crate::capsule_style_menu::Key::ArrowDown),
+                36 => Some(crate::capsule_style_menu::Key::Enter),
+                53 => Some(crate::capsule_style_menu::Key::Escape),
+                _ => None,
+            };
+            if let Some(key) = key {
+                let fn_held = flags & FLAG_MASK_SECONDARY_FN != 0
+                    && (crate::ask_window::hotkey::fn_is_held()
+                        || crate::side_aware_combo::platform::keycode_is_down(63));
+                // Require the physical Fn controller, rather than treating a
+                // function-key flag on a navigation event as a held modifier.
+                let modified = fn_held || flags & (FLAG_MASK_SHIFT | FLAG_MASK_CONTROL
+                    | FLAG_MASK_ALTERNATE | FLAG_MASK_COMMAND) != 0;
+                let repeat = unsafe { CGEventGetIntegerValueField(event, 8) } != 0;
+                if crate::capsule_style_menu::key(key, event_type == KEY_DOWN, repeat, modified) {
+                    return std::ptr::null_mut();
+                }
+            }
+        }
+        let is_fn_down = event_type == FLAGS_CHANGED && hardware && keycode == 63
+            && flags & FLAG_MASK_SECONDARY_FN != 0;
+        if !is_fn_down {
+            if let Some(pending) = ctx.pending_space.lock().take() {
+                pending.replay(proxy);
+            }
+        }
+        if hardware && keycode == SPACE_KEYCODE {
+            if event_type == KEY_UP {
+                ctx.space_down.store(false, Ordering::Relaxed);
+            } else if event_type == KEY_DOWN {
+                let first = !ctx.space_down.swap(true, Ordering::Relaxed)
+                    && unsafe { CGEventGetIntegerValueField(event, 8) } == 0;
+                if first
+                    && flags & (FLAG_MASK_SHIFT | FLAG_MASK_CONTROL | FLAG_MASK_ALTERNATE
+                        | FLAG_MASK_COMMAND | FLAG_MASK_SECONDARY_FN) == 0
+                    && !ctx.space_timer.is_null()
+                    && !ctx.shared.recording_active.load(Ordering::SeqCst)
+                    && crate::ask_window::hotkey::can_buffer_space()
+                    && !crate::unicode_keystroke::is_secure_input_enabled()
+                {
+                    if let Some(foreground) = crate::ask_window::foreground_pid() {
+                        let copy = unsafe { CGEventCreateCopy(event) };
+                        if !copy.is_null() {
+                            *ctx.pending_space.lock() = Some(PendingSpace {
+                                event: copy,
+                                foreground,
+                                space_epoch: crate::ask_window::active_space_epoch(),
+                                deadline: std::time::Instant::now() + SPACE_FIRST_GRACE,
+                            });
+                            unsafe {
+                                CFRunLoopTimerSetNextFireDate(
+                                    ctx.space_timer, CFAbsoluteTimeGetCurrent() + SPACE_FIRST_GRACE.as_secs_f64(),
+                                );
+                            }
+                            return std::ptr::null_mut();
+                        }
+                    }
+                }
+            }
+        }
+        match event_type {
+            FLAGS_CHANGED => {
+                let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+                let flags = unsafe { CGEventGetFlags(event) };
+                if keycode == 63 || crate::side_aware_combo::platform::side_from_keycode(keycode).is_some() {
+                    let down = if keycode == 63 {
+                        flags & FLAG_MASK_SECONDARY_FN != 0
+                    } else {
+                        device_modifier_pressed(keycode, flags)
+                            .or_else(|| crate::side_aware_combo::platform::resolve_side_pressed_from_flags(keycode, flags))
+                            .unwrap_or_else(|| crate::side_aware_combo::platform::keycode_is_down(keycode))
+                    };
+                    let handled = ask_key_edge(ctx, event, keycode, down).is_some();
+                    if is_fn_down {
+                        if let Some(pending) = ctx.pending_space.lock().take() {
+                            let paired = handled && pending.deadline > std::time::Instant::now()
+                                && pending.current()
+                                && ask_key_edge(ctx, pending.event, SPACE_KEYCODE, true)
+                                    .is_some_and(|result| result.is_null());
+                            if !paired {
+                                pending.replay(proxy);
+                            }
+                        }
+                    }
+                    if handled {
+                        return event;
+                    }
+                }
+                handle_flags_changed(ctx, event);
+            }
             KEY_DOWN => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
+                if keycode == ESC_KEYCODE && super::capsule_menu_open() {
+                    return event;
+                }
+                if let Some(result) = ask_key_edge(ctx, event, keycode, true) {
+                    return result;
+                }
                 if !ctx.shared.recording_active.load(Ordering::SeqCst)
-                    && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true) {
+                    && crate::side_aware_combo::platform::dispatch_keycode(
+                        keycode,
+                        false,
+                        unsafe { CGEventGetFlags(event) },
+                        true,
+                    )
+                {
                     crate::side_aware_combo::handle_companion_key_down();
                     note_companion_key_down(ctx);
                     return std::ptr::null_mut();
@@ -792,7 +1145,15 @@ mod platform {
             }
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
-                if crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false) {
+                if let Some(result) = ask_key_edge(ctx, event, keycode, false) {
+                    return result;
+                }
+                if crate::side_aware_combo::platform::dispatch_keycode(
+                    keycode,
+                    false,
+                    unsafe { CGEventGetFlags(event) },
+                    false,
+                ) {
                     return std::ptr::null_mut();
                 }
             }
@@ -800,11 +1161,166 @@ mod platform {
             // systemDefined. While the Fn trigger is held, treat these as function-layer combos —
             // dictation must not start at the same time.
             SYSTEM_DEFINED => {
-                handle_system_defined_event(ctx, || system_defined_event_payload(event));
+                if crate::ask_window::hotkey::fn_is_held() {
+                    if system_defined_event_payload(event)
+                        .is_some_and(|(subtype, data)| is_auxiliary_function_key_event(subtype, data))
+                    {
+                        crate::ask_window::hotkey::abort_fn_companion();
+                    }
+                } else {
+                    handle_system_defined_event(ctx, || system_defined_event_payload(event));
+                }
             }
             _ => {}
         }
         event
+    }
+
+    pub(super) fn held_recording_key(shared: &Shared) -> Option<u16> {
+        crate::ask_window::hotkey::held_recording_key().or_else(|| {
+            super::held_recording_trigger(shared).map(|trigger| trigger_to_keycode(trigger) as u16)
+        })
+    }
+
+    pub(super) fn skip_style_key(trigger: HotkeyTrigger) -> u16 {
+        trigger_to_keycode(trigger) as u16
+    }
+
+    // Use the physical side bits on the very event being dispatched, as the
+    // gesture observer does. Sparse/synthetic flags retain the system query
+    // fallback. This also distinguishes release while the opposite side is held.
+    fn device_modifier_pressed(key: i64, flags: CgEventFlags) -> Option<bool> {
+        let (own, opposite) = match key {
+            56 => (0x2, 0x4), 60 => (0x4, 0x2),
+            59 => (0x1, 0x2000), 62 => (0x2000, 0x1),
+            58 => (0x20, 0x40), 61 => (0x40, 0x20),
+            55 => (0x8, 0x10), 54 => (0x10, 0x8),
+            _ => return None,
+        };
+        (flags & (own | opposite) != 0).then_some(flags & own != 0)
+    }
+
+    fn observe_shift_event(ctx: &CallbackContext, kind: CgEventType, event: CgEventRef) {
+        if event.is_null() { return; }
+        let flags = unsafe { CGEventGetFlags(event) };
+        let field = if matches!(kind, 25 | 26) {
+            3
+        } else {
+            KEYBOARD_EVENT_KEYCODE
+        };
+        let key = unsafe { CGEventGetIntegerValueField(event, field) };
+        observe_shift_fields(ctx, kind, key, flags)
+    }
+
+    fn observe_shift_fields(
+        ctx: &CallbackContext,
+        kind: CgEventType,
+        key: i64,
+        flags: CgEventFlags,
+    ) {
+        let mut other_flags = flags
+            & (FLAG_MASK_CONTROL
+                | FLAG_MASK_ALTERNATE
+                | FLAG_MASK_COMMAND
+                | FLAG_MASK_SECONDARY_FN);
+        let controller = match held_recording_key(&ctx.shared) {
+            Some(59) => Some((FLAG_MASK_CONTROL, 0x1, 0x2000)),
+            Some(62) => Some((FLAG_MASK_CONTROL, 0x2000, 0x1)),
+            Some(58) => Some((FLAG_MASK_ALTERNATE, 0x20, 0x40)),
+            Some(61) => Some((FLAG_MASK_ALTERNATE, 0x40, 0x20)),
+            Some(55) => Some((FLAG_MASK_COMMAND, 0x8, 0x10)),
+            Some(54) => Some((FLAG_MASK_COMMAND, 0x10, 0x8)),
+            Some(63) => Some((FLAG_MASK_SECONDARY_FN, FLAG_MASK_SECONDARY_FN, 0)),
+            _ => None,
+        };
+        // Only the held controller is exempt; its opposite-side modifier is still a chord.
+        if let Some((class, own, opposite)) = controller {
+            if flags & own != 0 && flags & opposite == 0 {
+                other_flags &= !class;
+            }
+        }
+        let other = other_flags != 0;
+        let (key, shift, down) = match kind {
+            KEY_DOWN | KEY_UP => (key as u16, false, kind == KEY_DOWN),
+            FLAGS_CHANGED => {
+                if key == 57 {
+                    ctx.shared.shift_gesture.lock().invalidate();
+                    ctx.shared.skip_style_gesture.lock().invalidate();
+                    return;
+                }
+                let shift = matches!(key, 56 | 60);
+                // IOLLEvent.h device bits distinguish both sides even when the class bit stays set.
+                let mask = match key {
+                    56 => 0x2,
+                    60 => 0x4,
+                    59 => 0x1,
+                    62 => 0x2000,
+                    58 => 0x20,
+                    61 => 0x40,
+                    55 => 0x8,
+                    54 => 0x10,
+                    63 => FLAG_MASK_SECONDARY_FN,
+                    _ => return,
+                };
+                let down = flags & mask != 0;
+                (key as u16, shift, down)
+            }
+            1 | 2 | 3 | 4 | 25 | 26 => (
+                500 + match kind {
+                    1 | 2 => 0,
+                    3 | 4 => 1,
+                    _ => key as u16,
+                },
+                false,
+                matches!(kind, 1 | 3 | 25),
+            ),
+            22 | 27 | SYSTEM_DEFINED => {
+                ctx.shared.shift_gesture.lock().invalidate();
+                ctx.shared.skip_style_gesture.lock().invalidate();
+                return;
+            }
+            _ => return,
+        };
+        super::observe_shift(&ctx.shared, &ctx.tx, key, shift, down, other);
+        let target = super::skip_style_context(&ctx.shared).map(|(_, trigger)| skip_style_key(trigger));
+        let mut style_other = flags & (FLAG_MASK_SHIFT | FLAG_MASK_CONTROL
+            | FLAG_MASK_ALTERNATE | FLAG_MASK_COMMAND | FLAG_MASK_SECONDARY_FN);
+        for allowed in [target, held_recording_key(&ctx.shared)].into_iter().flatten() {
+            let (class, own, opposite) = match allowed {
+                56 => (FLAG_MASK_SHIFT, 0x2, 0x4),
+                60 => (FLAG_MASK_SHIFT, 0x4, 0x2),
+                59 => (FLAG_MASK_CONTROL, 0x1, 0x2000),
+                62 => (FLAG_MASK_CONTROL, 0x2000, 0x1),
+                58 => (FLAG_MASK_ALTERNATE, 0x20, 0x40),
+                61 => (FLAG_MASK_ALTERNATE, 0x40, 0x20),
+                55 => (FLAG_MASK_COMMAND, 0x8, 0x10),
+                54 => (FLAG_MASK_COMMAND, 0x10, 0x8),
+                63 => (FLAG_MASK_SECONDARY_FN, FLAG_MASK_SECONDARY_FN, 0),
+                _ => continue,
+            };
+            if flags & opposite == 0 && (flags & own != 0 || !down) { style_other &= !class; }
+        }
+        super::observe_skip_style(&ctx.shared, &ctx.tx, key, down, style_other != 0);
+    }
+
+    fn ask_key_edge(ctx: &CallbackContext, event: CgEventRef, keycode: i64, down: bool) -> Option<CgEventRef> {
+        use crate::ask_window::hotkey::{keyboard_edge, Disposition};
+        const AUTOREPEAT_FIELD: CgEventField = 8;
+        const SOURCE_PID_FIELD: CgEventField = 41;
+        if unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } != 0 {
+            return None;
+        }
+        let repeat = down && unsafe { CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) } != 0;
+        match keyboard_edge(
+            u16::try_from(keycode).ok()?,
+            down,
+            repeat,
+            ctx.shared.recording_active.load(Ordering::SeqCst),
+        ) {
+            Disposition::Stock => None,
+            Disposition::Pass => Some(event),
+            Disposition::Consume => Some(std::ptr::null_mut()),
+        }
     }
 
     fn handle_flags_changed(ctx: &CallbackContext, event: CgEventRef) {
@@ -830,21 +1346,6 @@ mod platform {
             // trigger latch, otherwise after the frontend saves Fn and exits recording mode, the
             // same physical release is mistaken for a dictation short press.
             return;
-        }
-
-        // Shift is the translation-mode modifier — independent of the trigger keycode check; a
-        // Shift press takes effect at any time.
-        let shift_active = (flags & FLAG_MASK_SHIFT) != 0;
-        let shift_was_held = ctx.shared.translation_modifier_held.load(Ordering::SeqCst);
-        if shift_active && !shift_was_held {
-            ctx.shared
-                .translation_modifier_held
-                .store(true, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
-        } else if !shift_active && shift_was_held {
-            ctx.shared
-                .translation_modifier_held
-                .store(false, Ordering::SeqCst);
         }
 
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
@@ -929,7 +1430,15 @@ mod platform {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
             let press_id = ctx.shared.trigger_press_id.swap(0, Ordering::SeqCst);
             if !tap_only_fn {
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(
+                    &ctx.tx,
+                    HotkeyEvent::Released {
+                        at: now,
+                        press_id,
+                        combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst)
+                            == press_id,
+                    },
+                );
                 return;
             }
 
@@ -939,6 +1448,7 @@ mod platform {
             let held_for = pressed_at.map(|at| now.saturating_duration_since(at));
             if !companion_seen && held_for.is_some_and(|duration| duration < FN_TAP_MAX_DURATION) {
                 let pressed_at = pressed_at.expect("checked above");
+                log::info!("[hotkey] Fn tap press_id={} held_ms={}", press_id, held_for.expect("checked above").as_millis());
                 send_or_log(
                     &ctx.tx,
                     HotkeyEvent::Pressed {
@@ -946,7 +1456,15 @@ mod platform {
                         press_id,
                     },
                 );
-                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now, press_id });
+                send_or_log(
+                    &ctx.tx,
+                    HotkeyEvent::Released {
+                        at: now,
+                        press_id,
+                        combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst)
+                            == press_id,
+                    },
+                );
             } else {
                 log::info!(
                     "[hotkey] Fn 操作未触发听写（held_ms={}, companion_seen={companion_seen}）",
@@ -1144,7 +1662,7 @@ mod platform {
     }
 
     #[cfg(test)]
-    mod tests {
+    pub(crate) mod tests {
         use super::*;
         use parking_lot::RwLock;
         use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -1166,10 +1684,407 @@ mod platform {
                 selection_polish_trigger_held: AtomicBool::new(false),
                 translation_trigger: RwLock::new(None),
                 translation_trigger_held: AtomicBool::new(false),
-                translation_modifier_held: AtomicBool::new(false),
+                skip_style_source: RwLock::new(None),
+                skip_style_gesture: parking_lot::Mutex::new(crate::hotkey::shift_translation::ShiftTranslationGesture::default()),
+                shift_source: RwLock::new(None),
+                shift_gesture: parking_lot::Mutex::new(
+                    crate::hotkey::shift_translation::ShiftTranslationGesture::default(),
+                ),
                 recording_active: AtomicBool::new(false),
                 recording_fn_held: AtomicBool::new(false),
             })
+        }
+
+        #[test]
+        fn skip_auto_style_mac_passes_both_edges_and_late_releases() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
+            let shared = shared(HotkeyTrigger::RightOption);
+            let context = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(),
+                preferences_revision: 3, tap_count: 1, held_recording_key: None,
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftCommand))));
+            let (ctx, rx, _) = callback_context_with_combo(shared.clone());
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            assert!(rx.try_recv().is_err());
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(c) if c.session_id == context.session_id));
+            // Cmd+C and the opposite Command remain the foreground app's input.
+            for companion in [8, 54, 500] {
+                pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+                let kind = if companion == 54 { FLAGS_CHANGED } else if companion == 500 { 1 } else { KEY_DOWN };
+                pass_event(&ctx, kind, companion, FLAG_MASK_COMMAND | 0x18);
+                pass_event(&ctx, if kind == KEY_DOWN { KEY_UP } else if kind == 1 { 2 } else { FLAGS_CHANGED }, companion, FLAG_MASK_COMMAND | 0x8);
+                pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+                assert!(rx.try_recv().is_err());
+            }
+            // Cancelled session: the exposed down still receives its real up.
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            *shared.skip_style_source.write() = None;
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(rx.try_recv().is_err());
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(rx.try_recv().is_err());
+            // A successor cannot inherit a partial gesture.
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftCommand))));
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            let next = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(), ..context
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((next, HotkeyTrigger::LeftCommand))));
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(rx.try_recv().is_err());
+            // Entering shortcut recording between edges preserves pairing.
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            shared.recording_active.store(true, Ordering::SeqCst);
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            shared.recording_active.store(false, Ordering::SeqCst);
+            assert!(rx.try_recv().is_err());
+        }
+
+        // Calls the real callback with native CGEvent objects. This proves the
+        // callback returns each original event, not OS delivery or system UI.
+        fn pass_event(ctx: &CallbackContext, kind: CgEventType, key: u16, flags: CgEventFlags) {
+            unsafe {
+                let event = CGEventCreateKeyboardEvent(std::ptr::null_mut(), key, kind != KEY_UP);
+                assert!(!event.is_null());
+                CGEventSetFlags(event, flags);
+                CGEventSetIntegerValueField(event, SOURCE_PID_FIELD, 0);
+                let returned = tap_callback(
+                    std::ptr::null_mut(), kind, event, ctx as *const _ as *mut c_void,
+                );
+                assert_eq!(returned, event, "event kind={kind}, key={key} must pass");
+                CFRelease(event as *const c_void);
+            }
+        }
+
+        // Run by the standalone native harness, isolating its mock Runtime
+        // source from main-crate tests that construct another Coordinator.
+        pub(crate) fn style_menu_real_callback_preserves_key_pairs_across_open_close_and_cancel() {
+            use crate::capsule_style_menu::{self as menu, Event, Focus};
+            let _guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
+            let session = openless_core::SessionId::new();
+            let live = Arc::new(parking_lot::Mutex::new(Some(menu::Context {
+                session_id: session, style_epoch: 1, mutable: false, skip_auto: true, picker_enabled: true,
+                keyboard_available: true, focus: Some(Focus(3, 1)), blocked_keys: [false; 4],
+            })));
+            let source = live.clone();
+            let (send, receive) = mpsc::channel();
+            menu::configure(Arc::new(move || source.lock().clone()),
+                Arc::new(move |event| send.send(event).is_ok()));
+            let shared = shared(HotkeyTrigger::RightOption);
+            let context = super::super::ShiftTranslationContext {
+                session_id: session, preferences_revision: 1, tap_count: 1, held_recording_key: None,
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move ||
+                Some((context, HotkeyTrigger::LeftCommand))));
+            let (ctx, rx, _) = callback_context_with_combo(shared);
+            assert!(menu::pending("capsule").is_none());
+            // Actual native tap classification emits exactly one provenance event.
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8);
+            assert!(rx.try_recv().is_err());
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(_)));
+            assert!(rx.try_recv().is_err());
+            let request = menu::hotkey_toggled(&openless_core::DictationStyleTarget {
+                session_id: session, selection: openless_core::DictationStyleSelection::SkipAuto,
+                skip_auto_style: true, mutable: false, style_pack_id: None, style_pack_name: None,
+                polish_style_pack_id: None, available_styles: vec![],
+            }, 1).unwrap();
+            assert!(menu::reservation("capsule", session, Some(&request.request_id)).is_err());
+            // A down passed before the menu has no matching captured up.
+            assert!(!menu_callback(&ctx, 126, true, 0, false));
+            live.lock().as_mut().unwrap().mutable = true;
+            let owner = menu::reservation("capsule", session, Some(&request.request_id)).unwrap();
+            menu::commit(owner.clone(), Some(&request.request_id)).unwrap();
+            assert!(!menu_callback(&ctx, 126, true, 0, true));
+            assert!(!menu_callback(&ctx, 126, false, 0, false));
+            assert!(menu_callback(&ctx, 126, true, 0, false));
+            assert!(matches!(receive.try_recv().unwrap(), Event::Key(key)
+                if key.menu_id == owner.menu_id && key.key == menu::Key::ArrowUp));
+            assert!(menu::close("capsule", session, &owner.menu_id));
+            assert!(matches!(receive.try_recv().unwrap(), Event::Closed(closed) if closed.menu_id == owner.menu_id));
+            assert!(menu_callback(&ctx, 126, false, 0, false), "close drains captured release");
+            assert!(!menu_callback(&ctx, 36, true, 0, false));
+            assert!(!menu_callback(&ctx, 36, false, 0, false));
+            let replacement = menu::reservation("capsule", session, None).unwrap();
+            menu::commit(replacement.clone(), None).unwrap();
+            assert!(!menu_callback(&ctx, 125, true, FLAG_MASK_COMMAND | 0x8, false));
+            assert!(!menu_callback(&ctx, 125, false, FLAG_MASK_COMMAND | 0x8, false));
+            assert!(receive.try_recv().is_err(), "modified keys stay with the foreground target");
+            assert!(menu_callback(&ctx, 125, true, 0, false));
+            assert!(matches!(receive.try_recv().unwrap(), Event::Key(_)));
+            *live.lock() = None;
+            menu::refresh();
+            assert!(matches!(receive.try_recv().unwrap(), Event::Closed(_)));
+            assert!(menu_callback(&ctx, 125, false, 0, false), "cancel drains captured release");
+            assert!(!menu_callback(&ctx, 36, true, 0, false));
+            assert!(!menu_callback(&ctx, 36, false, 0, false));
+            assert!(receive.try_recv().is_err());
+            menu::invalidate();
+            menu::configure(Arc::new(|| None), Arc::new(|_| false));
+        }
+
+        fn menu_callback(ctx: &CallbackContext, key: u16, down: bool, flags: CgEventFlags, repeat: bool) -> bool {
+            unsafe {
+                let event = CGEventCreateKeyboardEvent(std::ptr::null_mut(), key, down);
+                assert!(!event.is_null());
+                CGEventSetFlags(event, flags);
+                CGEventSetIntegerValueField(event, SOURCE_PID_FIELD, 0);
+                CGEventSetIntegerValueField(event, 8, i64::from(repeat));
+                let returned = tap_callback(std::ptr::null_mut(), if down { KEY_DOWN } else { KEY_UP },
+                    event, ctx as *const _ as *mut c_void);
+                assert!(returned.is_null() || returned == event);
+                CFRelease(event as *const c_void);
+                returned.is_null()
+            }
+        }
+
+        // The backend harness installs the production Ask runtime around this
+        // case, substituting only desktop/device effects. No Shared latch setup.
+        pub(crate) fn skip_auto_style_mac_held_ask_controller() {
+            let shared = shared(HotkeyTrigger::RightOption);
+            let context = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(),
+                preferences_revision: 4, tap_count: 1, held_recording_key: None,
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftCommand))));
+            let (ctx, rx, _) = callback_context_with_combo(shared.clone());
+            pass_event(&ctx, FLAGS_CHANGED, 61, FLAG_MASK_ALTERNATE | 0x40);
+            assert!(!shared.trigger_held.load(Ordering::SeqCst), "Ask bypasses the legacy latch");
+            assert_eq!(crate::ask_window::hotkey::held_recording_key(), Some(61));
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_COMMAND | 0x8 | FLAG_MASK_ALTERNATE | 0x40);
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_ALTERNATE | 0x40);
+            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::SkipAutoStyleTapped(_)));
+            // A real Cmd+C path while the recording controller is held passes
+            // intact and does not become a standalone style tap.
+            let both = FLAG_MASK_COMMAND | 0x8 | FLAG_MASK_ALTERNATE | 0x40;
+            pass_event(&ctx, FLAGS_CHANGED, 55, both);
+            pass_event(&ctx, KEY_DOWN, 8, both);
+            pass_event(&ctx, KEY_UP, 8, both);
+            pass_event(&ctx, FLAGS_CHANGED, 55, FLAG_MASK_ALTERNATE | 0x40);
+            assert!(rx.try_recv().is_err());
+            // Releasing the controller in the middle of a tap invalidates it.
+            pass_event(&ctx, FLAGS_CHANGED, 55, both);
+            pass_event(&ctx, FLAGS_CHANGED, 61, FLAG_MASK_COMMAND | 0x8);
+            pass_event(&ctx, FLAGS_CHANGED, 55, 0);
+            assert!(rx.try_recv().is_err());
+            assert_eq!(crate::ask_window::hotkey::held_recording_key(), None);
+            assert!(rx.try_recv().is_err());
+        }
+
+        #[test]
+        fn mac_shift_requires_release_and_rejects_native_mouse_and_key_combinations() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
+            let shared = shared(HotkeyTrigger::Fn);
+            let context = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(),
+                preferences_revision: 1,
+                tap_count: 1,
+                held_recording_key: None,
+            };
+            *shared.shift_source.write() = Some(Arc::new(move || Some(context)));
+            let (ctx, rx, _) = callback_context_with_combo(shared);
+            for (key, bit) in [(56, 2), (60, 4)] {
+                observe_shift_fields(&ctx, FLAGS_CHANGED, key, FLAG_MASK_SHIFT | bit);
+                assert!(rx.try_recv().is_err());
+                observe_shift_fields(&ctx, FLAGS_CHANGED, key, 0);
+                assert_eq!(
+                    rx.try_recv().unwrap(),
+                    HotkeyEvent::TranslationShiftTapped(context)
+                );
+            }
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 59, FLAG_MASK_CONTROL | 1);
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 62, FLAG_MASK_CONTROL | 1 | 0x2000);
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 62, FLAG_MASK_CONTROL | 1);
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 59, 0);
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 56, FLAG_MASK_SHIFT | 2);
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 56, 0);
+            assert_eq!(
+                rx.try_recv().unwrap(),
+                HotkeyEvent::TranslationShiftTapped(context)
+            );
+            for (kind, key) in [(KEY_DOWN, 0), (1, 0), (22, 0), (SYSTEM_DEFINED, 0)] {
+                observe_shift_fields(&ctx, FLAGS_CHANGED, 56, FLAG_MASK_SHIFT | 2);
+                observe_shift_fields(&ctx, kind, key, FLAG_MASK_SHIFT | 2);
+                observe_shift_fields(&ctx, KEY_UP, key, FLAG_MASK_SHIFT | 2);
+                if kind == 1 {
+                    observe_shift_fields(&ctx, 2, key, FLAG_MASK_SHIFT | 2);
+                }
+                observe_shift_fields(&ctx, FLAGS_CHANGED, 56, 0);
+                assert!(rx.try_recv().is_err());
+            }
+        }
+
+        #[tokio::test]
+        async fn mac_held_recording_fn_allows_both_shift_toggles_before_recording_release() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.lock().await;
+            use openless_core::testing::{
+                FixtureDictationEngine, FixtureEngineAction, RecordingHostActions,
+            };
+            use openless_core::{
+                BackendConfig, BackendDependencies, CliDispatchOutcome, DictationHotkeyEdge,
+                DictationStartOptions, OpenLessBackend,
+            };
+            let directory = tempfile::tempdir().unwrap();
+            let engine = FixtureDictationEngine::successful("spoken", "polished");
+            let mut dependencies = BackendDependencies::unsupported();
+            dependencies.dictation_engine = Arc::new(engine.clone());
+            dependencies.host_actions = Arc::new(RecordingHostActions::default());
+            dependencies.credential_store =
+                Arc::new(openless_core::InMemoryCredentialStore::default());
+            let backend = Arc::new(
+                OpenLessBackend::new(
+                    BackendConfig {
+                        data_dir: directory.path().into(),
+                        ..Default::default()
+                    },
+                    dependencies,
+                )
+                .unwrap(),
+            );
+            let mut prefs = backend.get_preferences();
+            prefs.hotkey.mode = crate::types::HotkeyMode::Hold;
+            prefs.dictation_hotkey = crate::types::ShortcutBinding {
+                primary: "Fn".into(),
+                modifiers: vec![],
+            };
+            prefs.translation_target_language = "English".into();
+            prefs.working_languages = vec!["简体中文".into()];
+            backend
+                .update_settings(
+                    prefs,
+                    openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+                    &openless_core::NoopSettingsRuntime,
+                )
+                .unwrap();
+            backend.start().await.unwrap();
+
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = crate::types::HotkeyMode::Hold;
+            let source_backend = backend.clone();
+            *shared.shift_source.write() = Some(Arc::new(move || {
+                let snapshot = source_backend.snapshot();
+                Some(super::super::ShiftTranslationContext {
+                    session_id: snapshot.dictation.session_id?,
+                    preferences_revision: snapshot.preferences_revision,
+                    tap_count: 1,
+                    held_recording_key: None,
+                })
+            }));
+            let (ctx, rx, _) = callback_context_with_combo(shared);
+            let now = std::time::Instant::now();
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 63, FLAG_MASK_SECONDARY_FN);
+            handle_dictation_trigger_flags_changed(&ctx, 63, FLAG_MASK_SECONDARY_FN, now);
+            let press_id = match rx.try_recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                event => panic!("recording did not start: {event:?}"),
+            };
+            let started = backend
+                .dispatch_dictation_hotkey_edge_with_options(
+                    DictationHotkeyEdge::Pressed { at: now, press_id },
+                    DictationStartOptions {
+                        insert_text: false,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let id = match started {
+                CliDispatchOutcome::DictationStarted(id) => id,
+                other => panic!("unexpected native press outcome: {other:?}"),
+            };
+            for (key, bit, effective) in [(56, 2, true), (60, 4, false)] {
+                observe_shift_fields(
+                    &ctx,
+                    FLAGS_CHANGED,
+                    key,
+                    FLAG_MASK_SECONDARY_FN | FLAG_MASK_SHIFT | bit,
+                );
+                assert!(rx.try_recv().is_err(), "translation fired on key down");
+                observe_shift_fields(&ctx, FLAGS_CHANGED, key, FLAG_MASK_SECONDARY_FN);
+                let owned = match rx.try_recv().unwrap() {
+                    HotkeyEvent::TranslationShiftTapped(value) => value,
+                    event => panic!("unexpected shift outcome: {event:?}"),
+                };
+                assert_eq!(owned.session_id, id);
+                backend
+                    .toggle_dictation_translation_for_session(owned.session_id)
+                    .unwrap();
+                let capture = backend.snapshot().dictation;
+                assert_eq!(capture.session_id, Some(id));
+                assert_eq!(capture.phase, openless_core::DictationPhase::Recording);
+                assert_eq!(capture.translation_active, effective);
+            }
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 63, 0);
+            let released_at = now + std::time::Duration::from_secs(1);
+            handle_dictation_trigger_flags_changed(&ctx, 63, 0, released_at);
+            assert!(matches!(rx.try_recv().unwrap(), HotkeyEvent::Released {
+                press_id: owned, combined: false, .. } if owned == press_id));
+            assert!(matches!(
+                backend
+                    .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+                        at: released_at,
+                        press_id
+                    })
+                    .await
+                    .unwrap(),
+                CliDispatchOutcome::DictationCompleted(_)
+            ));
+            assert_eq!(
+                engine.actions(),
+                vec![
+                    FixtureEngineAction::Start(id),
+                    FixtureEngineAction::UpdateContext(id),
+                    FixtureEngineAction::Finish(id)
+                ]
+            );
+            assert!(!backend.list_history().unwrap()[0].translation_active);
+            assert!(rx.try_recv().is_err());
+            backend.shutdown().await.unwrap();
+        }
+
+        #[test]
+        fn mac_default_recording_controller_does_not_exempt_the_other_option_key() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
+            let shared = shared(HotkeyTrigger::RightOption);
+            let context = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(),
+                preferences_revision: 1,
+                tap_count: 1,
+                held_recording_key: None,
+            };
+            *shared.shift_source.write() = Some(Arc::new(move || Some(context)));
+            let (ctx, rx, _) = callback_context_with_combo(shared);
+            observe_shift_fields(&ctx, FLAGS_CHANGED, 61, FLAG_MASK_ALTERNATE | 0x40);
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                61,
+                FLAG_MASK_ALTERNATE | 0x40,
+                std::time::Instant::now(),
+            );
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                HotkeyEvent::Pressed { .. }
+            ));
+            for extra in [true, false] {
+                let flags = FLAG_MASK_ALTERNATE | 0x40 | if extra { 0x20 } else { 0 };
+                if extra {
+                    observe_shift_fields(&ctx, FLAGS_CHANGED, 58, flags);
+                }
+                observe_shift_fields(&ctx, FLAGS_CHANGED, 56, flags | FLAG_MASK_SHIFT | 2);
+                observe_shift_fields(&ctx, FLAGS_CHANGED, 56, flags);
+                if extra {
+                    assert!(rx.try_recv().is_err());
+                    observe_shift_fields(&ctx, FLAGS_CHANGED, 58, FLAG_MASK_ALTERNATE | 0x40);
+                } else {
+                    assert!(matches!(
+                        rx.try_recv().unwrap(),
+                        HotkeyEvent::TranslationShiftTapped(_)
+                    ));
+                }
+            }
         }
 
         fn callback_context_with_combo(
@@ -1193,6 +2108,9 @@ mod platform {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
                     }),
+                    pending_space: parking_lot::Mutex::new(None),
+                    space_timer: std::ptr::null_mut(),
+                    space_down: std::sync::atomic::AtomicBool::new(false),
                 },
                 rx,
                 combo_rx,
@@ -1227,6 +2145,7 @@ mod platform {
 
         #[test]
         fn mac_optional_modifier_edges_are_deduped_from_mock_flags() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(Arc::clone(&shared));
 
@@ -1280,6 +2199,7 @@ mod platform {
         // once, and the trigger must actually be held.
         #[test]
         fn mac_companion_key_down_aborts_trigger_once_per_hold() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
 
@@ -1307,6 +2227,7 @@ mod platform {
 
         #[test]
         fn mac_fn_auto_short_tap_dispatches_only_after_release() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Auto;
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
@@ -1337,6 +2258,7 @@ mod platform {
 
         #[test]
         fn mac_fn_auto_long_hold_is_reserved_for_system_functions() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Auto;
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
@@ -1361,6 +2283,7 @@ mod platform {
 
         #[test]
         fn mac_idle_input_source_switch_does_not_decode_appkit_events() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             for trigger in [HotkeyTrigger::Fn, HotkeyTrigger::RightOption] {
                 let shared = shared(trigger);
                 let (ctx, rx) = callback_context(shared);
@@ -1373,6 +2296,7 @@ mod platform {
 
         #[test]
         fn mac_system_controls_do_not_decode_appkit_during_non_fn_holds() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightOption);
             shared.trigger_held.store(true, Ordering::SeqCst);
             let (ctx, rx) = callback_context(shared);
@@ -1384,6 +2308,7 @@ mod platform {
 
         #[test]
         fn mac_fn_function_layer_event_suppresses_tap_without_pending_abort() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Toggle;
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
@@ -1412,6 +2337,7 @@ mod platform {
 
         #[test]
         fn mac_system_defined_event_does_not_abort_non_fn_dictation() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
             shared.trigger_press_id.store(7, Ordering::SeqCst);
@@ -1430,6 +2356,7 @@ mod platform {
 
         #[test]
         fn mac_globe_system_event_is_not_mistaken_for_a_function_layer_key() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             assert!(!is_auxiliary_function_key_event(
                 NX_SUBTYPE_AUX_CONTROL_BUTTONS,
                 (25_i64 << 16) as isize,
@@ -1439,6 +2366,7 @@ mod platform {
 
         #[test]
         fn mac_fn_hold_mode_keeps_press_to_talk_semantics() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Fn);
             shared.binding.write().mode = HotkeyMode::Hold;
             let (ctx, rx) = callback_context(Arc::clone(&shared));
@@ -1476,8 +2404,8 @@ mod platform {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG,
-        WH_KEYBOARD_LL, WM_QUIT,
+        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+        MSG, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT,
     };
 
     use super::{
@@ -1564,12 +2492,25 @@ mod platform {
             );
         }
 
+        fn set_skip_auto_style_source(&self, source: super::SkipAutoStyleSource) {
+            *self.shared.skip_style_source.write() = Some(source);
+            self.shared.skip_style_gesture.lock().reset();
+        }
+
+        fn set_shift_translation_source(&self, source: super::ShiftTranslationSource) {
+            *self.shared.shift_source.write() = Some(source);
+            self.shared.shift_gesture.lock().reset();
+            self.shared.skip_style_gesture.lock().reset();
+        }
+
         fn reset_held_state(&self) {
             reset_shared_held_state(&self.shared);
         }
 
         fn set_recording_active(&self, active: bool) {
             self.shared.recording_active.store(active, Ordering::SeqCst);
+            self.shared.shift_gesture.lock().reset();
+            self.shared.skip_style_gesture.lock().reset();
         }
 
         fn shutdown(&self) {
@@ -1590,6 +2531,7 @@ mod platform {
         /// Combo-abort-only channel, see module docs — must not share tx's serial bridge.
         combo_tx: Sender<HotkeyCombinedEdge>,
         hook: std::sync::Mutex<Option<HHOOK>>,
+        mouse_hook: std::sync::Mutex<Option<HHOOK>>,
     }
 
     fn run_listen_loop(
@@ -1606,6 +2548,7 @@ mod platform {
             cancel_tx,
             combo_tx,
             hook: std::sync::Mutex::new(None),
+            mouse_hook: std::sync::Mutex::new(None),
         }));
         HOOK_CONTEXT.set(context);
 
@@ -1614,11 +2557,28 @@ mod platform {
             match hook {
                 Ok(hook) => {
                     *(*context).hook.lock().unwrap() = Some(hook);
+                    match SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0) {
+                        Ok(mouse) => *(*context).mouse_hook.lock().unwrap() = Some(mouse),
+                        Err(error) => {
+                            let _ = UnhookWindowsHookEx(hook);
+                            HOOK_CONTEXT.set(std::ptr::null_mut());
+                            let _ = Box::from_raw(context);
+                            let _ = status_tx.send(Err(install_error(
+                                "mouse_hook_install_failed",
+                                error.to_string(),
+                            )));
+                            return;
+                        }
+                    }
+
                     log::info!("[hotkey] Windows low-level keyboard hook 已启动");
                     if status_tx.send(Ok(thread_id)).is_err() {
                         // After the starter timed out and gave up, nobody holds the monitor; do
                         // not leave an orphaned hook behind.
                         let _ = UnhookWindowsHookEx(hook);
+                        if let Some(mouse) = (*context).mouse_hook.lock().unwrap().take() {
+                            let _ = UnhookWindowsHookEx(mouse);
+                        }
                         HOOK_CONTEXT.set(std::ptr::null_mut());
                         let _ = Box::from_raw(context);
                         return;
@@ -1653,6 +2613,9 @@ mod platform {
             if let Some(hook) = (*context).hook.lock().unwrap().take() {
                 let _ = UnhookWindowsHookEx(hook);
             }
+            if let Some(mouse) = (*context).mouse_hook.lock().unwrap().take() {
+                let _ = UnhookWindowsHookEx(mouse);
+            }
             // The listener thread may exit while the trigger is still held (config reload, app
             // shutdown, or an abnormal end of the hook message loop). Clear the internal latches
             // first so the next listener does not inherit stale pressed state when reusing the
@@ -1661,6 +2624,33 @@ mod platform {
             HOOK_CONTEXT.set(std::ptr::null_mut());
             let _ = Box::from_raw(context);
         }
+    }
+
+    unsafe extern "system" fn low_level_mouse_proc(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code == HC_ACTION as i32 {
+            if let Some(ctx) = callback_context() {
+                let (key, down) = match wparam.0 {
+                    0x0201 | 0x0202 => (500, wparam.0 == 0x0201),
+                    0x0204 | 0x0205 => (501, wparam.0 == 0x0204),
+                    0x0207 | 0x0208 => (502, wparam.0 == 0x0207),
+                    0x020B | 0x020C => (503, wparam.0 == 0x020B),
+                    0x020A | 0x020E => {
+                        ctx.shared.shift_gesture.lock().invalidate();
+                        ctx.shared.skip_style_gesture.lock().invalidate();
+                        return CallNextHookEx(None, code, wparam, lparam);
+                    }
+                    _ => return CallNextHookEx(None, code, wparam, lparam),
+                };
+                super::observe_shift(&ctx.shared, &ctx.tx, key, false, down, false);
+                super::observe_skip_style(&ctx.shared, &ctx.tx, key, down, false);
+            }
+        }
+        // Observation only: never consume mouse combinations belonging to another application.
+        CallNextHookEx(None, code, wparam, lparam)
     }
 
     unsafe extern "system" fn low_level_keyboard_proc(
@@ -1675,7 +2665,53 @@ mod platform {
                 // dispatch path. As long as the event's virtual key matches the current
                 // configuration, the existing edge dedup and combo-abort logic still decide
                 // whether OpenLess fires; no filtering by synthetic-input source here.
-                if dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0) {
+                let vk_code = crate::side_aware_combo::normalize_windows_vk(
+                    keyboard.vkCode,
+                    keyboard.scanCode,
+                    keyboard.flags.0 & LLKHF_EXTENDED.0 != 0,
+                );
+                const INJECTED: u32 = 0x10;
+                if keyboard.flags.0 & INJECTED == 0 {
+                    use crate::ask_window::hotkey::{keyboard_edge, Disposition};
+                    let down = matches!(wparam.0, WM_KEYDOWN | WM_SYSKEYDOWN);
+                    let disabled = ctx.shared.recording_active.load(Ordering::SeqCst);
+                    if down || matches!(wparam.0, WM_KEYUP | WM_SYSKEYUP) {
+                        // Keep keypad aliases out of this physical pairing
+                        // slot: keypad Up/Down/Enter are distinct keys even
+                        // when Windows gives them the same virtual-key code.
+                        let extended = keyboard.flags.0 & LLKHF_EXTENDED.0 != 0;
+                        let key = match (vk_code, extended) {
+                            (0x26, true) => Some(crate::capsule_style_menu::Key::ArrowUp),
+                            (0x28, true) => Some(crate::capsule_style_menu::Key::ArrowDown),
+                            (0x0D, false) => Some(crate::capsule_style_menu::Key::Enter),
+                            (0x1B, false) => Some(crate::capsule_style_menu::Key::Escape),
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+                            let modified = [VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU,
+                                VK_LWIN, VK_RWIN, VK_LSHIFT, VK_RSHIFT].into_iter()
+                                .any(|vk| GetAsyncKeyState(vk as i32) < 0);
+                            // The LL callback runs before async state updates:
+                            // an already-down key is a repeat, including a
+                            // press that predated installation of this hook.
+                            let repeat = down && GetAsyncKeyState(vk_code as i32) < 0;
+                            if crate::capsule_style_menu::key(key, down, repeat, modified) {
+                                return LRESULT(1);
+                            }
+                        }
+                    }
+                    if (down || matches!(wparam.0, WM_KEYUP | WM_SYSKEYUP))
+                        && !(down && vk_code == VK_ESCAPE && super::capsule_menu_open())
+                    {
+                        match keyboard_edge(vk_code as u16, down, false, disabled) {
+                            Disposition::Consume => return LRESULT(1),
+                            Disposition::Pass => return CallNextHookEx(None, code, wparam, lparam),
+                            Disposition::Stock => {}
+                        }
+                    }
+                }
+                if dispatch_keyboard_event(ctx, vk_code, wparam.0) {
                     return LRESULT(1);
                 }
             }
@@ -1693,6 +2729,14 @@ mod platform {
         }
     }
 
+    pub(super) fn held_recording_key(shared: &Shared) -> Option<u16> {
+        super::held_recording_trigger(shared).map(|trigger| trigger_to_vk_code(trigger) as u16)
+    }
+
+    pub(super) fn skip_style_key(trigger: HotkeyTrigger) -> u16 {
+        trigger_to_vk_code(trigger) as u16
+    }
+
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
         // Shortcut recording receives real keyboard events in the frontend; the main
         // dictation/Agent hooks must not swallow keys.
@@ -1700,7 +2744,46 @@ mod platform {
             return false;
         }
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
-        if vk_code == VK_ESCAPE && super::capsule_menu_open() { return false; }
+        let other = unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+            let controller = held_recording_key(&ctx.shared);
+            [
+                VK_LCONTROL,
+                VK_RCONTROL,
+                VK_LMENU,
+                VK_RMENU,
+                VK_LWIN,
+                VK_RWIN,
+                1,
+                2,
+                4,
+                5,
+                6,
+            ]
+            .into_iter()
+            .any(|key| Some(key as u16) != controller && GetAsyncKeyState(key as i32) < 0)
+        };
+        super::observe_shift(
+            &ctx.shared,
+            &ctx.tx,
+            vk_code as u16,
+            matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT),
+            pressed,
+            other,
+        );
+        let target = super::skip_style_context(&ctx.shared).map(|(_, trigger)| skip_style_key(trigger));
+        let controller = held_recording_key(&ctx.shared);
+        let style_other = unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+            [VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN, VK_LSHIFT, VK_RSHIFT, 1, 2, 4, 5, 6]
+                .into_iter().any(|key| Some(key as u16) != target && Some(key as u16) != controller
+                    && GetAsyncKeyState(key as i32) < 0)
+        };
+        super::observe_skip_style(&ctx.shared, &ctx.tx, vk_code as u16, pressed, style_other);
+
+        if vk_code == VK_ESCAPE && super::capsule_menu_open() {
+            return false;
+        }
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             crate::side_aware_combo::handle_companion_key_down();
             note_companion_key_down(ctx);
@@ -1722,31 +2805,6 @@ mod platform {
         if pressed && !is_modifier_vk(vk_code) {
             crate::side_aware_combo::handle_companion_key_down();
             note_companion_key_down(ctx);
-        }
-
-        // Shift (either side) = translation-mode modifier. A press takes effect at any time during
-        // recording. See issue #4.
-        if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
-            match message {
-                WM_KEYDOWN | WM_SYSKEYDOWN => {
-                    let was_held = ctx
-                        .shared
-                        .translation_modifier_held
-                        .swap(true, Ordering::SeqCst);
-                    if !was_held {
-                        send_or_log(&ctx.tx, HotkeyEvent::TranslationModifierPressed);
-                    }
-                }
-                WM_KEYUP | WM_SYSKEYUP => {
-                    ctx.shared
-                        .translation_modifier_held
-                        .store(false, Ordering::SeqCst);
-                }
-                _ => {}
-            }
-            // Shift must still fall through to the configured-trigger matching below, otherwise a
-            // left/right Shift hold-to-talk key would only produce the translation notification,
-            // never Pressed/Released, becoming a dead key that can still be saved.
         }
 
         handle_optional_modifier_trigger(
@@ -1814,6 +2872,8 @@ mod platform {
                         HotkeyEvent::Released {
                             at: std::time::Instant::now(),
                             press_id,
+                            combined: ctx.shared.trigger_companion_seen.load(Ordering::SeqCst)
+                                == press_id,
                         },
                     );
                 }
@@ -1945,7 +3005,12 @@ mod platform {
                 selection_polish_trigger_held: AtomicBool::new(false),
                 translation_trigger: RwLock::new(None),
                 translation_trigger_held: AtomicBool::new(false),
-                translation_modifier_held: AtomicBool::new(false),
+                skip_style_source: RwLock::new(None),
+                skip_style_gesture: parking_lot::Mutex::new(crate::hotkey::shift_translation::ShiftTranslationGesture::default()),
+                shift_source: RwLock::new(None),
+                shift_gesture: parking_lot::Mutex::new(
+                    crate::hotkey::shift_translation::ShiftTranslationGesture::default(),
+                ),
                 recording_active: AtomicBool::new(false),
                 recording_fn_held: AtomicBool::new(false),
             })
@@ -1968,6 +3033,7 @@ mod platform {
                     cancel_tx,
                     combo_tx: combo_abort_tx,
                     hook: std::sync::Mutex::new(None),
+                    mouse_hook: std::sync::Mutex::new(None),
                 },
                 rx,
                 combo_abort_rx,
@@ -2002,6 +3068,7 @@ mod platform {
 
         #[test]
         fn windows_hook_context_belongs_to_its_listener_thread() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let (ctx, _) = callback_context(shared(HotkeyTrigger::RightControl));
             let mut ctx = Box::new(ctx);
             HOOK_CONTEXT.set(&mut *ctx);
@@ -2018,6 +3085,7 @@ mod platform {
 
         #[test]
         fn windows_shift_trigger_keeps_both_recording_edges() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             for (trigger, key) in [
                 (HotkeyTrigger::LeftShift, VK_LSHIFT),
                 (HotkeyTrigger::RightShift, VK_RSHIFT),
@@ -2038,6 +3106,7 @@ mod platform {
 
         #[test]
         fn windows_shortcut_recording_passes_bound_keys_to_the_frontend() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let state = shared(HotkeyTrigger::LeftControl);
             state.recording_active.store(true, Ordering::SeqCst);
             let (ctx, rx) = callback_context(Arc::clone(&state));
@@ -2131,7 +3200,59 @@ mod platform {
         }
 
         #[test]
+        fn skip_auto_style_windows_modifier_fallback_never_consumes_or_toggles() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
+            let shared = shared(HotkeyTrigger::RightControl);
+            let context = super::super::ShiftTranslationContext {
+                session_id: openless_core::SessionId::new(), preferences_revision: 1,
+                tap_count: 1, held_recording_key: None,
+            };
+            *shared.skip_style_source.write() = Some(Arc::new(move || Some((context, HotkeyTrigger::LeftOption))));
+            let (ctx, rx, _) = callback_context_with_combo(shared.clone());
+            assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYUP));
+            assert!(rx.try_recv().is_err());
+            // Alt+letter, Alt+Tab, AltGr, and late releases all use stock input.
+            for companion in [0x43, 0x09, VK_RMENU] {
+                for (key, message) in [(VK_LMENU, WM_SYSKEYDOWN),
+                    (companion, WM_SYSKEYDOWN), (companion, WM_SYSKEYUP),
+                    (VK_LMENU, WM_SYSKEYUP)] {
+                    assert!(!dispatch_keyboard_event(&ctx, key, message));
+                }
+                assert!(rx.try_recv().is_err());
+            }
+            assert!(!dispatch_keyboard_event(&ctx, VK_RMENU, WM_SYSKEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RMENU, WM_SYSKEYUP));
+            assert!(rx.try_recv().is_err());
+            shared.skip_style_gesture.lock().reset();
+            assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYDOWN));
+            *shared.skip_style_source.write() = None;
+            assert!(!dispatch_keyboard_event(&ctx, VK_LMENU, WM_SYSKEYUP));
+            assert!(rx.try_recv().is_err());
+        }
+
+        #[test]
+        fn windows_release_carries_combo_verdict_even_when_abort_bridge_has_not_drained() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
+            let (ctx, rx, abort_rx) =
+                callback_context_with_combo(shared(HotkeyTrigger::RightControl));
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+            let press_id = match rx.recv().unwrap() {
+                HotkeyEvent::Pressed { press_id, .. } => press_id,
+                other => panic!("expected press, got {other:?}"),
+            };
+            dispatch_keyboard_event(&ctx, 0x41, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP);
+            // Intentionally read Released before the independently queued Combined.
+            assert!(matches!(rx.recv().unwrap(), HotkeyEvent::Released {
+                press_id: released_id, combined: true, ..
+            } if released_id == press_id));
+            assert_eq!(abort_rx.recv().unwrap().press_id, press_id);
+        }
+
+        #[test]
         fn windows_modifier_edges_are_deduped_from_mock_hook_events() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
 
@@ -2158,6 +3279,7 @@ mod platform {
 
         #[test]
         fn windows_unrelated_key_does_not_trigger_configured_modifier() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
 
@@ -2168,6 +3290,7 @@ mod platform {
 
         #[test]
         fn windows_modifier_edges_ignore_unrelated_keys_and_reemit_after_release() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
 
@@ -2185,6 +3308,7 @@ mod platform {
 
         #[test]
         fn windows_optional_modifier_shortcuts_use_independent_latches() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::RightControl);
             *shared.qa_trigger.write() = Some(HotkeyTrigger::RightCommand);
             *shared.translation_trigger.write() = Some(HotkeyTrigger::LeftOption);
@@ -2203,7 +3327,6 @@ mod platform {
                 vec![
                     HotkeyEvent::QaShortcutPressed,
                     HotkeyEvent::TranslationModifierPressed,
-                    HotkeyEvent::TranslationModifierPressed,
                     HotkeyEvent::QaShortcutPressed,
                 ]
             );
@@ -2211,6 +3334,7 @@ mod platform {
 
         #[test]
         fn windows_right_control_routes_only_to_selection_polish_action() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::Custom);
             *shared.selection_polish_trigger.write() = Some(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
@@ -2233,6 +3357,7 @@ mod platform {
 
         #[test]
         fn windows_option_triggers_keep_left_and_right_alt_separate() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let left_shared = shared(HotkeyTrigger::LeftOption);
             let (left_ctx, left_rx) = callback_context(left_shared);
 
@@ -2274,6 +3399,7 @@ mod platform {
         // modifier overlays (Shift = translation mode) do not.
         #[test]
         fn windows_companion_key_down_aborts_trigger_but_modifiers_do_not() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, _rx, combo_abort_rx) = callback_context_with_combo(shared);
 
@@ -2288,6 +3414,7 @@ mod platform {
 
         #[test]
         fn windows_escape_while_trigger_held_is_also_a_companion_key() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             let shared = shared(HotkeyTrigger::LeftOption);
             let (ctx, _rx, combo_abort_rx) = callback_context_with_combo(shared);
 
@@ -2299,6 +3426,7 @@ mod platform {
 
         #[test]
         fn windows_shift_side_combo_receives_pressed_via_dispatch_keyboard_event() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             use crate::side_aware_combo::SideAwareComboMonitor;
             use crate::types::ShortcutBinding;
 
@@ -2321,15 +3449,17 @@ mod platform {
                 combo_rx.recv().unwrap(),
                 HotkeyEvent::Pressed { .. }
             ));
-            assert!(hotkey_rx
-                .try_iter()
-                .any(|evt| evt == HotkeyEvent::TranslationModifierPressed));
+            assert!(hotkey_rx.try_iter().all(|evt| !matches!(
+                evt,
+                HotkeyEvent::TranslationShiftTapped(_) | HotkeyEvent::TranslationModifierPressed
+            )));
 
             drop(monitor);
         }
 
         #[test]
         fn windows_modifier_chord_uses_existing_companion_abort_semantics() {
+            let _monitor_guard = crate::side_aware_combo::TEST_MONITOR_LOCK.blocking_lock();
             use crate::side_aware_combo::SideAwareComboMonitor;
             use crate::types::ShortcutBinding;
 

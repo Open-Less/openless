@@ -139,6 +139,7 @@ struct Data {
     generation: AtomicU64,
     changes: tokio::sync::watch::Sender<SyncChange>,
     fail_restore: AtomicBool,
+    materialized_next_export: AtomicBool,
     capture_gate: Mutex<Option<Arc<crate::cloud_sync_e2ee_store::gate::SyncWriteGate>>>,
     export_attempts: AtomicU64,
     custom_origin: Mutex<Option<String>>,
@@ -190,6 +191,7 @@ impl Data {
             generation: AtomicU64::new(1),
             changes,
             fail_restore: AtomicBool::new(false),
+            materialized_next_export: AtomicBool::new(false),
             capture_gate: Mutex::new(None),
             export_attempts: AtomicU64::new(0),
             custom_origin: Mutex::new(None),
@@ -237,6 +239,7 @@ impl SyncServiceData for Data {
             Ok(ExportedDocuments {
                 generation: Revision::new(self.generation.load(Ordering::Acquire)),
                 documents,
+                materialized_preferences: self.materialized_next_export.swap(false, Ordering::AcqRel),
             })
         })
     }
@@ -261,6 +264,7 @@ impl SyncServiceData for Data {
             Ok(ExportedDocuments {
                 generation: Revision::new(generation),
                 documents: desired,
+                materialized_preferences: false,
             })
         })
     }
@@ -334,13 +338,18 @@ struct Remote {
     revision: u64,
     receipt: Option<Value>,
     drop_response: bool,
+    drop_upload_without_commit: bool,
     puts: Vec<Vec<u8>>,
+    put_attempts: usize,
+    snapshot_reads: usize,
+    deletes: usize,
     requests: usize,
     owner: String,
     delay_upload: bool,
     reject_upload: bool,
     hide_receipts: bool,
     drop_metadata_response: bool,
+    delay_metadata: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     github_auth_requests: usize,
     token_auth_requests: usize,
 }
@@ -413,6 +422,13 @@ impl Server {
                     shared.lock().unwrap().requests += 1;
                     continue;
                 }
+                if method == "GET" && path == "/v1/me/vault" {
+                    let delay = shared.lock().unwrap().delay_metadata.take();
+                    if let Some((arrived, allow)) = delay {
+                        arrived.notify_one();
+                        allow.notified().await;
+                    }
+                }
                 let hidden_receipt =
                     path.starts_with("/v1/me/operations/") && shared.lock().unwrap().hide_receipts;
                 if hidden_receipt {
@@ -422,9 +438,15 @@ impl Server {
                     socket.write_all(&body).await.unwrap();
                     continue;
                 }
-                let rejected = if method == "PUT" {
+                let rejected = if method == "PUT" || (method == "DELETE" && path == "/v1/me/vault") {
                     let mut state = shared.lock().unwrap();
-                    std::mem::take(&mut state.reject_upload)
+                    if method == "PUT" {
+                        state.put_attempts += 1;
+                        if std::mem::take(&mut state.drop_upload_without_commit) {
+                            continue;
+                        }
+                    }
+                    (method == "PUT" && std::mem::take(&mut state.reject_upload))
                         || headers.get("if-match")
                             != Some(&format!("\"fixture-{}\"", state.revision))
                 } else {
@@ -467,6 +489,10 @@ impl Server {
                             json!({"protocolVersion":1,"accessToken":"b".repeat(43),"tokenType":"Bearer","expiresIn":900,"account":{"githubId":owner,"login":"fixture-token-user"}})
                         }
                         ("GET", "/v1/me/vault") => match &remote.snapshot {
+                            None if remote.deletes > 0 => {
+                                let receipt = remote.receipt.as_ref().unwrap();
+                                json!({"protocolVersion":1,"state":"deleted","ownerGithubId":owner,"revision":remote.revision.to_string(),"vaultId":receipt["vaultId"],"keyId":null,"updatedAt":receipt["committedAt"],"payloadSchemaVersion":null,"ciphertextBytes":0,"ciphertextSha256":null,"lastOperationId":receipt["operationId"]})
+                            }
                             None => {
                                 json!({"protocolVersion":1,"state":"empty","ownerGithubId":owner,"revision":"0","vaultId":null,"keyId":null,"updatedAt":null,"payloadSchemaVersion":null,"ciphertextBytes":0,"ciphertextSha256":null,"lastOperationId":null})
                             }
@@ -474,7 +500,10 @@ impl Server {
                                 json!({"protocolVersion":1,"state":"active","ownerGithubId":owner,"revision":remote.revision.to_string(),"vaultId":s["vaultId"],"keyId":s["keyId"],"updatedAt":"2026-09-25T12:00:00Z","payloadSchemaVersion":1,"ciphertextBytes":URL_SAFE_NO_PAD.decode(s["ciphertext"].as_str().unwrap()).unwrap().len(),"ciphertextSha256":s["ciphertextSha256"],"lastOperationId":s["operationId"]})
                             }
                         },
-                        ("GET", "/v1/me/vault/snapshot") => remote.snapshot.clone().unwrap(),
+                        ("GET", "/v1/me/vault/snapshot") => {
+                            remote.snapshot_reads += 1;
+                            remote.snapshot.clone().unwrap()
+                        },
                         ("PUT", "/v1/me/vault/snapshot") => {
                             let value: Value = serde_json::from_slice(body).unwrap();
                             assert_eq!(
@@ -487,6 +516,19 @@ impl Server {
                             remote.puts.push(body.to_vec());
                             let receipt = json!({"operationId":value["operationId"],"status":"committed","kind":value["kind"],"committedRevision":value["revision"],"committedAt":"2026-09-25T12:00:00Z","vaultId":value["vaultId"],"ciphertextSha256":value["ciphertextSha256"]});
                             remote.snapshot = Some(value);
+                            remote.receipt = Some(receipt.clone());
+                            disconnect = std::mem::take(&mut remote.drop_response);
+                            receipt
+                        }
+                        ("DELETE", "/v1/me/vault") => {
+                            let value: Value = serde_json::from_slice(body).unwrap();
+                            assert_eq!(headers["idempotency-key"], value["operationId"]);
+                            assert_eq!(value["baseRevision"], remote.revision.to_string());
+                            assert_eq!(value["expectedVaultId"], remote.snapshot.as_ref().unwrap()["vaultId"]);
+                            remote.revision += 1;
+                            remote.deletes += 1;
+                            remote.snapshot = None;
+                            let receipt = json!({"operationId":value["operationId"],"status":"committed","kind":"delete","committedRevision":remote.revision.to_string(),"committedAt":"2026-09-25T12:00:00Z","vaultId":value["expectedVaultId"],"ciphertextSha256":null});
                             remote.receipt = Some(receipt.clone());
                             disconnect = std::mem::take(&mut remote.drop_response);
                             receipt
@@ -524,11 +566,39 @@ impl Server {
 
 struct Fixture {
     service: EncryptedSyncService,
+    events: crate::events::BackendEventPublisher,
     marketplace: Arc<crate::marketplace::MarketplaceService>,
     data: Arc<Data>,
     vault: Arc<Vault>,
     root: std::path::PathBuf,
 }
+
+#[tokio::test]
+async fn materialized_preference_receipt_invalidates_ui_once() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture
+        .data
+        .materialized_next_export
+        .store(true, Ordering::Release);
+    fixture.create(false).await.unwrap();
+    fixture.service.sync_now().await.unwrap();
+    let events = fixture.events.replay_after(0);
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .filter(|event| matches!(
+                event.kind,
+                crate::events::BackendEventKind::CloudSyncRestoreCompleted(_)
+            ))
+            .count(),
+        1
+    );
+    fixture.service.shutdown().await;
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -579,10 +649,11 @@ impl Fixture {
             local,
             data.clone(),
             vault.clone(),
-            events,
+            events.clone(),
         );
         Self {
             service,
+            events,
             marketplace,
             data,
             vault,
@@ -963,6 +1034,103 @@ async fn auto_sync_local_retry_cannot_reconcile_a_later_manual_unknown_upload() 
 }
 
 #[tokio::test]
+async fn local_encrypted_sync_keeps_server_opaque_and_merges_upgrade_fields_on_client() {
+    let server = Server::start().await;
+    let first = Fixture::new(&server).await;
+    first.prepare().await;
+    first.create(false).await.unwrap();
+
+    let second = Fixture::new(&server).await;
+    second
+        .service
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
+    let before = second.data.documents.lock().unwrap().clone();
+    assert!(second
+        .service
+        .unlock("WrongPassword!9876".into(), false)
+        .await
+        .is_err());
+    assert_eq!(*second.data.documents.lock().unwrap(), before);
+    assert_eq!(server.state.lock().unwrap().revision, 1);
+    second.service.unlock(PASSWORD.into(), false).await.unwrap();
+    let preview = second.service.preview_restore("1".into()).await.unwrap();
+    second
+        .service
+        .apply_restore(preview.preview_id, RestoreMode::Replace, vec![])
+        .await
+        .unwrap();
+
+    // Simulate an upgraded client introducing both a known and a future setting.
+    first.data.documents.lock().unwrap().documents.extend([
+        LogicalDocument {
+            id: "translationShiftTapCount".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value: json!(3),
+        },
+        LogicalDocument {
+            id: "futureClientOnlySetting".into(),
+            kind: DocumentKind::Preferences,
+            schema_version: 1,
+            value: json!({"layout": "private-upgrade-layout", "version": 2}),
+        },
+    ]);
+    first.data.generation.fetch_add(1, Ordering::AcqRel);
+    first.service.sync_now().await.unwrap();
+
+    // The other instance edits an independent field against the common baseline.
+    second.data.edit("private-local-edit-on-second-client");
+    second.service.sync_now().await.unwrap();
+    first.service.sync_now().await.unwrap();
+    for client in [&first, &second] {
+        let documents = client.data.documents.lock().unwrap();
+        for (id, expected) in [
+            ("translationShiftTapCount", json!(3)),
+            (
+                "futureClientOnlySetting",
+                json!({"layout": "private-upgrade-layout", "version": 2}),
+            ),
+            ("futureLayout", json!("private-local-edit-on-second-client")),
+        ] {
+            assert_eq!(
+                documents
+                    .documents
+                    .iter()
+                    .find(|doc| doc.id == id)
+                    .unwrap()
+                    .value,
+                expected
+            );
+        }
+    }
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.revision, 3);
+    assert_eq!(remote.puts.len(), 3);
+    // The fixture server only stores complete opaque snapshots; it has no field merge.
+    for request in &remote.puts {
+        let envelope: Value = serde_json::from_slice(request).unwrap();
+        assert_eq!(envelope["protocolVersion"], 1);
+        assert!(envelope["ciphertext"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()));
+        assert!(envelope.get("documents").is_none());
+        let text = std::str::from_utf8(request).unwrap();
+        for private in [
+            PASSWORD,
+            "sk-private-fixture-key",
+            "translationShiftTapCount",
+            "futureClientOnlySetting",
+            "private-upgrade-layout",
+            "private-local-edit-on-second-client",
+        ] {
+            assert!(!text.contains(private));
+        }
+    }
+}
+
+#[tokio::test]
 async fn create_encrypts_real_data_and_wrong_password_never_changes_local_data() {
     let server = Server::start().await;
     let first = Fixture::new(&server).await;
@@ -1023,6 +1191,75 @@ async fn lost_upload_response_reconciles_one_commit_without_another_put() {
     assert!(status.last_successful_sync_at.is_some());
     assert_eq!(server.state.lock().unwrap().puts.len(), 1);
     assert_eq!(server.state.lock().unwrap().revision, 1);
+}
+
+#[tokio::test]
+async fn sync_now_cancellation_before_commit_does_not_submit_a_write() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(false).await.unwrap();
+    fixture.data.edit("private changes not yet uploaded");
+
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let allow = Arc::new(tokio::sync::Notify::new());
+    server.state.lock().unwrap().delay_metadata = Some((arrived.clone(), allow.clone()));
+    let service = fixture.service.clone();
+    let sync = tokio::spawn(async move { service.sync_now().await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), arrived.notified())
+        .await
+        .unwrap();
+
+    let task = fixture.service.status().task_id.unwrap();
+    let acknowledged = fixture.service.cancel(&task).unwrap();
+    assert_eq!(acknowledged.task_id.as_deref(), Some(task.as_str()));
+    assert_eq!(acknowledged.sync_state, SyncState::Syncing);
+    assert!(!sync.is_finished());
+    allow.notify_one();
+    assert_eq!(sync.await.unwrap().unwrap_err().message, "cancelled");
+    let status = fixture.service.status();
+    assert!(status.task_id.is_none());
+    assert!(status.pending_operation_id.is_none());
+    assert_eq!(status.sync_state, SyncState::Pending);
+    assert_eq!(server.state.lock().unwrap().put_attempts, 1);
+    assert_eq!(
+        fixture.service.cancel(&task).unwrap_err().message,
+        "stale_task"
+    );
+}
+
+#[tokio::test]
+async fn sync_now_cancellation_after_submit_keeps_the_committed_receipt() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(false).await.unwrap();
+    fixture.data.edit("private changes in flight");
+    server.state.lock().unwrap().delay_upload = true;
+    let service = fixture.service.clone();
+    let sync = tokio::spawn(async move { service.sync_now().await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.upload_arrived.notified(),
+    )
+    .await
+    .unwrap();
+
+    let task = fixture.service.status().task_id.unwrap();
+    let acknowledged = fixture.service.cancel(&task).unwrap();
+    assert!(acknowledged.pending_operation_id.is_some());
+    assert_eq!(acknowledged.sync_state, SyncState::Syncing);
+    assert!(!sync.is_finished());
+    server.allow_upload.notify_one();
+    let status = sync.await.unwrap().unwrap();
+    assert_eq!(status.sync_state, SyncState::Ready);
+    assert!(status.task_id.is_none());
+    assert!(status.pending_operation_id.is_none());
+    assert_eq!(status.remote_revision.as_deref(), Some("2"));
+    assert_eq!(status.last_synced_local_generation.as_deref(), Some("2"));
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.put_attempts, 2);
+    assert_eq!(remote.revision, 2);
 }
 
 #[tokio::test]
@@ -1940,6 +2177,14 @@ async fn legacy_unknown_operation_keeps_exact_bytes_and_stays_on_its_original_se
         .is_none());
     fixture.data.set_custom_server_origin(None);
     fixture.set_custom_token("token-a").await;
+    assert_eq!(
+        reopened.sync_now().await.unwrap_err().message,
+        "consent_required"
+    );
+    reopened
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .unwrap();
     reopened.sync_now().await.unwrap();
     assert!(local
         .read::<serde_json::Value>(&original_namespace, "pending")
@@ -2060,4 +2305,434 @@ async fn configuration_failure_discards_cached_identity_and_memory_key() {
             .next_step,
         EnableStep::Unlock
     );
+}
+
+#[tokio::test]
+async fn outdated_consent_blocks_startup_manual_and_review_pending_replay_until_accepted() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.data.edit("pending private change");
+    server.state.lock().unwrap().drop_response = true;
+    assert_eq!(
+        fixture.service.sync_now().await.unwrap_err().message,
+        "outcome_unknown"
+    );
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    let namespace = LocalStorage::account_namespace(&server.origin, OWNER).unwrap();
+    let pending: serde_json::Value = local.read(&namespace, "pending").await.unwrap().unwrap();
+    let mut settings: local::ClientSettings =
+        local.read("device", "client").await.unwrap().unwrap();
+    settings.consent_version = Some("encrypted-full-snapshot-v1".into());
+    local.write("device", "client", settings).await.unwrap();
+    let reopened = fixture.reopen(&server);
+    let requests = server.state.lock().unwrap().requests;
+    let puts = server.state.lock().unwrap().puts.len();
+    reopened
+        .start(Arc::new(crate::TokioTaskSpawner))
+        .await
+        .unwrap();
+    wait_for_auto_sync(|| {
+        reopened
+            .status()
+            .last_error
+            .as_ref()
+            .is_some_and(|failure| failure.code == "consent_required")
+    })
+    .await;
+    assert_eq!(
+        reopened.sync_now().await.unwrap_err().message,
+        "consent_required"
+    );
+    assert_eq!(
+        reopened
+            .preview_restore("2".into())
+            .await
+            .unwrap_err()
+            .message,
+        "consent_required"
+    );
+    assert_eq!(
+        reopened
+            .unlock(PASSWORD.into(), true)
+            .await
+            .unwrap_err()
+            .message,
+        "consent_required"
+    );
+    assert_eq!(
+        reopened
+            .apply_restore("stale-preview".into(), RestoreMode::Replace, vec![])
+            .await
+            .unwrap_err()
+            .message,
+        "consent_required"
+    );
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    assert_eq!(server.state.lock().unwrap().puts.len(), puts);
+    assert_eq!(
+        local
+            .read::<serde_json::Value>(&namespace, "pending")
+            .await
+            .unwrap()
+            .unwrap(),
+        pending
+    );
+    let declined: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(
+        declined.consent_version.as_deref(),
+        Some("encrypted-full-snapshot-v1")
+    );
+    server.state.lock().unwrap().drop_response = false;
+    assert_eq!(
+        reopened
+            .prepare_enable(CONSENT_VERSION.into())
+            .await
+            .unwrap()
+            .next_step,
+        EnableStep::Ready
+    );
+    wait_for_auto_sync(|| reopened.status().sync_state == SyncState::Ready).await;
+    assert!(local
+        .read::<serde_json::Value>(&namespace, "pending")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(server.state.lock().unwrap().puts.len(), puts);
+    assert_eq!(
+        reopened.status().consent_version.as_deref(),
+        Some(CONSENT_VERSION)
+    );
+    reopened.shutdown().await;
+}
+
+async fn mark_consent_outdated(local: &LocalStorage) {
+    let mut settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    settings.consent_version = Some("encrypted-full-snapshot-v1".into());
+    local.write("device", "client", settings).await.unwrap();
+}
+
+#[tokio::test]
+async fn confirmed_delete_does_not_require_upgraded_consent_and_reconciles_its_own_receipt() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    let created = fixture.create(true).await.unwrap();
+    let expected_vault = created.vault_id.unwrap();
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    mark_consent_outdated(&local).await;
+    let reopened = fixture.reopen(&server);
+    assert!(reopened.status().vault_id.is_none());
+    let reads = server.state.lock().unwrap().snapshot_reads;
+    let generation = fixture.data.generation().unwrap();
+    let reviewed = reopened.refresh_backup_metadata().await.unwrap();
+    assert_eq!(reviewed.vault_id.as_deref(), Some(expected_vault.as_str()));
+    assert_eq!(reviewed.remote_revision.as_deref(), Some("1"));
+    assert_eq!(reviewed.has_cloud_snapshot, Some(true));
+    assert_eq!(reviewed.key_state, KeyState::Locked);
+    assert_eq!(reviewed.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert_eq!(server.state.lock().unwrap().snapshot_reads, reads);
+    assert_eq!(server.state.lock().unwrap().put_attempts, 1);
+    assert_eq!(fixture.data.generation().unwrap(), generation);
+    let stored: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(stored.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    let vault = reviewed.vault_id.unwrap();
+    assert_eq!(
+        reopened.delete_remote(vault.clone(), "1".into(), false).await.unwrap_err().message,
+        "delete_confirmation_required"
+    );
+    assert_eq!(server.state.lock().unwrap().deletes, 0);
+    assert_eq!(
+        reopened.delete_remote(vault.clone(), "0".into(), true).await.unwrap_err().message,
+        "revision_conflict"
+    );
+    assert_eq!(server.state.lock().unwrap().deletes, 0);
+    let generation = fixture.data.generation().unwrap();
+    server.state.lock().unwrap().drop_response = true;
+    assert_eq!(
+        reopened.delete_remote(vault.clone(), "1".into(), true).await.unwrap_err().message,
+        "outcome_unknown"
+    );
+    let removed = reopened.delete_remote(vault, "1".into(), true).await.unwrap();
+    assert!(!removed.enabled);
+    assert_eq!(removed.has_cloud_snapshot, Some(false));
+    assert_eq!(removed.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert!(removed.pending_operation_id.is_none());
+    assert_eq!(fixture.data.generation().unwrap(), generation);
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.deletes, 1);
+    assert_eq!(remote.put_attempts, 1);
+}
+
+#[tokio::test]
+async fn disabled_old_consent_can_review_and_delete_backup_after_restart() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    let created = fixture.create(true).await.unwrap();
+    let expected_vault = created.vault_id.unwrap();
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    mark_consent_outdated(&local).await;
+    let declining = fixture.reopen(&server);
+    assert!(!declining.set_enabled(false).await.unwrap().enabled);
+    declining.shutdown().await;
+    let disabled: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert!(!disabled.enabled);
+    assert_eq!(disabled.owner_id.as_deref(), Some(OWNER));
+    assert_eq!(disabled.service_origin.as_deref(), Some(server.origin.as_str()));
+    assert_eq!(disabled.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    let reopened = fixture.reopen(&server);
+    let reads = server.state.lock().unwrap().snapshot_reads;
+    let generation = fixture.data.generation().unwrap();
+    let reviewed = reopened.refresh_backup_metadata().await.unwrap();
+    assert!(!reviewed.enabled);
+    assert_eq!(reviewed.key_state, KeyState::Locked);
+    assert_eq!(reviewed.vault_id.as_deref(), Some(expected_vault.as_str()));
+    assert_eq!(reviewed.remote_revision.as_deref(), Some("1"));
+    assert_eq!(reviewed.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    let stored: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert!(!stored.enabled);
+    assert_eq!(stored.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert_eq!(fixture.data.generation().unwrap(), generation);
+    {
+        let remote = server.state.lock().unwrap();
+        assert_eq!(remote.snapshot_reads, reads);
+        assert_eq!(remote.put_attempts, 1);
+        assert_eq!(remote.deletes, 0);
+    }
+    let removed = reopened.delete_remote(expected_vault, "1".into(), true).await.unwrap();
+    assert!(!removed.enabled);
+    assert_eq!(removed.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    assert_eq!(server.state.lock().unwrap().deletes, 1);
+}
+
+#[tokio::test]
+async fn backup_metadata_requires_a_persisted_old_consent() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    assert_eq!(fixture.service.refresh_backup_metadata().await.unwrap_err().message, "consent_required");
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    let settings = local::ClientSettings {
+        consent_version: Some("encrypted-full-snapshot-v1".into()),
+        ..Default::default()
+    };
+    local.write("device", "client", settings).await.unwrap();
+    let unbound = fixture.reopen(&server);
+    assert_eq!(unbound.refresh_backup_metadata().await.unwrap_err().message, "sign_in_required");
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+}
+
+#[tokio::test]
+async fn backup_metadata_rejects_a_changed_account_before_mutating_settings() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    mark_consent_outdated(&local).await;
+    let declining = fixture.reopen(&server);
+    declining.set_enabled(false).await.unwrap();
+    declining.shutdown().await;
+    server.state.lock().unwrap().owner = "118527".into();
+    let reopened = fixture.reopen(&server);
+    assert_eq!(reopened.refresh_backup_metadata().await.unwrap_err().message, "account_changed");
+    let settings: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert!(!settings.enabled);
+    assert_eq!(settings.owner_id.as_deref(), Some(OWNER));
+    assert_eq!(settings.consent_version.as_deref(), Some("encrypted-full-snapshot-v1"));
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.put_attempts, 1);
+    assert_eq!(remote.deletes, 0);
+}
+
+#[tokio::test]
+async fn confirmed_delete_preserves_an_unresolved_upload_without_resubmitting_it() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    let created = fixture.create(true).await.unwrap();
+    let vault = created.vault_id.unwrap();
+    fixture.data.edit("pending private change");
+    server.state.lock().unwrap().drop_upload_without_commit = true;
+    assert_eq!(fixture.service.sync_now().await.unwrap_err().message, "outcome_unknown");
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    mark_consent_outdated(&local).await;
+    let namespace = LocalStorage::account_namespace(&server.origin, OWNER).unwrap();
+    let pending: Value = local.read(&namespace, "pending").await.unwrap().unwrap();
+    server.state.lock().unwrap().hide_receipts = true;
+    let reopened = fixture.reopen(&server);
+    assert_eq!(
+        reopened.delete_remote(vault.clone(), "1".into(), true).await.unwrap_err().message,
+        "delete_pending_operation"
+    );
+    assert_eq!(local.read::<Value>(&namespace, "pending").await.unwrap(), Some(pending.clone()));
+    {
+        let mut remote = server.state.lock().unwrap();
+        assert_eq!(remote.put_attempts, 2);
+        assert_eq!(remote.deletes, 0);
+        remote.revision += 1;
+    }
+    // A newer head makes the earlier CAS incapable of committing. Keep its journal
+    // as evidence while deleting only the newer revision the user has reviewed.
+    let removed = reopened.delete_remote(vault, "2".into(), true).await.unwrap();
+    assert_eq!(removed.has_cloud_snapshot, Some(false));
+    let key = format!("reviewed-uncertain:{}", pending["operationId"].as_str().unwrap());
+    assert_eq!(local.read::<Value>(&namespace, &key).await.unwrap(), Some(pending));
+    let remote = server.state.lock().unwrap();
+    assert_eq!(remote.put_attempts, 2);
+    assert_eq!(remote.deletes, 1);
+}
+
+#[tokio::test]
+async fn failed_or_stale_preparation_does_not_accept_the_new_disclosure() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    fixture.prepare().await;
+    fixture.create(true).await.unwrap();
+    fixture.service.shutdown().await;
+    let local = fixture.local(&server);
+    let mut settings: local::ClientSettings =
+        local.read("device", "client").await.unwrap().unwrap();
+    settings.consent_version = Some("encrypted-full-snapshot-v1".into());
+    local.write("device", "client", settings).await.unwrap();
+    let reopened = fixture.reopen(&server);
+    let requests = server.state.lock().unwrap().requests;
+    let scope = ConsentScope {
+        service_origin: "https://changed.example".into(),
+        account_id: Some(OWNER.into()),
+        vault_id: None,
+    };
+    assert_eq!(
+        reopened
+            .prepare_enable_scoped(CONSENT_VERSION.into(), Some(scope))
+            .await
+            .unwrap_err()
+            .message,
+        "account_changed"
+    );
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    server.state.lock().unwrap().drop_metadata_response = true;
+    assert!(reopened
+        .prepare_enable(CONSENT_VERSION.into())
+        .await
+        .is_err());
+    let declined: local::ClientSettings = local.read("device", "client").await.unwrap().unwrap();
+    assert_eq!(
+        declined.consent_version.as_deref(),
+        Some("encrypted-full-snapshot-v1")
+    );
+    assert_eq!(
+        reopened.status().consent_version.as_deref(),
+        Some("encrypted-full-snapshot-v1")
+    );
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancellation_during_metadata_check_leaves_disclosure_unaccepted() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let allow = Arc::new(tokio::sync::Notify::new());
+    server.state.lock().unwrap().delay_metadata = Some((arrived.clone(), allow.clone()));
+    let service = fixture.service.clone();
+    let preparing =
+        tokio::spawn(async move { service.prepare_enable(CONSENT_VERSION.into()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), arrived.notified())
+        .await
+        .unwrap();
+    let task = fixture.service.status().task_id.unwrap();
+    fixture.service.cancel(&task).unwrap();
+    allow.notify_one();
+    assert_eq!(preparing.await.unwrap().unwrap_err().message, "cancelled");
+    let settings: local::ClientSettings = fixture
+        .local(&server)
+        .read("device", "client")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(settings.consent_version, None);
+    assert!(!settings.enabled);
+    assert!(server.state.lock().unwrap().puts.is_empty());
+}
+
+#[tokio::test]
+async fn create_requires_valid_confirmation_and_a_committed_remote_backup_to_enable() {
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    let before = server.state.lock().unwrap().requests;
+    assert_eq!(
+        fixture.create(true).await.unwrap_err().message,
+        "consent_required"
+    );
+    assert_eq!(server.state.lock().unwrap().requests, before);
+    fixture.prepare().await;
+    let requests = server.state.lock().unwrap().requests;
+    assert!(fixture
+        .service
+        .create(
+            PASSWORD.into(),
+            "FixtureWrong2!".into(),
+            true,
+            CONSENT_VERSION.into(),
+            "0".into()
+        )
+        .await
+        .is_err());
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    assert!(!fixture.service.status().enabled);
+    server.state.lock().unwrap().reject_upload = true;
+    assert!(fixture.create(true).await.is_err());
+    assert!(!fixture.service.status().enabled);
+    assert_eq!(server.state.lock().unwrap().revision, 0);
+    let created = fixture.create(true).await.unwrap();
+    assert!(created.enabled);
+    assert_eq!(created.remote_revision.as_deref(), Some("1"));
+}
+
+#[tokio::test]
+async fn public_verified_account_facade_does_not_enable_or_authenticate_full_sync() {
+    use crate::domains::MarketplaceApi;
+    let server = Server::start().await;
+    let fixture = Fixture::new(&server).await;
+    let account = fixture.marketplace.verified_sync_account().await.unwrap();
+    assert_eq!(account.github_id(), OWNER);
+    assert_eq!(
+        serde_json::to_value(&account).unwrap(),
+        json!({"githubId": OWNER})
+    );
+    assert!(!fixture.service.status().enabled);
+    {
+        let state = server.state.lock().unwrap();
+        assert_eq!(
+            state.requests, 1,
+            "only the real account /user authority was contacted"
+        );
+        assert_eq!(state.github_auth_requests, 0);
+        assert_eq!(state.token_auth_requests, 0);
+        assert!(state.puts.is_empty());
+    }
+    server.state.lock().unwrap().owner = "999".into();
+    assert_eq!(
+        fixture
+            .marketplace
+            .verified_sync_account()
+            .await
+            .unwrap()
+            .github_id(),
+        "999"
+    );
+    // The previously returned immutable value remains 42, never a mutable display-login alias.
+    assert_eq!(account.github_id(), OWNER);
+    fixture.marketplace.logout().await.unwrap();
+    let requests = server.state.lock().unwrap().requests;
+    assert!(fixture.marketplace.verified_sync_account().await.is_err());
+    assert_eq!(server.state.lock().unwrap().requests, requests);
 }

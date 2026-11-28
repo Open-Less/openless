@@ -5,7 +5,7 @@
 //! [`crate::ports`]; they never duplicate session or fallback decisions.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use futures_util::future::{BoxFuture, Shared};
@@ -28,6 +28,12 @@ const BUFFERED_TRANSCRIPTION_STOP_HEADROOM_BYTES: usize = 1024 * 1024;
 const BUFFERED_TRANSCRIPTION_STOP_THRESHOLD_BYTES: usize =
     MAX_BUFFERED_TRANSCRIPTION_PCM_BYTES - BUFFERED_TRANSCRIPTION_STOP_HEADROOM_BYTES;
 const BUFFERED_TRANSCRIPTION_FORWARD_CHUNK_BYTES: usize = 64 * 1024;
+const MIN_VALID_PCM_BYTES: u64 = 3_200;
+const STABLE_SPILL_THRESHOLD_BYTES: usize = 8 * 1024 * 1024;
+
+#[cfg(test)]
+#[path = "long_recording_tests.rs"]
+mod long_recording_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolishFailurePolicy {
@@ -193,8 +199,9 @@ impl PipelineDictationEngine {
         }
     }
 
-    /// Once capture is running, local model loading must not hold the public
-    /// session in Starting: Stop must release the microphone before inference is ready.
+    /// Once capture is running, local model loading or waiting for its native
+    /// executor must not hold the public session in Starting: Stop must release
+    /// the microphone before inference is ready.
     /// Cloud routes and stable (record-first) mode keep their existing behavior.
     pub fn with_local_startup_spawner(mut self, spawner: Arc<dyn crate::TaskSpawner>) -> Self {
         self.local_startup_spawner = Some(spawner);
@@ -269,8 +276,7 @@ impl DictationEngine for PipelineDictationEngine {
         let sessions = Arc::clone(&self.sessions);
         let pending_captures = Arc::clone(&self.pending_captures);
         let local_startup_spawner = self.local_startup_spawner.clone().filter(|_| {
-            crate::experimental_asr::ExperimentalAsrModel::from_provider(&context.asr.provider_type)
-                .is_some()
+            crate::dictation_context::is_local_asr_provider(&context.asr.provider_type)
         });
         Box::pin(async move {
             let session = Arc::new(PipelineSession::new(Arc::clone(&context)));
@@ -303,6 +309,7 @@ impl DictationEngine for PipelineDictationEngine {
                 ));
             }
             let stable = context.recording.transcribe_after_stop;
+            let spill_to_archive = stable && context.recording.archive_processed;
             let has_local_fallback = context.asr_fallback.is_some();
             let transcript_partials: Arc<dyn TextStreamSink> = if stable {
                 Arc::new(DiscardTextStream)
@@ -388,6 +395,14 @@ impl DictationEngine for PipelineDictationEngine {
                     return Err(error);
                 }
             };
+            if spill_to_archive {
+                if let Some(archive) = recording
+                    .archive()
+                    .filter(|archive| archive.is_available() && archive.write_error().is_none())
+                {
+                    buffered.enable_archive_spill(archive);
+                }
+            }
 
             let mut recording = Some(PipelineRecording::new(recording));
             let stopping = {
@@ -502,7 +517,10 @@ impl DictationEngine for PipelineDictationEngine {
         })
     }
 
-    fn stop_recording(&self, session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+    fn stop_recording(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<bool, BackendError>> {
         let session = self
             .sessions
             .lock()
@@ -573,6 +591,7 @@ impl DictationEngine for PipelineDictationEngine {
                 ));
             }
             let stable = context.recording.transcribe_after_stop;
+            let spill_to_archive = stable && context.recording.archive_processed;
             let partials = if stable {
                 Arc::new(DiscardTextStream) as Arc<dyn TextStreamSink>
             } else {
@@ -587,6 +606,14 @@ impl DictationEngine for PipelineDictationEngine {
             let recording = recorder
                 .start(session_id, context, consumer, progress)
                 .await?;
+            if spill_to_archive {
+                if let Some(archive) = recording
+                    .archive()
+                    .filter(|archive| archive.is_available() && archive.write_error().is_none())
+                {
+                    buffered.enable_archive_spill(archive);
+                }
+            }
             let transcription: Arc<dyn TranscriptionSession> = buffered.clone();
             if cancel.is_cancelled() {
                 let (stop_result, cancel_result) =
@@ -692,7 +719,7 @@ impl DictationEngine for PipelineDictationEngine {
             }
             let context = session.context();
 
-            let (recording, transcription, prepared) = {
+            let (recording, transcription, prepared, buffered) = {
                 let mut resources = session
                     .resources
                     .lock()
@@ -701,6 +728,7 @@ impl DictationEngine for PipelineDictationEngine {
                     resources.recording.take(),
                     resources.transcription.clone(),
                     resources.prepared.clone(),
+                    resources.buffered.clone(),
                 )
             };
             let recording = recording.ok_or_else(|| {
@@ -717,7 +745,6 @@ impl DictationEngine for PipelineDictationEngine {
             })?;
 
             let archive = recording.archive();
-            let mut has_audio_recording = archive.as_ref().map(|archive| archive.is_available());
             if let Err(error) = recording.stop().await {
                 // 录音设备中途掉线（蓝牙麦欠载/节点被挂起时报 "Device disconnected"）
                 // 不应丢掉已经流进 ASR 的内容：这里降级为警告继续转写，
@@ -726,6 +753,20 @@ impl DictationEngine for PipelineDictationEngine {
                     "[dictation] recorder stop failed; transcribing the captured audio anyway: {error}"
                 );
             }
+            let mut has_audio_recording = archive
+                .as_ref()
+                .map(|archive| archive.is_available() && archive.write_error().is_none());
+            let captured_pcm_bytes = buffered
+                .as_ref()
+                .map_or(0, |buffer| buffer.received_pcm_bytes());
+            let captured_duration_ms = crate::long_recording::duration_ms(captured_pcm_bytes);
+            let long_recording = captured_duration_ms > crate::long_recording::THRESHOLD_MS
+                && matches!(
+                    context.output_target,
+                    DictationOutputTarget::ForegroundApp
+                        | DictationOutputTarget::QuickNote
+                        | DictationOutputTarget::Undecided
+                );
             if context.output_target == crate::dictation_context::DictationOutputTarget::QuickNote {
                 if let Some(archive) = archive.as_ref() {
                     if let Err(error) = archive.promote_to_quick_note().await {
@@ -734,7 +775,7 @@ impl DictationEngine for PipelineDictationEngine {
                         );
                     }
                 }
-            } else if context.recording.archive_successful_recording {
+            } else if context.recording.archive_successful_recording || long_recording {
                 if let Some(archive) = archive.as_ref() {
                     if let Err(error) = archive.demote_to_ordinary_recording().await {
                         log::warn!(
@@ -756,6 +797,12 @@ impl DictationEngine for PipelineDictationEngine {
                 &session,
                 session_id,
                 &progress,
+                EngineProgress::CapturedDurationMs(captured_duration_ms),
+            )?;
+            publish_progress(
+                &session,
+                session_id,
+                &progress,
                 EngineProgress::Stage(EngineStage::Transcribing),
             )?;
             let asr_started = std::time::Instant::now();
@@ -765,7 +812,11 @@ impl DictationEngine for PipelineDictationEngine {
             let standby = context
                 .asr_fallback
                 .is_some()
-                .then(|| archive.clone().filter(|archive| archive.is_available()))
+                .then(|| {
+                    archive
+                        .clone()
+                        .filter(|archive| archive.is_available() && archive.write_error().is_none())
+                })
                 .flatten()
                 .map(|archive| {
                     LocalStandby::new(
@@ -785,6 +836,7 @@ impl DictationEngine for PipelineDictationEngine {
                     standby: None,
                 },
             };
+            let mut asr_metadata = transcription.transcript_metadata();
             asr_call_label = transcription.asr_call_label().or(asr_call_label);
             for notification in transcription.take_progress_notifications() {
                 publish_progress(
@@ -802,7 +854,7 @@ impl DictationEngine for PipelineDictationEngine {
             // healthy, so polish still runs.
             let mut local_won_race = false;
             let mut transcript = match race {
-                AsrRace::Local((transcript, label)) => {
+                AsrRace::Local((transcript, label, metadata)) => {
                     log::info!(
                         "[dictation] local {} answered before cloud ASR {}; using the local transcript",
                         context.asr_fallback.as_ref().map_or("", |fallback| fallback.provider_type.as_str()),
@@ -810,6 +862,7 @@ impl DictationEngine for PipelineDictationEngine {
                     );
                     let _ = cancel_transcription_once(&session, Arc::clone(&transcription)).await;
                     asr_call_label = label;
+                    asr_metadata = metadata;
                     local_won_race = true;
                     transcript
                 }
@@ -822,11 +875,12 @@ impl DictationEngine for PipelineDictationEngine {
                         .store(true, Ordering::Release);
                     if transcript.text.trim().is_empty() {
                         if let Some(standby) = standby {
-                            if let Some((local, label)) = standby.result().await {
+                            if let Some((local, label, metadata)) = standby.result().await {
                                 log::warn!(
                                     "[dictation] cloud ASR returned an empty transcript; using the local fallback"
                                 );
                                 asr_call_label = label;
+                                asr_metadata = metadata;
                                 local_fallback_used = true;
                                 local
                             } else {
@@ -847,7 +901,7 @@ impl DictationEngine for PipelineDictationEngine {
                     standby,
                 } => {
                     let cancelled = session.cancelled.load(Ordering::Acquire);
-                    let prepared = prepared.ok_or_else(|| {
+                    let prepared = prepared.clone().ok_or_else(|| {
                         BackendError::new(
                             BackendErrorCode::Internal,
                             "transcription provider preparation is unavailable",
@@ -855,13 +909,20 @@ impl DictationEngine for PipelineDictationEngine {
                     })?;
                     // The recording is replayed for a cloud retry (retryable
                     // errors only).
-                    let retry_pcm = if !cancelled && first_error.retryable {
-                        match archive.as_ref().filter(|archive| archive.is_available()) {
-                            Some(archive) => {
-                                archive.read_pcm().await.ok().filter(|pcm| !pcm.is_empty())
-                            }
-                            None => None,
-                        }
+                    let recover_long = long_recording
+                        && !matches!(
+                            first_error.code,
+                            BackendErrorCode::InvalidArgument
+                                | BackendErrorCode::PermissionDenied
+                                | BackendErrorCode::Cancelled
+                        );
+                    let retry_archive = if !cancelled && (first_error.retryable || recover_long) {
+                        validate_retry_archive_bytes(
+                            archive.as_ref(),
+                            long_recording,
+                            captured_pcm_bytes,
+                        )
+                        .await
                     } else {
                         None
                     };
@@ -886,43 +947,51 @@ impl DictationEngine for PipelineDictationEngine {
                         }
                         None => None,
                     };
-                    if let Some((transcript, label)) = local {
+                    if let Some((transcript, label, metadata)) = local {
                         asr_call_label = label;
+                        asr_metadata = metadata;
                         local_fallback_used = true;
                         transcript
                     } else {
-                        match retry_pcm {
-                            Some(pcm) => match retry_transcription(
-                                prepared,
-                                Arc::clone(&session),
-                                session_id,
-                                Arc::clone(&progress),
-                                pcm,
-                                CLOUD_RETRY,
-                            )
-                            .await
-                            {
-                                Ok((transcript, label)) => {
-                                    asr_call_label = label;
-                                    transcript
+                        match retry_archive {
+                            Some((retry_archive, retry_bytes)) => {
+                                match retry_transcription_from_archive(
+                                    prepared,
+                                    Arc::clone(&session),
+                                    session_id,
+                                    Arc::clone(&progress),
+                                    retry_archive,
+                                    retry_bytes,
+                                    CLOUD_RETRY,
+                                )
+                                .await
+                                {
+                                    Ok((transcript, label, metadata)) => {
+                                        asr_call_label = label;
+                                        asr_metadata = metadata;
+                                        transcript
+                                    }
+                                    Err((error, label)) => {
+                                        asr_call_label = label.or(asr_call_label);
+                                        demote_failed_archive(
+                                            archive.as_ref(),
+                                            context.output_target,
+                                            &mut has_audio_recording,
+                                        )
+                                        .await;
+                                        remove_session(&sessions, session_id, &session);
+                                        let mut failure = EngineFailure::new(
+                                            error,
+                                            EngineFailureStage::Transcribing,
+                                        );
+                                        failure.asr_ms =
+                                            Some(asr_started.elapsed().as_millis() as u64);
+                                        failure.has_audio_recording = has_audio_recording;
+                                        failure.asr_call_label = asr_call_label;
+                                        return Err(failure);
+                                    }
                                 }
-                                Err((error, label)) => {
-                                    asr_call_label = label.or(asr_call_label);
-                                    demote_failed_archive(
-                                        archive.as_ref(),
-                                        context.output_target,
-                                        &mut has_audio_recording,
-                                    )
-                                    .await;
-                                    remove_session(&sessions, session_id, &session);
-                                    let mut failure =
-                                        EngineFailure::new(error, EngineFailureStage::Transcribing);
-                                    failure.asr_ms = Some(asr_started.elapsed().as_millis() as u64);
-                                    failure.has_audio_recording = has_audio_recording;
-                                    failure.asr_call_label = asr_call_label;
-                                    return Err(failure);
-                                }
-                            },
+                            }
                             None => {
                                 demote_failed_archive(
                                     archive.as_ref(),
@@ -949,6 +1018,44 @@ impl DictationEngine for PipelineDictationEngine {
                     }
                 }
             };
+            if long_recording
+                && transcript.text.trim().is_empty()
+                && !session.cancelled.load(Ordering::Acquire)
+            {
+                if let Some(prepared) = prepared {
+                    if let Some((retry_archive, retry_bytes)) =
+                        validate_retry_archive_bytes(archive.as_ref(), true, captured_pcm_bytes)
+                            .await
+                    {
+                        match retry_transcription_from_archive(
+                            prepared,
+                            Arc::clone(&session),
+                            session_id,
+                            Arc::clone(&progress),
+                            retry_archive,
+                            retry_bytes,
+                            CLOUD_RETRY,
+                        )
+                        .await
+                        {
+                            Ok((recovered, label, metadata)) => {
+                                transcript = recovered;
+                                asr_call_label = label.or(asr_call_label);
+                                asr_metadata = metadata;
+                            }
+                            Err((error, label)) => {
+                                remove_session(&sessions, session_id, &session);
+                                let mut failure =
+                                    EngineFailure::new(error, EngineFailureStage::Transcribing);
+                                failure.duration_ms = Some(captured_duration_ms);
+                                failure.has_audio_recording = has_audio_recording;
+                                failure.asr_call_label = label.or(asr_call_label);
+                                return Err(failure);
+                            }
+                        }
+                    }
+                }
+            }
             let asr_elapsed_ms = asr_started.elapsed().as_millis() as u64;
             let asr_ms = Some(asr_elapsed_ms);
             // 「听写很慢」时要能一句话看出慢在 ASR 还是慢在润色。
@@ -961,7 +1068,7 @@ impl DictationEngine for PipelineDictationEngine {
                 transcript.text.chars().count(),
             );
             if session.cancelled.load(Ordering::Acquire) {
-                if !context.recording.archive_successful_recording {
+                if !context.recording.archive_successful_recording && !long_recording {
                     discard_ephemeral_archive(archive.as_ref(), &mut has_audio_recording).await;
                 }
                 remove_session(&sessions, session_id, &session);
@@ -990,7 +1097,55 @@ impl DictationEngine for PipelineDictationEngine {
             );
             let asr_transcript =
                 (transcript.text != original_asr_text).then_some(original_asr_text);
-            if !context.recording.archive_successful_recording {
+            if long_recording {
+                transcript.duration_ms = captured_duration_ms;
+                // Validate the saved whole recording before claiming recoverability.
+                // The archive starts with capture, not with the five-minute transition.
+                let saved = match archive.as_ref() {
+                    Some(archive) => {
+                        if let Some(write_err) = archive.write_error() {
+                            log::warn!(
+                                "[long-recording] archive write failed before completeness verification: {write_err}"
+                            );
+                            Err(BackendError::new(
+                                BackendErrorCode::Persistence,
+                                "longRecordingArchiveIncomplete",
+                            ))
+                        } else if !archive.is_available() {
+                            Err(BackendError::new(
+                                BackendErrorCode::Persistence,
+                                "longRecordingArchiveUnavailable",
+                            ))
+                        } else {
+                            archive.pcm_byte_len().await
+                        }
+                    }
+                    None => Err(BackendError::new(
+                        BackendErrorCode::Persistence,
+                        "longRecordingArchiveUnavailable",
+                    )),
+                };
+                if !saved
+                    .as_ref()
+                    .is_ok_and(|bytes| *bytes == captured_pcm_bytes)
+                {
+                    remove_session(&sessions, session_id, &session);
+                    let error = saved.err().unwrap_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::Persistence,
+                            "longRecordingArchiveIncomplete",
+                        )
+                    });
+                    let mut failure = EngineFailure::new(error, EngineFailureStage::Transcribing);
+                    failure.raw_text = Some(transcript.text);
+                    failure.duration_ms = Some(captured_duration_ms);
+                    failure.asr_ms = asr_ms;
+                    failure.has_audio_recording = has_audio_recording;
+                    failure.asr_call_label = asr_call_label;
+                    return Err(failure);
+                }
+            }
+            if !context.recording.archive_successful_recording && !long_recording {
                 if transcript.text.trim().is_empty() {
                     demote_failed_archive(
                         archive.as_ref(),
@@ -1012,22 +1167,72 @@ impl DictationEngine for PipelineDictationEngine {
                     is_final: true,
                 }),
             )?;
+            // Issue #1225: evaluate the optional policy only after correction and
+            // final transcript publication, so the script sees what the user will
+            // actually receive and cannot affect raw ASR diagnostics.
+            // Missing provider metadata must fall back to the winning invocation,
+            // never the cloud route that lost to the local standby.
+            let strategy_asr = if local_fallback_used || local_won_race {
+                context.asr_fallback.as_ref().unwrap_or(&context.asr)
+            } else {
+                &context.asr
+            };
+            let strategy_input = crate::polish_strategy::PolishStrategyInput {
+                char_count: transcript
+                    .text
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .count(),
+                text: transcript.text.clone(),
+                audio_duration_ms: transcript.duration_ms,
+                language: asr_metadata
+                    .language
+                    .clone()
+                    .or_else(|| strategy_asr.language.clone()),
+                confidence: asr_metadata.confidence,
+                asr_provider: asr_call_label
+                    .as_ref()
+                    .map(|label| label.provider.clone())
+                    .unwrap_or_else(|| strategy_asr.provider_type.clone()),
+                asr_model: asr_call_label
+                    .as_ref()
+                    .and_then(|label| label.model.clone())
+                    .or_else(|| strategy_asr.model.clone()),
+            };
+            let strategy_decision = (context.output_target
+                != crate::dictation_context::DictationOutputTarget::Qa)
+                .then(|| {
+                    crate::polish_strategy::evaluate(
+                        &context.polish.polish_strategy,
+                        &strategy_input,
+                    )
+                })
+                .flatten();
+            let strategy_overrides = match &strategy_decision {
+                Some(crate::polish_strategy::PolishStrategyDecision::Request(overrides)) => {
+                    Some(overrides.clone())
+                }
+                _ => None,
+            };
+            let strategy_skips = strategy_skips_polish(&context, strategy_decision.as_ref());
             // Issue #1032: short transcripts skip polish (user-configured threshold).
             let skips_polish_for_short_text = context.skips_polish_for_short_text(&transcript.text);
             // Optional polish may be skipped after fallback; an explicit translation is still required.
             let translation_active = context.polish.translation_active;
-            let uses_polisher = context.uses_llm_polisher()
-                && !(context.voice_activation.is_some() && transcript.text.trim().is_empty())
+            let uses_polisher = !strategy_skips
+                && context.uses_llm_polisher()
+                && !transcript.text.trim().is_empty()
                 && !skips_polish_for_short_text
-                && (!local_fallback_used || translation_active);
+                && (!local_fallback_used || translation_active || long_recording);
             log::info!(
-                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?}",
+                "[polish-diagnostics] session_id={} stage=decision uses_polisher={} short_text_skipped={} composition_input={} translation_active={} mode={:?} style_pack_id={}",
                 session_id,
                 uses_polisher,
                 skips_polish_for_short_text,
                 context.insertion.composition_input,
                 translation_active,
                 context.polish.mode,
+                context.polish.style_pack_id,
             );
             // Local recognition makes polish optional: when it fails because
             // the network never answered, the raw transcript is the result.
@@ -1056,13 +1261,30 @@ impl DictationEngine for PipelineDictationEngine {
                     progress: Arc::clone(&progress),
                 });
                 let polish_started = std::time::Instant::now();
+                let polish_context = strategy_overrides.as_ref().map_or_else(
+                    || Arc::clone(&context),
+                    |overrides| {
+                        let mut updated = (*context).clone();
+                        updated.polish.polish_request_overrides = Some(overrides.clone());
+                        Arc::new(updated)
+                    },
+                );
                 let output = if let Some(error) = context.deferred_llm_error.clone() {
                     Err(error)
+                } else if long_recording {
+                    polish_long_recording(
+                        Arc::clone(&polisher),
+                        session_id,
+                        polish_context,
+                        transcript.text.clone(),
+                        &session.cancelled,
+                    )
+                    .await
                 } else {
                     polisher
                         .polish(
                             session_id,
-                            context,
+                            polish_context,
                             transcript.text.clone(),
                             polish_partials,
                         )
@@ -1418,6 +1640,7 @@ const CLOUD_RETRY: ReplayPlan = ReplayPlan {
 type AsrAttempt = (
     crate::ports::TranscriptOutput,
     Option<crate::auxiliary::AsrCallLabel>,
+    crate::ports::TranscriptMetadata,
 );
 
 /// The outcome of racing the cloud ASR against the local standby.
@@ -1481,40 +1704,108 @@ impl LocalStandby {
         let run = Box::pin(async move {
             let transcribe = async {
                 let fallback = context.asr_fallback.clone()?;
-                let pcm = archive.read_pcm().await.ok().filter(|pcm| !pcm.is_empty())?;
+                if !archive.is_available() || archive.write_error().is_some() {
+                    return None;
+                }
+                let total_bytes = archive
+                    .pcm_byte_len()
+                    .await
+                    .ok()
+                    .filter(|&bytes| bytes > 0)?;
                 let mut local = (*context).clone();
                 local.asr = fallback;
                 local.asr_fallback = None;
                 let prepared = match engine.prepare(session_id, Arc::new(local)).await {
                     Ok(prepared) => prepared,
                     Err(error) => {
-                        log::warn!("[dictation] local ASR standby unavailable: {}", error.message);
+                        log::warn!(
+                            "[dictation] local ASR standby unavailable: {}",
+                            error.message
+                        );
                         return None;
                     }
                 };
-                // Partials stay private: the cloud may still win.
-                let transcription = match prepared.start(Arc::new(DiscardedTextStream)).await {
-                    Ok(transcription) => transcription,
-                    Err(error) => {
-                        log::warn!("[dictation] local ASR standby failed to start: {}", error.message);
+                // Long recordings (> 5 min) run through the local fallback in
+                // 60-second ranged slices so RAM stays bounded and long audio
+                // never stalls or truncates on a single batch/streaming window.
+                let mut combined_text = String::new();
+                let mut last_label = None;
+                let mut last_metadata = crate::ports::TranscriptMetadata::default();
+                let chunk_bytes = if crate::long_recording::duration_ms(total_bytes)
+                    > crate::long_recording::THRESHOLD_MS
+                {
+                    crate::long_recording::RECOVERY_CHUNK_BYTES as u64
+                } else {
+                    total_bytes
+                };
+                let mut offset = 0u64;
+                while offset < total_bytes {
+                    if session.cancelled.load(Ordering::Acquire) {
                         return None;
                     }
-                };
-                *slot.lock().expect("local standby lock poisoned") = Some(Arc::clone(&transcription));
-                let label = transcription.asr_call_label();
-                transcription.consume_pcm_chunk(&pcm);
-                let result = transcription.finish().await;
-                slot.lock().expect("local standby lock poisoned").take();
-                match result {
-                    Ok(output) if output.text.trim().is_empty() => {
-                        log::warn!("[dictation] local ASR standby returned an empty transcript");
-                        None
+                    let seg_len = usize::try_from(chunk_bytes.min(total_bytes - offset)).ok()?;
+                    let pcm = match archive.read_pcm_range(offset, seg_len).await {
+                        Ok(pcm) if pcm.len() == seg_len => pcm,
+                        Ok(_) => {
+                            log::warn!(
+                                "[dictation] local ASR standby hit short archive read at offset={offset}"
+                            );
+                            return None;
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[dictation] local ASR standby failed reading archive: {}",
+                                error.message
+                            );
+                            return None;
+                        }
+                    };
+                    offset += pcm.len() as u64;
+                    // Partials stay private: the cloud may still win.
+                    let transcription = match prepared.start(Arc::new(DiscardedTextStream)).await {
+                        Ok(transcription) => transcription,
+                        Err(error) => {
+                            log::warn!(
+                                "[dictation] local ASR standby failed to start: {}",
+                                error.message
+                            );
+                            return None;
+                        }
+                    };
+                    *slot.lock().expect("local standby lock poisoned") =
+                        Some(Arc::clone(&transcription));
+                    let label = transcription.asr_call_label();
+                    transcription.consume_pcm_chunk(&pcm);
+                    let result = transcription.finish().await;
+                    let metadata = transcription.transcript_metadata();
+                    slot.lock().expect("local standby lock poisoned").take();
+                    match result {
+                        Ok(output) => {
+                            last_label = label.or(last_label);
+                            last_metadata = metadata;
+                            if !combined_text.is_empty() && !output.text.is_empty() {
+                                combined_text.push('\n');
+                            }
+                            combined_text.push_str(&output.text);
+                        }
+                        Err(error) => {
+                            log::warn!("[dictation] local ASR standby failed: {}", error.message);
+                            return None;
+                        }
                     }
-                    Ok(output) => Some((output, label)),
-                    Err(error) => {
-                        log::warn!("[dictation] local ASR standby failed: {}", error.message);
-                        None
-                    }
+                }
+                if combined_text.trim().is_empty() {
+                    log::warn!("[dictation] local ASR standby returned an empty transcript");
+                    None
+                } else {
+                    Some((
+                        crate::ports::TranscriptOutput {
+                            text: combined_text,
+                            duration_ms: crate::long_recording::duration_ms(total_bytes),
+                        },
+                        last_label,
+                        last_metadata,
+                    ))
                 }
             };
             tokio::select! {
@@ -1538,7 +1829,11 @@ impl LocalStandby {
     /// Stops a standby whose result is no longer needed and releases its model.
     async fn abandon(self) {
         drop(self.run);
-        let started = self.started.lock().expect("local standby lock poisoned").take();
+        let started = self
+            .started
+            .lock()
+            .expect("local standby lock poisoned")
+            .take();
         if let Some(transcription) = started {
             let _ = transcription.cancel().await;
         }
@@ -1559,17 +1854,196 @@ impl TextStreamSink for DiscardedTextStream {
     }
 }
 
-async fn retry_transcription(
+async fn validate_retry_archive_bytes(
+    archive: Option<&Arc<dyn RecordingArchive>>,
+    require_exact_length: bool,
+    captured_pcm_bytes: u64,
+) -> Option<(Arc<dyn RecordingArchive>, u64)> {
+    let archive =
+        archive.filter(|archive| archive.is_available() && archive.write_error().is_none())?;
+    let total_bytes = archive.pcm_byte_len().await.ok()?;
+    (total_bytes > 0 && (!require_exact_length || total_bytes == captured_pcm_bytes))
+        .then(|| (Arc::clone(archive), total_bytes))
+}
+
+async fn retry_transcription_from_archive(
+    prepared: Arc<dyn PreparedTranscription>,
+    session: Arc<PipelineSession>,
+    session_id: SessionId,
+    progress: Arc<dyn EngineProgressSink>,
+    archive: Arc<dyn RecordingArchive>,
+    total_bytes: u64,
+    plan: ReplayPlan,
+) -> Result<AsrAttempt, (BackendError, Option<crate::auxiliary::AsrCallLabel>)> {
+    if crate::long_recording::duration_ms(total_bytes) <= crate::long_recording::THRESHOLD_MS {
+        let len = usize::try_from(total_bytes).map_err(|_| {
+            (
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "longRecordingArchiveIncomplete",
+                ),
+                None,
+            )
+        })?;
+        let pcm = archive
+            .read_pcm_range(0, len)
+            .await
+            .map_err(|error| (error, None))?;
+        if pcm.len() != len {
+            return Err((
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "longRecordingArchiveIncomplete",
+                ),
+                None,
+            ));
+        }
+        return retry_transcription_segment(
+            prepared, session, session_id, progress, pcm, plan, true,
+        )
+        .await;
+    }
+    let mut text = String::new();
+    let mut label = None;
+    let mut metadata = crate::ports::TranscriptMetadata::default();
+    let mut offset = 0u64;
+    while offset < total_bytes {
+        if session.cancelled.load(Ordering::Acquire) {
+            return Err((
+                cancelled_error("dictation was cancelled before retry segment read"),
+                label,
+            ));
+        }
+        let seg_len =
+            (crate::long_recording::RECOVERY_CHUNK_BYTES as u64).min(total_bytes - offset) as usize;
+        let chunk = archive
+            .read_pcm_range(offset, seg_len)
+            .await
+            .map_err(|error| (error, label.clone()))?;
+        if chunk.len() != seg_len {
+            return Err((
+                BackendError::new(
+                    BackendErrorCode::Persistence,
+                    "longRecordingArchiveIncomplete",
+                ),
+                label,
+            ));
+        }
+        offset += chunk.len() as u64;
+        let (part, part_label, part_metadata) = retry_transcription_segment(
+            Arc::clone(&prepared),
+            Arc::clone(&session),
+            session_id,
+            Arc::clone(&progress),
+            chunk,
+            plan,
+            false,
+        )
+        .await?;
+        if !text.is_empty() && !part.text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&part.text);
+        label = part_label.or(label);
+        metadata = part_metadata;
+    }
+    Ok((
+        crate::ports::TranscriptOutput {
+            text,
+            duration_ms: crate::long_recording::duration_ms(total_bytes),
+        },
+        label,
+        metadata,
+    ))
+}
+
+pub(crate) async fn polish_long_recording(
+    polisher: Arc<dyn TextPolisher>,
+    session_id: SessionId,
+    context: Arc<DictationContext>,
+    raw_text: String,
+    cancelled: &AtomicBool,
+) -> Result<crate::ports::PolishOutput, BackendError> {
+    let mut context = (*context).clone();
+    context.polish.llm_thinking_enabled = false;
+    // Keep the selected style and every input character; reduce reasoning work,
+    // not the amount of user content sent to the model.
+    if let Some(overrides) = &mut context.polish.polish_request_overrides {
+        overrides.reasoning_effort = None;
+    }
+    let context = Arc::new(context);
+    let mut result = crate::ports::PolishOutput::text(String::new());
+    let mut sources = Vec::new();
+    let mut all_have_source = true;
+    for chunk in crate::long_recording::text_chunks(&raw_text) {
+        if chunk.trim().is_empty() {
+            result.text.push_str(chunk);
+            sources.push(chunk.to_string());
+            continue;
+        }
+        let mut accepted = None;
+        for attempt in 0..2 {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(cancelled_error("long recording polishing was cancelled"));
+            }
+            // Unverified or abandoned attempts must never reach native input.
+            let output = polisher
+                .polish(
+                    session_id,
+                    Arc::clone(&context),
+                    chunk.to_string(),
+                    Arc::new(DiscardTextStream),
+                )
+                .await;
+            match output {
+                Ok(output) if !output.text.trim().is_empty() => {
+                    accepted = Some(output);
+                    break;
+                }
+                Err(error)
+                    if attempt == 0
+                        && error.code != BackendErrorCode::Cancelled
+                        && (error.retryable || error.message.contains("llmResponseIncomplete")) => {
+                }
+                Err(error) => return Err(error),
+                Ok(_) if attempt == 0 => {}
+                Ok(_) => {
+                    return Err(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "llmResponseIncomplete",
+                    ))
+                }
+            }
+        }
+        let output = accepted.expect("a polishing attempt either returned or completed");
+        if !result.text.is_empty() {
+            result.text.push_str("\n\n");
+        }
+        result.text.push_str(&output.text);
+        match output.source_text {
+            Some(source) => sources.push(source),
+            None => all_have_source = false,
+        }
+        result.llm_call_label = output.llm_call_label.or(result.llm_call_label);
+    }
+    result.source_text = (all_have_source && !sources.is_empty()).then(|| sources.join("\n\n"));
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn retry_transcription_segment(
     prepared: Arc<dyn PreparedTranscription>,
     session: Arc<PipelineSession>,
     session_id: SessionId,
     progress: Arc<dyn EngineProgressSink>,
     pcm: Vec<u8>,
     plan: ReplayPlan,
+    publish_partials: bool,
 ) -> Result<
     (
         crate::ports::TranscriptOutput,
         Option<crate::auxiliary::AsrCallLabel>,
+        crate::ports::TranscriptMetadata,
     ),
     (BackendError, Option<crate::auxiliary::AsrCallLabel>),
 > {
@@ -1582,10 +2056,14 @@ async fn retry_transcription(
                 return Err((error, last_label));
             }
         }
-        let partials: Arc<dyn TextStreamSink> = Arc::new(TranscriptProgressForwarder {
-            session_id,
-            progress: Arc::clone(&progress),
-        });
+        let partials: Arc<dyn TextStreamSink> = if publish_partials {
+            Arc::new(TranscriptProgressForwarder {
+                session_id,
+                progress: Arc::clone(&progress),
+            })
+        } else {
+            Arc::new(DiscardTextStream)
+        };
         let transcription = match prepared.start(partials).await {
             Ok(transcription) => transcription,
             Err(_) if session.cancelled.load(Ordering::Acquire) => {
@@ -1637,8 +2115,28 @@ async fn retry_transcription(
                 last_label,
             ));
         }
-        transcription.consume_pcm_chunk(&pcm);
+        if !publish_partials && session.context().asr.provider_type == "volcengine" {
+            // Use the existing archived-audio replay pacing for this realtime endpoint.
+            for (index, chunk) in pcm
+                .chunks(crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES)
+                .enumerate()
+            {
+                if index != 0 {
+                    if let Err(error) =
+                        cancellable_backoff(&session, std::time::Duration::from_millis(100)).await
+                    {
+                        let _ =
+                            cancel_transcription_once(&session, Arc::clone(&transcription)).await;
+                        return Err((error, last_label));
+                    }
+                }
+                transcription.consume_pcm_chunk(chunk);
+            }
+        } else {
+            transcription.consume_pcm_chunk(&pcm);
+        }
         let transcription_result = transcription.finish().await;
+        let metadata = transcription.transcript_metadata();
         for notification in transcription.take_progress_notifications() {
             if let Err(error) = publish_progress(
                 &session,
@@ -1654,7 +2152,7 @@ async fn retry_transcription(
                 session
                     .transcription_finished
                     .store(true, Ordering::Release);
-                return Ok((output, last_label));
+                return Ok((output, last_label, metadata));
             }
             Err(error) => {
                 let _ = cancel_transcription_once(&session, transcription).await;
@@ -1726,6 +2224,17 @@ fn publish_progress(
     progress.publish(session_id, event)
 }
 
+fn strategy_skips_polish(
+    context: &DictationContext,
+    decision: Option<&crate::polish_strategy::PolishStrategyDecision>,
+) -> bool {
+    matches!(
+        decision,
+        Some(crate::polish_strategy::PolishStrategyDecision::Skip)
+    ) && !context.polish.translation_active
+        && context.is_plain_dictation_output()
+}
+
 fn can_fallback_to_raw(policy: PolishFailurePolicy, error: &BackendError) -> bool {
     policy == PolishFailurePolicy::UseRawText
         && matches!(
@@ -1777,12 +2286,18 @@ struct BufferedTranscriptionInner {
     progress: Arc<dyn RecordingProgressSink>,
     limit_notified: AtomicBool,
     has_nonzero_pcm: AtomicBool,
+    received_pcm_bytes: AtomicU64,
     limit_threshold_bytes: usize,
+    spill_threshold_bytes: usize,
+    spill_archive: Mutex<Option<Arc<dyn RecordingArchive>>>,
     state: Mutex<BufferedTranscriptionState>,
 }
 
 enum BufferedTranscriptionState {
     Buffering(Vec<u8>),
+    SpilledToArchive {
+        archive: Arc<dyn RecordingArchive>,
+    },
     Attaching {
         pcm: Vec<u8>,
         waiter: Arc<tokio::sync::Notify>,
@@ -1792,25 +2307,51 @@ enum BufferedTranscriptionState {
     Cancelled,
 }
 
+enum AttachSource {
+    Memory(Vec<u8>),
+    Archive {
+        archive: Arc<dyn RecordingArchive>,
+        expected_bytes: u64,
+    },
+}
+
 impl BufferedTranscriptionSession {
     fn new(
         prepared: Arc<dyn PreparedTranscription>,
         partials: Arc<dyn TextStreamSink>,
         progress: Arc<dyn RecordingProgressSink>,
     ) -> Self {
-        Self::new_with_limit(
+        Self::new_with_thresholds(
             prepared,
             partials,
             progress,
             BUFFERED_TRANSCRIPTION_STOP_THRESHOLD_BYTES,
+            STABLE_SPILL_THRESHOLD_BYTES,
         )
     }
 
+    #[cfg(test)]
     fn new_with_limit(
         prepared: Arc<dyn PreparedTranscription>,
         partials: Arc<dyn TextStreamSink>,
         progress: Arc<dyn RecordingProgressSink>,
         limit_threshold_bytes: usize,
+    ) -> Self {
+        Self::new_with_thresholds(
+            prepared,
+            partials,
+            progress,
+            limit_threshold_bytes,
+            STABLE_SPILL_THRESHOLD_BYTES,
+        )
+    }
+
+    fn new_with_thresholds(
+        prepared: Arc<dyn PreparedTranscription>,
+        partials: Arc<dyn TextStreamSink>,
+        progress: Arc<dyn RecordingProgressSink>,
+        limit_threshold_bytes: usize,
+        spill_threshold_bytes: usize,
     ) -> Self {
         Self {
             inner: Arc::new(BufferedTranscriptionInner {
@@ -1819,9 +2360,33 @@ impl BufferedTranscriptionSession {
                 progress,
                 limit_notified: AtomicBool::new(false),
                 has_nonzero_pcm: AtomicBool::new(false),
+                received_pcm_bytes: AtomicU64::new(0),
                 limit_threshold_bytes,
+                spill_threshold_bytes,
+                spill_archive: Mutex::new(None),
                 state: Mutex::new(BufferedTranscriptionState::Buffering(Vec::new())),
             }),
+        }
+    }
+
+    fn enable_archive_spill(&self, archive: Arc<dyn RecordingArchive>) {
+        if !archive.is_available() || archive.write_error().is_some() {
+            return;
+        }
+        *self
+            .inner
+            .spill_archive
+            .lock()
+            .expect("spill archive lock poisoned") = Some(Arc::clone(&archive));
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("buffered transcription lock poisoned");
+        if let BufferedTranscriptionState::Buffering(buffer) = &*state {
+            if buffer.len() >= self.inner.spill_threshold_bytes {
+                *state = BufferedTranscriptionState::SpilledToArchive { archive };
+            }
         }
     }
 
@@ -1840,7 +2405,19 @@ impl BufferedTranscriptionSession {
                         pcm: Vec::new(),
                         waiter: Arc::clone(&waiter),
                     };
-                    Some(pcm)
+                    AttachSource::Memory(pcm)
+                }
+                BufferedTranscriptionState::SpilledToArchive { archive } => {
+                    let archive = Arc::clone(archive);
+                    let expected_bytes = self.inner.received_pcm_bytes.load(Ordering::Acquire);
+                    *state = BufferedTranscriptionState::Attaching {
+                        pcm: Vec::new(),
+                        waiter: Arc::clone(&waiter),
+                    };
+                    AttachSource::Archive {
+                        archive,
+                        expected_bytes,
+                    }
                 }
                 BufferedTranscriptionState::Direct(session) => {
                     let session = Arc::clone(session);
@@ -1874,6 +2451,7 @@ impl BufferedTranscriptionSession {
                                 Err(cancelled_error("transcription buffer was cancelled"))
                             }
                             BufferedTranscriptionState::Buffering(_)
+                            | BufferedTranscriptionState::SpilledToArchive { .. }
                             | BufferedTranscriptionState::Attaching { .. } => {
                                 Err(BackendError::new(
                                     BackendErrorCode::Internal,
@@ -1886,10 +2464,7 @@ impl BufferedTranscriptionSession {
             }
         };
         let inner = Arc::clone(&self.inner);
-        Box::pin(async move {
-            attach_buffered_transcription(inner, start.expect("buffer attach must start"), waiter)
-                .await
-        })
+        Box::pin(async move { attach_buffered_transcription(inner, start, waiter).await })
     }
 
     fn attach_in_background(&self, task_spawner: Arc<dyn crate::TaskSpawner>) {
@@ -1920,7 +2495,7 @@ impl BufferedTranscriptionSession {
 
 fn attach_buffered_transcription(
     inner: Arc<BufferedTranscriptionInner>,
-    pcm: Vec<u8>,
+    source: AttachSource,
     waiter: Arc<tokio::sync::Notify>,
 ) -> BoxFuture<'static, Result<Arc<dyn TranscriptionSession>, BackendError>> {
     Box::pin(async move {
@@ -1936,6 +2511,38 @@ fn attach_buffered_transcription(
                 "transcription cancelled before provider startup",
             ));
         }
+
+        let archive_stream = match &source {
+            AttachSource::Memory(_) => None,
+            AttachSource::Archive {
+                archive,
+                expected_bytes,
+            } => {
+                if let Some(write_err) = archive.write_error() {
+                    let error = BackendError::new(BackendErrorCode::Persistence, write_err);
+                    set_buffer_failed_unless_cancelled(&inner, error.clone());
+                    return Err(error);
+                }
+                match archive.pcm_byte_len().await {
+                    Ok(total_bytes) if total_bytes > 0 && total_bytes == *expected_bytes => {
+                        Some((Arc::clone(archive), total_bytes))
+                    }
+                    Ok(_) => {
+                        let error = BackendError::new(
+                            BackendErrorCode::Persistence,
+                            "stableModeArchiveIncomplete",
+                        );
+                        set_buffer_failed_unless_cancelled(&inner, error.clone());
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        set_buffer_failed_unless_cancelled(&inner, error.clone());
+                        return Err(error);
+                    }
+                }
+            }
+        };
+
         let downstream = match inner.prepared.start(Arc::clone(&inner.partials)).await {
             Ok(session) => session,
             Err(error) => {
@@ -1953,7 +2560,87 @@ fn attach_buffered_transcription(
             }
         };
 
-        let mut first_chunk = Some(pcm);
+        let mut first_chunk = match source {
+            AttachSource::Memory(pcm) => (!pcm.is_empty()).then_some(pcm),
+            AttachSource::Archive { .. } => None,
+        };
+
+        if let Some((archive, total_bytes)) = archive_stream {
+            let mut offset = 0u64;
+            while offset < total_bytes {
+                if matches!(
+                    &*inner
+                        .state
+                        .lock()
+                        .expect("buffered transcription lock poisoned"),
+                    BufferedTranscriptionState::Cancelled
+                ) {
+                    let _ = downstream.cancel().await;
+                    return Err(cancelled_error(
+                        "transcription buffer was cancelled while streaming archive",
+                    ));
+                }
+                let seg_len = (BUFFERED_TRANSCRIPTION_FORWARD_CHUNK_BYTES as u64)
+                    .min(total_bytes - offset) as usize;
+                match archive.read_pcm_range(offset, seg_len).await {
+                    Ok(chunk) if !chunk.is_empty() => {
+                        downstream.consume_pcm_chunk(&chunk);
+                        offset += chunk.len() as u64;
+                        // Bound the provider queue as well as the archive read buffer.
+                        // Send workers retain authority over individual websocket frame timing.
+                        let rate = downstream.asr_call_label().and_then(|label| {
+                            match label.provider.as_str() {
+                                "iflytek" => Some(1u64),
+                                "volcengine"
+                                | "bailian-qwen3-realtime"
+                                | "stepfun-realtime"
+                                | "bailian" => Some(2),
+                                _ => None,
+                            }
+                        });
+                        if let Some(rate) = rate {
+                            let deadline = tokio::time::Instant::now()
+                                + std::time::Duration::from_micros(
+                                    (chunk.len() as u64 * 1_000).div_ceil(32 * rate),
+                                );
+                            while tokio::time::Instant::now() < deadline {
+                                if matches!(
+                                    &*inner
+                                        .state
+                                        .lock()
+                                        .expect("buffered transcription lock poisoned"),
+                                    BufferedTranscriptionState::Cancelled
+                                ) {
+                                    let _ = downstream.cancel().await;
+                                    return Err(cancelled_error(
+                                        "transcription cancelled while replaying archive",
+                                    ));
+                                }
+                                tokio::time::sleep_until(deadline.min(
+                                    tokio::time::Instant::now()
+                                        + std::time::Duration::from_millis(25),
+                                ))
+                                .await;
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        let error = BackendError::new(
+                            BackendErrorCode::Persistence,
+                            "stableModeArchiveIncomplete",
+                        );
+                        let _ = downstream.cancel().await;
+                        set_buffer_failed_unless_cancelled(&inner, error.clone());
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        let _ = downstream.cancel().await;
+                        set_buffer_failed_unless_cancelled(&inner, error.clone());
+                        return Err(error);
+                    }
+                }
+            }
+        }
 
         loop {
             let chunk = if let Some(chunk) = first_chunk.take().filter(|chunk| !chunk.is_empty()) {
@@ -1986,7 +2673,8 @@ fn attach_buffered_transcription(
                     )),
                     BufferedTranscriptionState::Failed(error) => Err(error.clone()),
                     BufferedTranscriptionState::Direct(session) => return Ok(Arc::clone(session)),
-                    BufferedTranscriptionState::Buffering(_) => unreachable!(
+                    BufferedTranscriptionState::Buffering(_)
+                    | BufferedTranscriptionState::SpilledToArchive { .. } => unreachable!(
                         "buffered transcription cannot return to buffering while attaching"
                     ),
                 }
@@ -2006,6 +2694,16 @@ fn attach_buffered_transcription(
     })
 }
 
+fn set_buffer_failed_unless_cancelled(inner: &BufferedTranscriptionInner, error: BackendError) {
+    let mut state = inner
+        .state
+        .lock()
+        .expect("buffered transcription lock poisoned");
+    if !matches!(*state, BufferedTranscriptionState::Cancelled) {
+        *state = BufferedTranscriptionState::Failed(error);
+    }
+}
+
 struct NotifyOnDrop {
     waiter: Arc<tokio::sync::Notify>,
 }
@@ -2019,6 +2717,9 @@ impl Drop for NotifyOnDrop {
 
 impl AudioConsumer for BufferedTranscriptionSession {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        self.inner
+            .received_pcm_bytes
+            .fetch_add(pcm.len() as u64, Ordering::Relaxed);
         if !self.inner.has_nonzero_pcm.load(Ordering::Relaxed) && pcm.iter().any(|byte| *byte != 0)
         {
             self.inner.has_nonzero_pcm.store(true, Ordering::Release);
@@ -2030,11 +2731,32 @@ impl AudioConsumer for BufferedTranscriptionSession {
                 .lock()
                 .expect("buffered transcription lock poisoned");
             match &mut *state {
-                BufferedTranscriptionState::Buffering(buffer)
-                | BufferedTranscriptionState::Attaching { pcm: buffer, .. } => {
+                BufferedTranscriptionState::Buffering(buffer) => {
+                    buffer.extend_from_slice(pcm);
+                    let spilled = if buffer.len() >= self.inner.spill_threshold_bytes {
+                        self.inner
+                            .spill_archive
+                            .lock()
+                            .expect("spill archive lock poisoned")
+                            .clone()
+                            .filter(|archive| {
+                                archive.is_available() && archive.write_error().is_none()
+                            })
+                    } else {
+                        None
+                    };
+                    if let Some(archive) = spilled {
+                        *state = BufferedTranscriptionState::SpilledToArchive { archive };
+                        (None, false)
+                    } else {
+                        (None, buffer.len() >= self.inner.limit_threshold_bytes)
+                    }
+                }
+                BufferedTranscriptionState::Attaching { pcm: buffer, .. } => {
                     buffer.extend_from_slice(pcm);
                     (None, buffer.len() >= self.inner.limit_threshold_bytes)
                 }
+                BufferedTranscriptionState::SpilledToArchive { .. } => (None, false),
                 BufferedTranscriptionState::Direct(session) => (Some(Arc::clone(session)), false),
                 BufferedTranscriptionState::Failed(_) | BufferedTranscriptionState::Cancelled => {
                     (None, false)
@@ -2071,6 +2793,13 @@ impl TranscriptionSession for BufferedTranscriptionSession {
             .and_then(|session| session.asr_call_label())
     }
 
+    fn transcript_metadata(&self) -> crate::ports::TranscriptMetadata {
+        self.downstream()
+            .map_or_else(crate::ports::TranscriptMetadata::default, |session| {
+                session.transcript_metadata()
+            })
+    }
+
     fn take_progress_notifications(&self) -> Vec<crate::types::NotificationPayload> {
         self.downstream()
             .map_or_else(Vec::new, |session| session.take_progress_notifications())
@@ -2078,7 +2807,8 @@ impl TranscriptionSession for BufferedTranscriptionSession {
 
     fn finish(&self) -> BoxFuture<'static, Result<crate::ports::TranscriptOutput, BackendError>> {
         // Inspect after the caller stops capture. Cancellation remains independent
-        // of audio validity, and quiet non-zero samples do not trip a speech threshold.
+        // of audio validity, quiet non-zero samples do not trip a speech threshold,
+        // and < 100 ms captures are rejected before reaching ASR.
         let terminal = matches!(
             &*self
                 .inner
@@ -2087,7 +2817,10 @@ impl TranscriptionSession for BufferedTranscriptionSession {
                 .expect("buffered transcription lock poisoned"),
             BufferedTranscriptionState::Failed(_) | BufferedTranscriptionState::Cancelled
         );
-        if !terminal && !self.inner.has_nonzero_pcm.load(Ordering::Acquire) {
+        if !terminal
+            && (!self.inner.has_nonzero_pcm.load(Ordering::Acquire)
+                || self.inner.received_pcm_bytes.load(Ordering::Acquire) < MIN_VALID_PCM_BYTES)
+        {
             return Box::pin(async {
                 Err(BackendError::new(
                     BackendErrorCode::InvalidArgument,
@@ -2117,6 +2850,10 @@ impl TranscriptionSession for BufferedTranscriptionSession {
 }
 
 impl BufferedTranscriptionSession {
+    fn received_pcm_bytes(&self) -> u64 {
+        self.inner.received_pcm_bytes.load(Ordering::Acquire)
+    }
+
     fn take_cancel_state(
         &self,
     ) -> (
@@ -2418,7 +3155,7 @@ mod tests {
                         "fixture recorder failed",
                     ));
                 }
-                consumer.consume_pcm_chunk(&[1, 0, 2, 0]);
+                consumer.consume_pcm_chunk(&[1, 0, 2, 0].repeat(800));
                 progress.publish_level(25, 1.5)?;
                 Ok(Box::new(FixtureRecording { stops, archive }) as Box<dyn ActiveRecording>)
             })
@@ -2438,7 +3175,7 @@ mod tests {
             consumer: Arc<dyn AudioConsumer>,
             _progress: Arc<dyn RecordingProgressSink>,
         ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
-            consumer.consume_pcm_chunk(&[1, 0]);
+            consumer.consume_pcm_chunk(&[1, 0].repeat(1_600));
             *self.consumer.lock().unwrap() = Some(consumer);
             let stops = Arc::clone(&self.stops);
             Box::pin(async move {
@@ -2700,7 +3437,7 @@ mod tests {
         let archive = Arc::new(FixtureArchive {
             available: AtomicBool::new(true),
             discards: Arc::clone(&archive_discards),
-            pcm: vec![1, 0, 2, 0],
+            pcm: [1, 0, 2, 0].repeat(800),
         });
         let transcription_cancels = Arc::new(AtomicUsize::new(0));
         let transcription_starts = Arc::new(AtomicUsize::new(0));
@@ -2794,7 +3531,7 @@ mod tests {
                 archive: Arc::new(FixtureArchive {
                     available: AtomicBool::new(true),
                     discards: archive_discards,
-                    pcm: vec![1, 0, 2, 0],
+                    pcm: [1, 0, 2, 0].repeat(800),
                 }),
                 fail: false,
             }),
@@ -2916,7 +3653,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            session.consume_pcm_chunk(&[1, 0, 2, 0]);
+            session.consume_pcm_chunk(&[1, 0, 2, 0].repeat(800));
             assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 0);
             assert!(fixture.pcm.lock().unwrap().is_empty());
             let tasks = std::mem::take(&mut *spawner.0.lock().unwrap());
@@ -2926,11 +3663,11 @@ mod tests {
             }
             if !stable {
                 assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 1);
-                assert_eq!(*fixture.pcm.lock().unwrap(), vec![1, 0, 2, 0]);
+                assert_eq!(*fixture.pcm.lock().unwrap(), [1, 0, 2, 0].repeat(800));
             }
             assert_eq!(session.finish().await.unwrap().text, "raw text");
             assert_eq!(fixture.transcription_starts.load(Ordering::SeqCst), 1);
-            assert_eq!(*fixture.pcm.lock().unwrap(), vec![1, 0, 2, 0]);
+            assert_eq!(*fixture.pcm.lock().unwrap(), [1, 0, 2, 0].repeat(800));
         }
     }
 
@@ -2958,7 +3695,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(&*fixture.pcm.lock().unwrap(), &[1, 0, 2, 0]);
+        assert_eq!(*fixture.pcm.lock().unwrap(), [1, 0, 2, 0].repeat(800));
         assert_eq!(fixture.recorder_stops.load(Ordering::SeqCst), 1);
         assert_eq!(result.raw_text, "raw text");
         assert_eq!(result.polished_text, "polished text");
@@ -3010,7 +3747,7 @@ mod tests {
 
         assert_eq!(result.raw_text, "raw text");
         assert_eq!(fixture.transcription_starts.load(Ordering::Acquire), 1);
-        assert_eq!(&*fixture.pcm.lock().unwrap(), &[1, 0, 2, 0]);
+        assert_eq!(*fixture.pcm.lock().unwrap(), [1, 0, 2, 0].repeat(800));
         let transcript_events: Vec<_> = fixture
             .progress
             .events
@@ -3084,7 +3821,7 @@ mod tests {
 
         assert_eq!(output.text, "raw text");
         assert_eq!(fixture.transcription_starts.load(Ordering::Acquire), 1);
-        assert_eq!(&*fixture.pcm.lock().unwrap(), &[1, 0, 2, 0]);
+        assert_eq!(*fixture.pcm.lock().unwrap(), [1, 0, 2, 0].repeat(800));
     }
 
     #[tokio::test]
@@ -3154,7 +3891,7 @@ mod tests {
             Arc::new(DiscardTextStream),
             Arc::new(LimitRecordingProgress::default()),
         );
-        buffered.consume_pcm_chunk(&[1, 0]);
+        buffered.consume_pcm_chunk(&[1, 0].repeat(1_600));
         assert_eq!(buffered.finish().await.unwrap().text, "raw text");
         assert_eq!(starts.load(Ordering::Acquire), 1);
     }
@@ -3404,7 +4141,9 @@ mod tests {
 
         engine.finish(session_id, progress).await.unwrap();
 
-        assert_eq!(&*pcm.lock().unwrap(), &[1, 0, 2, 0, 3, 0]);
+        let mut expected = [1u8, 0].repeat(1_600);
+        expected.extend_from_slice(&[2, 0, 3, 0]);
+        assert_eq!(*pcm.lock().unwrap(), expected);
         assert_eq!(stops.load(Ordering::Acquire), 1);
     }
 
@@ -3569,7 +4308,9 @@ mod tests {
             } else {
                 result.unwrap();
                 engine.finish(id, progress).await.unwrap();
-                assert_eq!(&*pcm.lock().unwrap(), &[1, 0, 2, 0]);
+                let mut expected = [1u8, 0].repeat(1_600);
+                expected.extend_from_slice(&[2, 0]);
+                assert_eq!(*pcm.lock().unwrap(), expected);
             }
             assert_eq!(calls.load(Ordering::Acquire), 1);
             assert_eq!(stops.load(Ordering::Acquire), 1);
@@ -3631,7 +4372,11 @@ mod tests {
     #[tokio::test]
     async fn local_model_loading_never_blocks_stop_or_cancel_of_the_microphone() {
         use crate::experimental_asr::ExperimentalAsrModel;
-        for model in ExperimentalAsrModel::ALL {
+        let providers = ExperimentalAsrModel::ALL
+            .map(|model| model.provider_type())
+            .into_iter()
+            .chain(["sherpa-onnx-local", "foundry-local-whisper", "apple-speech"]);
+        for provider in providers {
             for cancel in [false, true] {
                 let stops = Arc::new(AtomicUsize::new(0));
                 let pcm = Arc::new(Mutex::new(Vec::new()));
@@ -3659,7 +4404,7 @@ mod tests {
                     .with_local_startup_spawner(Arc::new(crate::TokioTaskSpawner)),
                 );
                 let mut context = (*raw_dictation_context()).clone();
-                context.asr.provider_type = model.provider_type().into();
+                context.asr.provider_type = provider.into();
                 let id = SessionId::new();
                 let progress = Arc::new(RecordingProgress::default());
                 tokio::time::timeout(
@@ -3703,7 +4448,7 @@ mod tests {
                     );
                     release.notify_one();
                     assert_eq!(finishing.await.unwrap().unwrap().raw_text, "raw text");
-                    assert_eq!(*pcm.lock().unwrap(), vec![1, 0]);
+                    assert_eq!(*pcm.lock().unwrap(), [1u8, 0].repeat(1_600));
                 }
             }
         }
@@ -3818,6 +4563,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_strategy_skip_bypasses_the_polisher() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("must not be used")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+            enabled: true,
+            script: r#"fn strategy(input) { #{ action: "skip" } }"#.into(),
+        };
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(session_id, Arc::new(context), fixture.progress.clone())
+            .await
+            .unwrap();
+        let result = fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+        assert_eq!(fixture.polish_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(result.polished_text, "raw text");
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_request_overrides_are_scoped_to_the_polish_call() {
+        let fixture = fixture_engine(
+            false,
+            Ok(crate::ports::PolishOutput::text("polished text")),
+            None,
+            None,
+        );
+        let mut context = DictationContext::default();
+        context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+            enabled: true,
+            script: r#"fn strategy(input) { #{ action: "request", maxTokens: 321 } }"#.into(),
+        };
+        let context = Arc::new(context);
+        let session_id = SessionId::new();
+        fixture
+            .engine
+            .start(session_id, Arc::clone(&context), fixture.progress.clone())
+            .await
+            .unwrap();
+        fixture
+            .engine
+            .finish(session_id, fixture.progress.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(context.polish.polish_request_overrides, None);
+        let polish_contexts = fixture.polish_contexts.lock().unwrap();
+        assert_eq!(polish_contexts.len(), 1);
+        assert_eq!(
+            polish_contexts[0]
+                .polish
+                .polish_request_overrides
+                .as_ref()
+                .and_then(|overrides| overrides.max_tokens),
+            Some(321)
+        );
+    }
+
+    #[tokio::test]
     async fn voice_activation_commands_are_cleaned_before_correction_and_polishing() {
         use crate::testing::{
             FixtureAudioRecorder, FixtureTextPolisher, FixtureTranscriptionEngine,
@@ -3855,7 +4667,10 @@ mod tests {
         ] {
             let polisher = Arc::new(FixtureTextPolisher::successful("润色结果"));
             let engine = PipelineDictationEngine::new(
-                Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
+                Arc::new(FixtureAudioRecorder::new(
+                    vec![[1, 0, 2, 0].repeat(800)],
+                    vec![],
+                )),
                 Arc::new(FixtureTranscriptionEngine::successful(input, 1_000)),
                 polisher.clone(),
             );
@@ -3906,7 +4721,10 @@ mod tests {
                 "fixture",
             )));
             let engine = PipelineDictationEngine::new(
-                Arc::new(FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![])),
+                Arc::new(FixtureAudioRecorder::new(
+                    vec![[1, 0, 2, 0].repeat(800)],
+                    vec![],
+                )),
                 Arc::new(FixtureTranscriptionEngine::successful(
                     "开始语音录入 正文 完成语音录入",
                     1000,
@@ -4131,7 +4949,7 @@ mod tests {
         let archive = Arc::new(FixtureArchive {
             available: AtomicBool::new(true),
             discards: Arc::new(AtomicUsize::new(0)),
-            pcm: vec![1, 0, 2, 0],
+            pcm: [1, 0, 2, 0].repeat(800),
         });
         let starts = Arc::new(AtomicUsize::new(0));
         let pcm = Arc::new(Mutex::new(Vec::new()));
@@ -4177,9 +4995,10 @@ mod tests {
 
         assert_eq!(result.raw_text, "retry success");
         assert_eq!(starts.load(Ordering::Acquire), 2);
+        let expected = [1u8, 0, 2, 0].repeat(800);
         assert_eq!(
             pcm.lock().unwrap().as_slice(),
-            &[vec![1, 0, 2, 0], vec![1, 0, 2, 0]]
+            &[expected.clone(), expected]
         );
     }
 
@@ -4194,7 +5013,7 @@ mod tests {
         let archive = Arc::new(FixtureArchive {
             available: AtomicBool::new(archive_available),
             discards: Arc::new(AtomicUsize::new(0)),
-            pcm: vec![1, 0, 2, 0],
+            pcm: [1, 0, 2, 0].repeat(800),
         });
         let starts = Arc::new(AtomicUsize::new(0));
         let engine = PipelineDictationEngine::new(
@@ -4216,6 +5035,20 @@ mod tests {
             }),
         );
         (engine, Arc::new(RecordingProgress::default()), starts)
+    }
+
+    #[test]
+    fn strategy_skip_preserves_translation_and_voice_edit_semantics() {
+        let context = raw_dictation_context();
+        let decision = crate::polish_strategy::PolishStrategyDecision::Skip;
+        assert!(strategy_skips_polish(&context, Some(&decision)));
+
+        let mut translation = (*context).clone();
+        translation.polish.translation_active = true;
+        assert!(!strategy_skips_polish(&translation, Some(&decision)));
+
+        let voice_edit = context.with_output_target(DictationOutputTarget::VoiceEdit);
+        assert!(!strategy_skips_polish(&voice_edit, Some(&decision)));
     }
 
     fn raw_dictation_context() -> Arc<DictationContext> {
@@ -4353,7 +5186,7 @@ mod tests {
                 archive: Arc::new(FixtureArchive {
                     available: AtomicBool::new(true),
                     discards: Arc::new(AtomicUsize::new(0)),
-                    pcm: vec![1, 0, 2, 0],
+                    pcm: [1, 0, 2, 0].repeat(800),
                 }),
                 fail: false,
             }),
@@ -4394,7 +5227,10 @@ mod tests {
             )),
             ..DictationContext::default()
         };
-        assert!(context.uses_llm_polisher(), "fixture must exercise the polisher");
+        assert!(
+            context.uses_llm_polisher(),
+            "fixture must exercise the polisher"
+        );
         context.polish.polish_skip_max_chars = 0;
         Arc::new(context)
     }
@@ -4505,7 +5341,10 @@ mod tests {
             Err(BackendError::new(BackendErrorCode::Provider, "offline")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, polishing_fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4535,12 +5374,18 @@ mod tests {
             )),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, local_polishing_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, local_polishing_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
         assert_eq!(result.polished_text, "本地识别");
-        assert!(result.polish_failed, "a rejected key must not be hidden as offline");
+        assert!(
+            result.polish_failed,
+            "a rejected key must not be hidden as offline"
+        );
         assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
     }
 
@@ -4555,7 +5400,10 @@ mod tests {
         context.asr = crate::dictation_context::ProviderInvocation::new(LOCAL, LOCAL);
         context.asr_fallback = None;
         let session_id = SessionId::new();
-        engine.start(session_id, Arc::new(context), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4573,7 +5421,10 @@ mod tests {
             Err(BackendError::new(BackendErrorCode::Provider, "offline")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, polishing_fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4609,7 +5460,10 @@ mod tests {
             vec![transcript("本地识别")],
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4628,7 +5482,10 @@ mod tests {
             vec![transcript("本地识别")],
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4648,14 +5505,20 @@ mod tests {
             ))],
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let failure = engine.finish(session_id, progress).await.unwrap_err();
 
         // The cloud's own error, not the local model's.
         assert_eq!(failure.error.code, BackendErrorCode::Provider);
         assert_eq!(failure.error.message, "offline");
-        assert_eq!(started.lock().unwrap().as_slice(), &[CLOUD, LOCAL, CLOUD, CLOUD]);
+        assert_eq!(
+            started.lock().unwrap().as_slice(),
+            &[CLOUD, LOCAL, CLOUD, CLOUD]
+        );
     }
 
     #[tokio::test]
@@ -4667,7 +5530,10 @@ mod tests {
         let mut context = (*fallback_context()).clone();
         context.asr_fallback = None;
         let session_id = SessionId::new();
-        engine.start(session_id, Arc::new(context), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4684,7 +5550,10 @@ mod tests {
             Ok(crate::ports::PolishOutput::text("润色后")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, polishing_fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, polishing_fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4696,6 +5565,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_strategy_uses_the_winning_asr_invocation_metadata() {
+        for (local_wins, language, model, expected_language, expected_model) in [
+            (
+                true,
+                Some("zh"),
+                Some("local-model"),
+                "\"zh\"",
+                "\"local-model\"",
+            ),
+            (true, None, None, "()", "()"),
+            (
+                false,
+                Some("zh"),
+                Some("local-model"),
+                "\"en\"",
+                "\"cloud-model\"",
+            ),
+        ] {
+            let (engine, progress, _, polish_calls) = racing_test_engine(
+                &[
+                    (CLOUD, if local_wins { 2_000 } else { 20 }),
+                    (LOCAL, if local_wins { 20 } else { 2_000 }),
+                ],
+                vec![transcript("cloud transcript")],
+                vec![transcript("local transcript")],
+                Ok(crate::ports::PolishOutput::text("polished")),
+            );
+            let mut context = (*polishing_fallback_context()).clone();
+            context.asr.language = Some("en".into());
+            context.asr.model = Some("cloud-model".into());
+            let fallback = context.asr_fallback.as_mut().unwrap();
+            fallback.language = language.map(str::to_owned);
+            fallback.model = model.map(str::to_owned);
+            let expected_provider = if local_wins { LOCAL } else { CLOUD };
+            context.polish.polish_strategy = crate::polish_strategy::PolishStrategyConfig {
+                enabled: true,
+                script: format!(
+                    r#"fn strategy(input) {{
+                        if input.language == {expected_language}
+                            && input.asrProvider == "{expected_provider}"
+                            && input.asrModel == {expected_model} {{
+                            #{{ action: "polish" }}
+                        }} else {{
+                            #{{ action: "skip" }}
+                        }}
+                    }}"#,
+                ),
+            };
+            let session_id = SessionId::new();
+            engine
+                .start(session_id, Arc::new(context), progress.clone())
+                .await
+                .unwrap();
+            let result = engine.finish(session_id, progress).await.unwrap();
+            assert_eq!(
+                result.raw_text,
+                if local_wins {
+                    "local transcript"
+                } else {
+                    "cloud transcript"
+                },
+            );
+            assert_eq!(result.polished_text, "polished");
+            assert_eq!(polish_calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
     async fn the_cloud_wins_when_it_answers_before_the_local_standby() {
         let (engine, progress, _, _) = racing_test_engine(
             &[(CLOUD, 20), (LOCAL, 2_000)],
@@ -4704,7 +5641,10 @@ mod tests {
             Ok(crate::ports::PolishOutput::text("unused")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4723,7 +5663,10 @@ mod tests {
             Ok(crate::ports::PolishOutput::text("unused")),
         );
         let session_id = SessionId::new();
-        engine.start(session_id, fallback_context(), progress.clone()).await.unwrap();
+        engine
+            .start(session_id, fallback_context(), progress.clone())
+            .await
+            .unwrap();
 
         let result = engine.finish(session_id, progress).await.unwrap();
 
@@ -4951,5 +5894,482 @@ mod tests {
             "cancelled speech must not be replayed to a new ASR"
         );
         assert!(engine.sessions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sub_100ms_nonzero_pcm_is_rejected_before_asr_finalization() {
+        let pcm = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let transcriber = Arc::new(FixtureTranscriber {
+            session: Arc::new(FixtureTranscriptionSession {
+                pcm,
+                cancels: Arc::new(AtomicUsize::new(0)),
+                finish_entered: None,
+                finish_release: None,
+            }),
+            starts: Arc::clone(&starts),
+        });
+        let prepared = transcriber
+            .prepare(SessionId::new(), raw_dictation_context())
+            .await
+            .unwrap();
+        let buffered = BufferedTranscriptionSession::new(
+            prepared,
+            Arc::new(DiscardTextStream),
+            Arc::new(LimitRecordingProgress::default()),
+        );
+        buffered.consume_pcm_chunk(&[1, 0].repeat(1_599));
+        let error = buffered.finish().await.unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::InvalidArgument);
+        assert_eq!(starts.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn stable_capture_spills_only_when_archive_matches_processed_pcm() {
+        struct WaveformArchive {
+            processed: bool,
+            len: usize,
+            reads: AtomicUsize,
+        }
+        impl RecordingArchive for WaveformArchive {
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+                let len = self.len as u64;
+                Box::pin(async move { Ok(len) })
+            }
+            fn read_pcm_range(
+                &self,
+                _: u64,
+                len: usize,
+            ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.reads.fetch_add(1, Ordering::AcqRel);
+                let value = if self.processed { 2 } else { 1 };
+                Box::pin(async move { Ok(vec![value; len]) })
+            }
+            fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        struct WaveformRecorder(Arc<WaveformArchive>);
+        struct WaveformRecording(Arc<WaveformArchive>);
+        impl ActiveRecording for WaveformRecording {
+            fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+                Some(self.0.clone())
+            }
+            fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        impl AudioRecorder for WaveformRecorder {
+            fn start(
+                &self,
+                _: SessionId,
+                _: Arc<DictationContext>,
+                consumer: Arc<dyn AudioConsumer>,
+                _: Arc<dyn RecordingProgressSink>,
+            ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+                let archive = self.0.clone();
+                Box::pin(async move {
+                    // Live ASR always receives enhanced PCM, even with raw-only debug retention.
+                    consumer.consume_pcm_chunk(&vec![2; archive.len]);
+                    Ok(Box::new(WaveformRecording(archive)) as Box<dyn ActiveRecording>)
+                })
+            }
+        }
+        for voice_capture in [false, true] {
+            for processed in [false, true] {
+                let archive = Arc::new(WaveformArchive {
+                    processed,
+                    len: STABLE_SPILL_THRESHOLD_BYTES + 3_200,
+                    reads: AtomicUsize::new(0),
+                });
+                let delivered = Arc::new(Mutex::new(Vec::new()));
+                let engine = PipelineDictationEngine::new(
+                    Arc::new(WaveformRecorder(archive.clone())),
+                    Arc::new(FixtureTranscriber {
+                        session: Arc::new(FixtureTranscriptionSession {
+                            pcm: delivered.clone(),
+                            cancels: Arc::new(AtomicUsize::new(0)),
+                            finish_entered: None,
+                            finish_release: None,
+                        }),
+                        starts: Arc::new(AtomicUsize::new(0)),
+                    }),
+                    noop_polisher(),
+                );
+                let mut context = (*raw_dictation_context()).clone();
+                context.recording.transcribe_after_stop = true;
+                context.recording.archive_processed = processed;
+                context.recording.archive_raw = !processed;
+                let context = Arc::new(context);
+                let id = SessionId::new();
+                if voice_capture {
+                    let capture = engine
+                        .start_voice_capture(
+                            id,
+                            context,
+                            Arc::new(DiscardTextStream),
+                            Arc::new(NoopRecordingProgress),
+                            crate::CancellationToken::new(),
+                        )
+                        .await
+                        .unwrap();
+                    capture.recording.stop().await.unwrap();
+                    capture.transcription.finish().await.unwrap();
+                } else {
+                    let progress = Arc::new(RecordingProgress::default());
+                    engine.start(id, context, progress.clone()).await.unwrap();
+                    engine.finish(id, progress).await.unwrap();
+                }
+                let pcm = delivered.lock().unwrap();
+                assert_eq!(pcm.len(), archive.len);
+                assert!(pcm.iter().all(|&sample| sample == 2), "ASR input changed to raw archive: voice={voice_capture}, processed={processed}");
+                assert_eq!(archive.reads.load(Ordering::Acquire) > 0, processed);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stable_mode_spills_to_archive_when_threshold_exceeded_and_replays_ranged_chunks() {
+        struct RangedArchive {
+            pcm: Vec<u8>,
+            read_pcm_calls: AtomicUsize,
+            range_calls: Mutex<Vec<(u64, usize)>>,
+        }
+        impl RecordingArchive for RangedArchive {
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+                let len = self.pcm.len() as u64;
+                Box::pin(async move { Ok(len) })
+            }
+            fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.read_pcm_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async {
+                    Err(BackendError::new(
+                        BackendErrorCode::Internal,
+                        "stable spill replay must use read_pcm_range",
+                    ))
+                })
+            }
+            fn read_pcm_range(
+                &self,
+                offset: u64,
+                len: usize,
+            ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.range_calls.lock().unwrap().push((offset, len));
+                let start = offset as usize;
+                let end = start.saturating_add(len).min(self.pcm.len());
+                let slice = self.pcm[start..end].to_vec();
+                Box::pin(async move { Ok(slice) })
+            }
+            fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let transcriber = Arc::new(FixtureTranscriber {
+            session: Arc::new(FixtureTranscriptionSession {
+                pcm: Arc::clone(&delivered),
+                cancels: Arc::new(AtomicUsize::new(0)),
+                finish_entered: None,
+                finish_release: None,
+            }),
+            starts: Arc::clone(&starts),
+        });
+        let prepared = transcriber
+            .prepare(SessionId::new(), raw_dictation_context())
+            .await
+            .unwrap();
+        let full_pcm = (0..3_216u32)
+            .map(|i| ((i % 251) as u8) | 1)
+            .collect::<Vec<_>>();
+        let archive = Arc::new(RangedArchive {
+            pcm: full_pcm.clone(),
+            read_pcm_calls: AtomicUsize::new(0),
+            range_calls: Mutex::new(Vec::new()),
+        });
+        let buffered = BufferedTranscriptionSession::new_with_thresholds(
+            prepared,
+            Arc::new(DiscardTextStream),
+            Arc::new(LimitRecordingProgress::default()),
+            128 * 1024 * 1024,
+            16,
+        );
+        buffered.enable_archive_spill(archive.clone());
+        buffered.consume_pcm_chunk(&full_pcm[..3_200]);
+        assert!(matches!(
+            &*buffered.inner.state.lock().unwrap(),
+            BufferedTranscriptionState::SpilledToArchive { .. }
+        ));
+        buffered.consume_pcm_chunk(&full_pcm[3_200..]);
+        assert_eq!(buffered.finish().await.unwrap().text, "raw text");
+        assert_eq!(starts.load(Ordering::Acquire), 1);
+        assert_eq!(archive.read_pcm_calls.load(Ordering::Acquire), 0);
+        assert!(!archive.range_calls.lock().unwrap().is_empty());
+        assert_eq!(*delivered.lock().unwrap(), full_pcm);
+    }
+
+    #[tokio::test]
+    async fn long_recording_recovery_reads_ranged_archive_chunks_without_loading_whole_pcm() {
+        struct LongRangedArchive {
+            total_bytes: u64,
+            read_pcm_calls: AtomicUsize,
+            range_calls: Mutex<Vec<(u64, usize)>>,
+        }
+        impl RecordingArchive for LongRangedArchive {
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+                let len = self.total_bytes;
+                Box::pin(async move { Ok(len) })
+            }
+            fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.read_pcm_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async {
+                    Err(BackendError::new(
+                        BackendErrorCode::Internal,
+                        "long recovery must use read_pcm_range",
+                    ))
+                })
+            }
+            fn read_pcm_range(
+                &self,
+                offset: u64,
+                len: usize,
+            ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.range_calls.lock().unwrap().push((offset, len));
+                let fill =
+                    ((offset / crate::long_recording::RECOVERY_CHUNK_BYTES as u64) as u8) + 1;
+                let actual = (self.total_bytes - offset).min(len as u64) as usize;
+                Box::pin(async move { Ok(vec![fill; actual]) })
+            }
+            fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        struct LongRecorder(Arc<LongRangedArchive>);
+        struct LongRecording(Arc<LongRangedArchive>);
+        impl ActiveRecording for LongRecording {
+            fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+                Some(self.0.clone())
+            }
+            fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        impl AudioRecorder for LongRecorder {
+            fn start(
+                &self,
+                _: SessionId,
+                _: Arc<DictationContext>,
+                consumer: Arc<dyn AudioConsumer>,
+                _: Arc<dyn RecordingProgressSink>,
+            ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+                let total = self.0.total_bytes as usize;
+                consumer.consume_pcm_chunk(&vec![1; total]);
+                let archive = self.0.clone();
+                Box::pin(
+                    async move { Ok(Box::new(LongRecording(archive)) as Box<dyn ActiveRecording>) },
+                )
+            }
+        }
+
+        let total_bytes = (crate::long_recording::THRESHOLD_MS / 1_000) * 32_000 + 3_200;
+        let archive = Arc::new(LongRangedArchive {
+            total_bytes,
+            read_pcm_calls: AtomicUsize::new(0),
+            range_calls: Mutex::new(Vec::new()),
+        });
+        let pcm = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let outputs = VecDeque::from([
+            Err(BackendError::new(BackendErrorCode::Provider, "temporary").retryable(true)),
+            Ok(TranscriptOutput {
+                text: "seg1".into(),
+                duration_ms: 60_000,
+            }),
+            Ok(TranscriptOutput {
+                text: "seg2".into(),
+                duration_ms: 60_000,
+            }),
+            Ok(TranscriptOutput {
+                text: "seg3".into(),
+                duration_ms: 60_000,
+            }),
+            Ok(TranscriptOutput {
+                text: "seg4".into(),
+                duration_ms: 60_000,
+            }),
+            Ok(TranscriptOutput {
+                text: "seg5".into(),
+                duration_ms: 60_000,
+            }),
+            Ok(TranscriptOutput {
+                text: "seg6".into(),
+                duration_ms: 100,
+            }),
+        ]);
+        let engine = PipelineDictationEngine::new(
+            Arc::new(LongRecorder(Arc::clone(&archive))),
+            Arc::new(RetryTranscriber {
+                outputs: Arc::new(Mutex::new(outputs)),
+                starts: Arc::clone(&starts),
+                pcm,
+            }),
+            noop_polisher(),
+        );
+        let progress = Arc::new(RecordingProgress::default());
+        let session_id = SessionId::new();
+        let mut context = (*raw_dictation_context()).clone();
+        context.asr.provider_type = "whisper".into();
+        context.recording.transcribe_after_stop = true;
+        engine
+            .start(session_id, Arc::new(context), progress.clone())
+            .await
+            .unwrap();
+        let result = engine.finish(session_id, progress).await.unwrap();
+        assert_eq!(result.raw_text, "seg1\nseg2\nseg3\nseg4\nseg5\nseg6");
+        assert_eq!(
+            result.duration_ms,
+            crate::long_recording::duration_ms(total_bytes)
+        );
+        assert_eq!(archive.read_pcm_calls.load(Ordering::Acquire), 0);
+        let ranges = archive.range_calls.lock().unwrap().clone();
+        let spill_count = ranges
+            .len()
+            .checked_sub(6)
+            .expect("expected 6 recovery reads");
+        assert!(spill_count > 0);
+        assert!(ranges[..spill_count].iter().all(|(_, len)| *len <= 65_536));
+        assert_eq!(
+            ranges[..spill_count]
+                .iter()
+                .map(|(_, len)| *len as u64)
+                .sum::<u64>(),
+            total_bytes
+        );
+        let recovery = &ranges[spill_count..];
+        assert_eq!(
+            recovery[0],
+            (0, crate::long_recording::RECOVERY_CHUNK_BYTES)
+        );
+        assert_eq!(
+            recovery[5],
+            (
+                5 * crate::long_recording::RECOVERY_CHUNK_BYTES as u64,
+                3_200
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn local_standby_transcribes_long_archive_in_60_second_ranged_segments() {
+        struct StandbyRangedArchive {
+            total_bytes: u64,
+            read_pcm_calls: AtomicUsize,
+            range_calls: Mutex<Vec<(u64, usize)>>,
+        }
+        impl RecordingArchive for StandbyRangedArchive {
+            fn is_available(&self) -> bool {
+                true
+            }
+            fn pcm_byte_len(&self) -> BoxFuture<'static, Result<u64, BackendError>> {
+                let len = self.total_bytes;
+                Box::pin(async move { Ok(len) })
+            }
+            fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.read_pcm_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async {
+                    Err(BackendError::new(
+                        BackendErrorCode::Internal,
+                        "local standby must use read_pcm_range",
+                    ))
+                })
+            }
+            fn read_pcm_range(
+                &self,
+                offset: u64,
+                len: usize,
+            ) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+                self.range_calls.lock().unwrap().push((offset, len));
+                let actual = (self.total_bytes - offset).min(len as u64) as usize;
+                Box::pin(async move { Ok(vec![1u8; actual]) })
+            }
+            fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        let total_bytes = (crate::long_recording::THRESHOLD_MS / 1_000) * 32_000 + 3_200;
+        let archive = Arc::new(StandbyRangedArchive {
+            total_bytes,
+            read_pcm_calls: AtomicUsize::new(0),
+            range_calls: Mutex::new(Vec::new()),
+        });
+        let outputs = Mutex::new(std::collections::HashMap::from([(
+            "whisper-local".to_string(),
+            VecDeque::from([
+                Ok(TranscriptOutput {
+                    text: "part1".into(),
+                    duration_ms: 60_000,
+                }),
+                Ok(TranscriptOutput {
+                    text: "part2".into(),
+                    duration_ms: 60_000,
+                }),
+                Ok(TranscriptOutput {
+                    text: String::new(),
+                    duration_ms: 60_000,
+                }),
+                Ok(TranscriptOutput {
+                    text: "part4".into(),
+                    duration_ms: 60_000,
+                }),
+                Ok(TranscriptOutput {
+                    text: "part5".into(),
+                    duration_ms: 60_000,
+                }),
+                Ok(TranscriptOutput {
+                    text: "part6".into(),
+                    duration_ms: 100,
+                }),
+            ]),
+        )]));
+        let engine = Arc::new(RoutedTranscriber {
+            outputs,
+            started: Arc::new(Mutex::new(Vec::new())),
+            delays: std::collections::HashMap::new(),
+        });
+        let mut context = (*raw_dictation_context()).clone();
+        let mut fallback = context.asr.clone();
+        fallback.provider_type = "whisper-local".into();
+        context.asr_fallback = Some(fallback);
+        let context = Arc::new(context);
+        let session = Arc::new(PipelineSession::new(Arc::clone(&context)));
+        let standby =
+            LocalStandby::new(engine, context, session, SessionId::new(), archive.clone());
+        let (output, _, _) = standby.result().await.expect("standby must succeed");
+        assert_eq!(output.text, "part1\npart2\npart4\npart5\npart6");
+        assert_eq!(
+            output.duration_ms,
+            crate::long_recording::duration_ms(total_bytes)
+        );
+        assert_eq!(archive.read_pcm_calls.load(Ordering::Acquire), 0);
+        let ranges = archive.range_calls.lock().unwrap().clone();
+        assert_eq!(ranges.len(), 6);
+        assert_eq!(ranges[0], (0, crate::long_recording::RECOVERY_CHUNK_BYTES));
+        assert_eq!(
+            ranges[5],
+            (
+                5 * crate::long_recording::RECOVERY_CHUNK_BYTES as u64,
+                3_200
+            )
+        );
     }
 }

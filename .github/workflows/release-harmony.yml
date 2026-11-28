@@ -5,7 +5,7 @@ name: Release HarmonyOS
 #
 # The build uses the official HarmonyOS command-line tools. Huawei's own download
 # page needs an account, but the same archive is mirrored publicly (the mirror
-# sherpa-onnx's own CI uses); `scripts/prepare-harmony-sdk.sh` pins it by SHA-256,
+# sherpa-onnx's own CI uses); `../harmony/scripts/prepare-harmony-sdk.sh` pins it by SHA-256,
 # so the workflow needs no variables and no self-hosted runner. Only the AppGallery
 # signing profile is secret - which it has to be.
 #
@@ -14,12 +14,28 @@ name: Release HarmonyOS
 #
 # Dispatch it after the tag exists; it rebuilds that tag, signs it with material
 # from Secrets, attaches the HAP to the Release and uploads it to AppGallery.
-# `release-tauri.yml` dispatches it automatically once the desktop/Android assets
-# for a `v*-tauri` tag are published (see `dispatch-platform-releases`), so a tag
-# push ships the HAP instead of depending on somebody remembering this page. The
-# manual dispatch stays the repair path for a published tag, and the channel it
-# runs with is `vars.HARMONY_AUTO_CHANNEL` (default `none`) on the automatic one.
+# `release-tauri.yml` calls this workflow in parallel with desktop and Android
+# after a short shared-draft preflight, using the same immutable tag commit.
+# Manual dispatch remains the repair path; automatic channel is
+# `vars.HARMONY_AUTO_CHANNEL` (default `none`).
 on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      channel:
+        type: string
+        default: none
+      publish:
+        type: boolean
+        default: true
+      upload_to_appgallery:
+        type: boolean
+        default: true
+      runner_labels:
+        type: string
+        default: '["ubuntu-latest"]'
   workflow_dispatch:
     inputs:
       tag:
@@ -104,9 +120,20 @@ jobs:
       APPGALLERY_CLIENT_SECRET: ${{ secrets.APPGALLERY_CLIENT_SECRET }}
       APPGALLERY_APP_ID: ${{ secrets.APPGALLERY_APP_ID }}
     steps:
+      - name: Validate release channel
+        env:
+          HARMONY_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          case "$HARMONY_CHANNEL" in
+            none | release | test) ;;
+            *) echo "::error::HARMONY_AUTO_CHANNEL must be none, release or test"; exit 1 ;;
+          esac
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          # Tag calls build the exact triggering commit, even if a tag is moved
+          # while queued. Manual repair still explicitly chooses its input tag.
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.tag }}
           submodules: false
 
       - uses: actions/setup-java@v4
@@ -129,6 +156,7 @@ jobs:
         uses: ./.github/actions/cache-npm
 
       - name: Install frontend dependencies
+        timeout-minutes: 10
         working-directory: openless-all/app
         run: npm ci
 
@@ -151,12 +179,22 @@ jobs:
       # the caches the pull request path depends on.
 
       - name: Prepare the HarmonyOS toolchain
+        working-directory: openless-all/app
         env:
           HARMONY_SDK_URL: ${{ vars.HARMONY_SDK_URL }}
           HARMONY_SDK_SHA256: ${{ vars.HARMONY_SDK_SHA256 }}
         run: |
           set -euo pipefail
-          bash openless-all/app/scripts/prepare-harmony-sdk.sh
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../harmony/scripts/prepare-harmony-sdk.sh ]; then
+            prepare_script=../harmony/scripts/prepare-harmony-sdk.sh
+          elif [ -f scripts/prepare-harmony-sdk.sh ]; then
+            prepare_script=scripts/prepare-harmony-sdk.sh
+          else
+            echo "::error::Missing source input: ../harmony/scripts/prepare-harmony-sdk.sh or scripts/prepare-harmony-sdk.sh" >&2
+            exit 1
+          fi
+          bash "$prepare_script"
           toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
           echo "OPENLESS_HARMONY_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
           echo "HVIGOR_USER_HOME=$toolchain/hvigor-home" >> "$GITHUB_ENV"
@@ -241,7 +279,18 @@ jobs:
         # bundleName or an expired profile would otherwise surface after a
         # six-minute build, or only when a device refuses the install.
         working-directory: openless-all/app
-        run: bash scripts/check-harmony-signing.sh "$OPENLESS_HARMONY_SIGNING_DIR" "${{ inputs.channel }}"
+        run: |
+          set -euo pipefail
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../harmony/scripts/check-harmony-signing.sh ]; then
+            signing_script=../harmony/scripts/check-harmony-signing.sh
+          elif [ -f scripts/check-harmony-signing.sh ]; then
+            signing_script=scripts/check-harmony-signing.sh
+          else
+            echo "::error::Missing source input: ../harmony/scripts/check-harmony-signing.sh or scripts/check-harmony-signing.sh" >&2
+            exit 1
+          fi
+          bash "$signing_script" "$OPENLESS_HARMONY_SIGNING_DIR" "${{ inputs.channel }}"
 
       - name: Build, sign and stage the HAP
         working-directory: openless-all/app
@@ -253,7 +302,16 @@ jobs:
             echo "::error::OPENLESS_HARMONY_SIGNING_DIR is unset; the signing step must export it"
             exit 1
           fi
-          bash scripts/package-harmony-hap.sh
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../harmony/scripts/package-harmony-hap.sh ]; then
+            package_script=../harmony/scripts/package-harmony-hap.sh
+          elif [ -f scripts/package-harmony-hap.sh ]; then
+            package_script=scripts/package-harmony-hap.sh
+          else
+            echo "::error::Missing source input: ../harmony/scripts/package-harmony-hap.sh or scripts/package-harmony-hap.sh" >&2
+            exit 1
+          fi
+          bash "$package_script"
 
       - name: Verify the packaged HAP
         working-directory: openless-all/app
@@ -264,16 +322,34 @@ jobs:
           # AppGallery needs a numeric versionName, so the packaging script keeps
           # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
           version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
-          version_code=$(cat linux-egui/package-revision)
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../linux/egui/package-revision ]; then
+            revision_file=../linux/egui/package-revision
+          elif [ -f linux-egui/package-revision ]; then
+            revision_file=linux-egui/package-revision
+          else
+            echo "::error::Missing source input: ../linux/egui/package-revision or linux-egui/package-revision" >&2
+            exit 1
+          fi
+          version_code=$(cat "$revision_file")
           toolchain="${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}"
           # The Release only carries the unsigned package; the store copy must
           # additionally prove its signature.
-          bash scripts/verify-harmony-hap.sh "$output/OpenLess_harmony_arm64.hap" \
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../harmony/scripts/verify-harmony-hap.sh ]; then
+            verify_script=../harmony/scripts/verify-harmony-hap.sh
+          elif [ -f scripts/verify-harmony-hap.sh ]; then
+            verify_script=scripts/verify-harmony-hap.sh
+          else
+            echo "::error::Missing source input: ../harmony/scripts/verify-harmony-hap.sh or scripts/verify-harmony-hap.sh" >&2
+            exit 1
+          fi
+          bash "$verify_script" "$output/OpenLess_harmony_arm64.hap" \
             "$toolchain" "$version_name" "$version_code" --allow-unsigned
           if [ "${{ inputs.channel }}" != "none" ]; then
             # AppGallery takes the App Pack; a bare HAP is rejected with
             # 204144641 "The suffix name of the software package is incorrect".
-            bash scripts/verify-harmony-hap.sh \
+            bash "$verify_script" \
               "$output/OpenLess_harmony_arm64-signed.app" "$toolchain"
           else
             echo "channel=none: unsigned package only, no signature to verify"
@@ -282,6 +358,7 @@ jobs:
       - name: Upload the HAP as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 14
           name: openless-harmony-hap
           # `-signed` stays in the workflow artifacts for the store upload; the
           # repository never publishes it.
@@ -294,22 +371,16 @@ jobs:
         working-directory: openless-all/app
         run: |
           set -euo pipefail
-          # The desktop workflow creates the Release for this tag; wait for it
-          # rather than racing its creation.
-          for attempt in $(seq 1 40); do
-            if gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" = 40 ]; then
-              echo "::error::release $RELEASE_TAG was not created by the desktop workflow"
-              exit 1
-            fi
-            sleep 15
-          done
+          # Automatic builds already have a shared draft: never wait for desktop.
+          # Direct manual dispatch still supports explicit published-tag repairs.
+          draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+          if [ "${{ github.event_name }}" = push ] && [ "$draft" != true ]; then
+            echo "::error::Release was published while building; refusing automatic mutation"
+            exit 1
+          fi
           output=target/harmony-packages
           gh release upload "$RELEASE_TAG" \
             "$output"/OpenLess_harmony_arm64.hap \
-            "$output"/OpenLess_harmony.hap \
             "$output"/SHA256SUMS \
             --clobber
           echo "attached HarmonyOS assets to $RELEASE_TAG"
@@ -323,12 +394,21 @@ jobs:
         # signed package is uploaded - the Release carries the unsigned one.
         #
         # Keep this a literal block: a folded `>-` scalar starting with a comment
-        # swallowed the command line (`# ... node scripts/upload-appgallery.mjs`)
+        # swallowed the command line (`# ... node ../harmony/scripts/upload-appgallery.mjs`)
         # and the step died with `--channel: command not found` (127) the first
         # time it ever ran.
         run: |
           set -euo pipefail
-          node scripts/upload-appgallery.mjs \
+          # Historical tags may retain the app/scripts layout; prefer the checked-out new layout.
+          if [ -f ../harmony/scripts/upload-appgallery.mjs ]; then
+            upload_script=../harmony/scripts/upload-appgallery.mjs
+          elif [ -f scripts/upload-appgallery.mjs ]; then
+            upload_script=scripts/upload-appgallery.mjs
+          else
+            echo "::error::Missing source input: ../harmony/scripts/upload-appgallery.mjs or scripts/upload-appgallery.mjs" >&2
+            exit 1
+          fi
+          node "$upload_script" \
             --channel "${{ inputs.channel }}" \
             --file target/harmony-packages/OpenLess_harmony_arm64-signed.app \
             --skip-if-unconfigured

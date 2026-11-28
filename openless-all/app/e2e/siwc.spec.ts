@@ -1,5 +1,6 @@
+import { fixtureOrigin } from './support/server';
 import { test, expect } from '@playwright/test';
-const fixture = 'http://127.0.0.1:5326/e2e/fixtures/siwc.html';
+const fixture = `${fixtureOrigin}/e2e/fixtures/siwc.html`;
 test('SIWC sign-in, cancellation, model selection, quota and disconnect', async ({ page }) => {
   await page.goto(fixture);
   await expect(page.getByText('尚未连接 ChatGPT', { exact: true })).toBeVisible();

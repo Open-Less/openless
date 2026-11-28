@@ -26,7 +26,7 @@ pub const LOCAL_ASR_KEEP_LOADED_FOREVER_SECS: u32 = 86_400;
 
 /// Recognition pipeline mode (issue #902): `traditional` = two-stage ASR +
 /// LLM polish; `multimodal` = one multimodal model turns audio + prompt
-/// into final text in a single step. The two configs live in fully isolated
+/// into final text in a single step; `deepseek` uses the dedicated suite. All configs use isolated
 /// credential namespaces; the runtime reads only the active mode and
 /// switching never deletes the other config.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -35,13 +35,14 @@ pub enum PipelineMode {
     #[default]
     Traditional,
     Multimodal,
+    Deepseek,
 }
 
 pub fn effective_pipeline_mode(enabled: bool, configured: PipelineMode) -> PipelineMode {
-    if enabled {
-        configured
-    } else {
+    if !enabled && configured == PipelineMode::Multimodal {
         PipelineMode::Traditional
+    } else {
+        configured
     }
 }
 
@@ -169,7 +170,9 @@ pub use crate::types::HistoryInsertStatus as InsertStatus;
 #[serde(rename_all = "camelCase")]
 pub enum SelectionPolishOutputMode {
     #[default]
+    #[serde(alias = "previewConfirm")]
     DirectReplace,
+    #[serde(skip_deserializing)]
     PreviewConfirm,
 }
 
@@ -186,13 +189,13 @@ pub struct FrontApp {
 /// `FrontApp { name, bundle_id }`.
 ///
 /// macOS composes `"Claude (com.anthropic.claudefordesktop)"`; Windows has
-/// only window titles, no bundle id. History entries have separate
+/// an executable name, not a bundle id. History entries have separate
 /// `app_name` / `app_bundle_id` fields, so splitting lets the detail page
 /// show a readable app name instead of gluing the whole bundle id into the
 /// body text.
 ///
 /// Only macOS labels are `"name (bundle.id)"`; on Windows parentheses are
-/// part of the title. Callers must pass `is_macos` per platform (production
+/// part of the label. Callers must pass `is_macos` per platform (production
 /// goes through `split_front_app_opt`). Non-macOS labels and labels whose
 /// bracket structure doesn't parse stay whole as the app name — better a
 /// verbose display than misreading ordinary parentheses in a window title
@@ -230,7 +233,7 @@ pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
 
 /// `Option` convenience wrapper for `split_front_app_label`; keeps the
 /// platform switch in one place: only macOS display strings are
-/// `"name (bundle.id)"`; other platforms (Windows window titles, Linux)
+/// `"name (bundle.id)"`; other platforms (Windows, Linux)
 /// keep the whole string as the name and leave the bundle id empty.
 pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
     label
@@ -266,6 +269,9 @@ pub use crate::types::{CorrectionRule, RuleSource};
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// Host presentation correlation only; absent for manually queued suggestions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<u64>,
     /// Absolute deadline shared by native and web confirmation surfaces.
     pub expires_at_ms: i64,
     /// The (wrong) pre-correction spelling. Only shown on the card so the
@@ -320,6 +326,15 @@ pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 /// having no reject list.
 pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
 
+/// Windows suggestion-card placement; other platforms retain their native presentation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VocabularySuggestionPosition {
+    #[default]
+    NearInput,
+    BottomRight,
+}
+
 /// Local-only tuning. Consent and sensitive-field protections remain separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -327,6 +342,7 @@ pub struct VocabularyLearningSettings {
     pub observation_seconds: u32,
     pub suggestion_seconds: u32,
     pub max_phrase_chars: u32,
+    pub suggestion_position: VocabularySuggestionPosition,
 }
 
 impl Default for VocabularyLearningSettings {
@@ -335,6 +351,7 @@ impl Default for VocabularyLearningSettings {
             observation_seconds: 60,
             suggestion_seconds: 10,
             max_phrase_chars: 12,
+            suggestion_position: VocabularySuggestionPosition::default(),
         }
     }
 }
@@ -345,6 +362,7 @@ impl VocabularyLearningSettings {
             observation_seconds: self.observation_seconds.clamp(10, 60),
             suggestion_seconds: self.suggestion_seconds.clamp(5, 60),
             max_phrase_chars: self.max_phrase_chars.clamp(2, 32),
+            suggestion_position: self.suggestion_position,
         }
     }
 }
@@ -417,6 +435,9 @@ pub struct UserPreferences {
     /// Authoritative mode established by a V2 client; absent on untouched legacy settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capsule_display_mode_v2: Option<CapsuleDisplayMode>,
+    /// None means never chosen on this device; Some(1) is an explicit reset to the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation_shift_tap_count: Option<std::num::NonZeroU8>,
     #[serde(default = "default_true")]
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -463,6 +484,8 @@ pub struct UserPreferences {
     /// Opt-in local voice command listener. Standby audio is never sent to a cloud provider.
     #[serde(default)]
     pub voice_activation_enabled: bool,
+    #[serde(default)]
+    pub voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     pub voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -540,11 +563,8 @@ pub struct UserPreferences {
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
-    /// Windows: whether the OpenLess TSF IME shows in the system keyboard
-    /// list (Win+Space) under non-TSF insertion (SendInput / clipboard
-    /// paste). Default true keeps current behavior; when off, the language
-    /// profile is disabled per-user without admin rights. TSF mode still
-    /// force-enables the profile but never rewrites this pref.
+    /// Legacy wire compatibility only. The Windows speech TIP does not appear
+    /// in the keyboard list and stays enabled regardless of this preference.
     #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// User's working languages (multi-select, native names). Injected as
@@ -581,6 +601,9 @@ pub struct UserPreferences {
     /// Additional key held with the user-selected recording shortcut. Empty disables Ask.
     #[serde(default = "default_qa_companion_key")]
     pub qa_companion_key: String,
+    /// Kept in the device profile for compatibility with older Ask builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_shortcut_behavior: Option<QaShortcutBehavior>,
     /// Standalone quick-note hotkey. None = not configured; when enabled, press once to start and again to stop.
     #[serde(default)]
     pub quick_note_hotkey: Option<ShortcutBinding>,
@@ -623,6 +646,10 @@ pub struct UserPreferences {
     pub custom_combo_hotkey: Option<ComboBinding>,
     #[serde(default = "default_translation_hotkey")]
     pub translation_hotkey: ShortcutBinding,
+    #[serde(default = "default_skip_auto_style_hotkey")]
+    pub skip_auto_style_hotkey: ShortcutBinding,
+    #[serde(default)]
+    pub skip_auto_style_picker_enabled: bool,
     /// "Switch style" global hotkey. `None` = disabled (no global key
     /// registered); `Some(...)` = registered. Defaults to `Some(default key)`
     /// — zero behavior change for existing users, only newly clearable
@@ -770,6 +797,12 @@ pub struct UserPreferences {
     /// always polish regardless of this value.
     #[serde(default = "default_polish_skip_max_chars")]
     pub polish_skip_max_chars: u32,
+    /// Enables the bounded post-ASR polish strategy hook. Disabled by default.
+    #[serde(default)]
+    pub polish_strategy_enabled: bool,
+    /// Rhai source for the bounded post-ASR polish strategy.
+    #[serde(default)]
+    pub polish_strategy_script: String,
     /// Start silently (no main window). Common for login-launch users who
     /// want the tray rather than a popped-up window. When on, every launch
     /// path skips the window (manual clicks included); users reach the main
@@ -823,6 +856,9 @@ pub struct UserPreferences {
     /// Off by default; with it off, the target only receives the final text.
     #[serde(default)]
     pub windows_composition_input: bool,
+    /// macOS AX live transcript replacement in the captured editor; opt-in.
+    #[serde(default)]
+    pub macos_composition_input: bool,
     /// Whether to send original text near the cursor from the document the
     /// user is writing as LLM polish context.
     ///
@@ -840,6 +876,9 @@ pub struct UserPreferences {
     /// Observe corrections locally after insertion; independent of LLM context.
     #[serde(default)]
     pub vocabulary_learning_enabled: bool,
+    /// Local consent for observing formatting edits as abstract expression evidence.
+    #[serde(default)]
+    pub expression_learning_enabled: bool,
     #[serde(default)]
     pub vocabulary_learning_settings: VocabularyLearningSettings,
     /// Whether the Overview shows the "yearly activity" heatmap card.
@@ -942,6 +981,11 @@ pub struct UserPreferences {
 }
 
 impl UserPreferences {
+    pub fn translation_shift_tap_count(&self) -> u8 {
+        self.translation_shift_tap_count
+            .map_or(1, std::num::NonZeroU8::get)
+    }
+
     pub fn less_computer_available(&self) -> bool {
         self.testing_features_enabled && self.coding_agent_enabled
     }
@@ -1034,6 +1078,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     capsule_display_mode: CapsuleDisplayMode,
     capsule_display_mode_v2: Option<CapsuleDisplayMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation_shift_tap_count: Option<std::num::NonZeroU8>,
     #[serde(default = "default_true")]
     capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
@@ -1060,6 +1106,8 @@ struct UserPreferencesWire {
     microphone_device_name: String,
     #[serde(default)]
     voice_activation_enabled: bool,
+    #[serde(default)]
+    voice_activation_hotkey_linked: bool,
     #[serde(default = "default_true")]
     voice_activation_wake_enabled: bool,
     #[serde(default = "default_true")]
@@ -1114,6 +1162,8 @@ struct UserPreferencesWire {
     qa_hotkey: Option<ShortcutBinding>,
     #[serde(default = "default_qa_companion_key")]
     qa_companion_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    qa_shortcut_behavior: Option<QaShortcutBehavior>,
     #[serde(default)]
     quick_note_hotkey: Option<ShortcutBinding>,
     /// Outer `None` means the field was absent in a pre-Selection-Polish file;
@@ -1141,6 +1191,9 @@ struct UserPreferencesWire {
     qa_save_history: bool,
     custom_combo_hotkey: Option<ComboBinding>,
     translation_hotkey: Option<ShortcutBinding>,
+    skip_auto_style_hotkey: Option<ShortcutBinding>,
+    #[serde(default)]
+    skip_auto_style_picker_enabled: bool,
     switch_style_hotkey: Option<ShortcutBinding>,
     open_app_hotkey: Option<ShortcutBinding>,
     #[serde(default)]
@@ -1211,6 +1264,10 @@ struct UserPreferencesWire {
     #[serde(default = "default_polish_skip_max_chars")]
     polish_skip_max_chars: u32,
     #[serde(default)]
+    polish_strategy_enabled: bool,
+    #[serde(default)]
+    polish_strategy_script: String,
+    #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
     theme_mode: ThemeMode,
@@ -1222,10 +1279,14 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     windows_composition_input: bool,
+    #[serde(default)]
+    macos_composition_input: bool,
     #[serde(default = "default_true")]
     cursor_context_enabled: bool,
     #[serde(default)]
     vocabulary_learning_enabled: bool,
+    #[serde(default)]
+    expression_learning_enabled: bool,
     vocabulary_learning_settings: VocabularyLearningSettings,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
@@ -1331,6 +1392,7 @@ impl Default for UserPreferencesWire {
             capsule_style: prefs.capsule_style,
             capsule_display_mode: prefs.capsule_display_mode,
             capsule_display_mode_v2: prefs.capsule_display_mode_v2,
+            translation_shift_tap_count: prefs.translation_shift_tap_count,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
             mute_during_recording: prefs.mute_during_recording,
@@ -1344,6 +1406,7 @@ impl Default for UserPreferencesWire {
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
             microphone_device_name: prefs.microphone_device_name,
             voice_activation_enabled: prefs.voice_activation_enabled,
+            voice_activation_hotkey_linked: prefs.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: prefs.voice_activation_wake_enabled,
             voice_activation_finish_enabled: prefs.voice_activation_finish_enabled,
             voice_activation_wake_phrase: prefs.voice_activation_wake_phrase,
@@ -1371,6 +1434,7 @@ impl Default for UserPreferencesWire {
             output_language_preference: prefs.output_language_preference,
             qa_hotkey: prefs.qa_hotkey,
             qa_companion_key: prefs.qa_companion_key,
+            qa_shortcut_behavior: prefs.qa_shortcut_behavior,
             quick_note_hotkey: prefs.quick_note_hotkey,
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
@@ -1385,6 +1449,8 @@ impl Default for UserPreferencesWire {
             qa_save_history: prefs.qa_save_history,
             custom_combo_hotkey: prefs.custom_combo_hotkey,
             translation_hotkey: None,
+            skip_auto_style_hotkey: None,
+            skip_auto_style_picker_enabled: prefs.skip_auto_style_picker_enabled,
             // Carry the default key (Some) so a missing field still means enabled; None exclusively means "user disabled".
             switch_style_hotkey: prefs.switch_style_hotkey,
             open_app_hotkey: prefs.open_app_hotkey,
@@ -1423,14 +1489,18 @@ impl Default for UserPreferencesWire {
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
             polish_skip_max_chars: prefs.polish_skip_max_chars,
+            polish_strategy_enabled: prefs.polish_strategy_enabled,
+            polish_strategy_script: prefs.polish_strategy_script,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             windows_composition_input: prefs.windows_composition_input,
+            macos_composition_input: prefs.macos_composition_input,
             cursor_context_enabled: prefs.cursor_context_enabled,
             vocabulary_learning_enabled: prefs.vocabulary_learning_enabled,
+            expression_learning_enabled: prefs.expression_learning_enabled,
             vocabulary_learning_settings: prefs.vocabulary_learning_settings,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
@@ -1530,9 +1600,31 @@ impl<'de> Deserialize<'de> for UserPreferences {
                             AndroidOverlayGestureAction::StylePack
                         }
                     },
-                    right: AndroidOverlayGestureAction::Qa,
+                    right: AndroidOverlayGestureAction::None,
                 });
 
+        let skip_auto_style_hotkey = wire.skip_auto_style_hotkey.clone().unwrap_or_else(|| {
+            let proposed = default_skip_auto_style_hotkey();
+            // A newly introduced default must never steal an existing user's key.
+            let occupied = [
+                Some(&dictation_hotkey), wire.translation_hotkey.as_ref(), wire.qa_hotkey.as_ref(),
+                wire.switch_style_hotkey.as_ref(), wire.open_app_hotkey.as_ref(),
+                wire.quick_note_hotkey.as_ref(), wire.coding_agent_voice_hotkey.as_ref(),
+                wire.coding_agent_panel_hotkey.as_ref(), wire.coding_agent_quick_hotkey.as_ref(),
+                selection_polish_hotkey.as_ref(),
+            ].into_iter().flatten().any(|other| crate::shortcut_types::bindings_overlap(&proposed, other));
+            if occupied { ShortcutBinding::unassigned() } else { proposed }
+        });
+        // Older previews assigned bare Alt on Windows. Until a paired,
+        // menu-safe native implementation is verified, migrate modifier taps
+        // to unassigned; custom global combinations remain available.
+        #[cfg(target_os = "windows")]
+        let skip_auto_style_hotkey =
+            if crate::shortcut_types::legacy_modifier_trigger(&skip_auto_style_hotkey).is_some() {
+                ShortcutBinding::unassigned()
+            } else {
+                skip_auto_style_hotkey
+            };
         Ok(Self {
             hotkey: wire.hotkey,
             dictation_hotkey,
@@ -1555,6 +1647,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_display_mode_v2: wire
                 .capsule_display_mode_v2
                 .or_else(|| wire.capsule_display_mode.extended_sync_mode()),
+            translation_shift_tap_count: wire.translation_shift_tap_count,
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
             mute_during_recording: wire.mute_during_recording,
@@ -1568,6 +1661,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
             microphone_device_name: wire.microphone_device_name,
             voice_activation_enabled: wire.voice_activation_enabled,
+            voice_activation_hotkey_linked: wire.voice_activation_hotkey_linked,
             voice_activation_wake_enabled: wire.voice_activation_wake_enabled,
             voice_activation_finish_enabled: wire.voice_activation_finish_enabled,
             voice_activation_wake_phrase: wire.voice_activation_wake_phrase,
@@ -1602,8 +1696,13 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
             output_language_preference: wire.output_language_preference,
-            qa_hotkey: if cfg!(target_os = "linux") { wire.qa_hotkey } else { None }, // retired desktop follow-up shortcut
+            qa_hotkey: if cfg!(target_os = "linux") {
+                wire.qa_hotkey
+            } else {
+                None
+            }, // retired desktop follow-up shortcut
             qa_companion_key: wire.qa_companion_key,
+            qa_shortcut_behavior: wire.qa_shortcut_behavior,
             quick_note_hotkey: wire.quick_note_hotkey,
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
@@ -1634,6 +1733,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             translation_hotkey: wire
                 .translation_hotkey
                 .unwrap_or_else(default_translation_hotkey),
+            skip_auto_style_hotkey,
+            skip_auto_style_picker_enabled: wire.skip_auto_style_picker_enabled,
             // Pass the Option through: None = user disabled — no
             // unwrap_or_else collapse back to the default key (the root
             // cause of #576 "can't disable"). A missing field falls to the
@@ -1663,14 +1764,18 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
             polish_skip_max_chars: wire.polish_skip_max_chars,
+            polish_strategy_enabled: wire.polish_strategy_enabled,
+            polish_strategy_script: wire.polish_strategy_script,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
             streaming_insert,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             windows_composition_input: wire.windows_composition_input,
+            macos_composition_input: wire.macos_composition_input,
             cursor_context_enabled: wire.cursor_context_enabled,
             vocabulary_learning_enabled: wire.vocabulary_learning_enabled,
+            expression_learning_enabled: wire.expression_learning_enabled,
             vocabulary_learning_settings: wire.vocabulary_learning_settings.normalized(),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
@@ -1825,10 +1930,26 @@ fn salvage_without_incomplete_legacy_hotkey(
 }
 
 fn default_qa_hotkey() -> Option<ShortcutBinding> {
-    if cfg!(target_os = "linux") { Some(ShortcutBinding::default_qa()) } else { None }
+    if cfg!(target_os = "linux") {
+        Some(ShortcutBinding::default_qa())
+    } else {
+        None
+    }
 }
 
-fn default_qa_companion_key() -> String { "Space".into() }
+/// Initial action of the recording shortcut plus the Ask companion key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QaShortcutBehavior {
+    #[default]
+    Record,
+    Open,
+    Draft,
+}
+
+fn default_qa_companion_key() -> String {
+    "Space".into()
+}
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
     #[cfg(target_os = "windows")]
@@ -1880,6 +2001,16 @@ pub(crate) fn default_coding_agent_panel_hotkey() -> Option<ShortcutBinding> {
 fn default_translation_hotkey() -> ShortcutBinding {
     ShortcutBinding {
         primary: "Shift".into(),
+        modifiers: Vec::new(),
+    }
+}
+
+pub(crate) fn default_skip_auto_style_hotkey() -> ShortcutBinding {
+    if cfg!(target_os = "windows") {
+        return ShortcutBinding::unassigned();
+    }
+    ShortcutBinding {
+        primary: if cfg!(target_os = "macos") { "LeftCommand" } else { "LeftAlt" }.into(),
         modifiers: Vec::new(),
     }
 }
@@ -1957,6 +2088,7 @@ impl Default for UserPreferences {
             capsule_style: CapsuleStyle::Classic,
             capsule_display_mode: CapsuleDisplayMode::CursorScreen,
             capsule_display_mode_v2: None,
+            translation_shift_tap_count: None,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
             mute_during_recording: false,
@@ -1970,6 +2102,7 @@ impl Default for UserPreferences {
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
             microphone_device_name: String::new(),
             voice_activation_enabled: false,
+            voice_activation_hotkey_linked: false,
             voice_activation_wake_enabled: true,
             voice_activation_finish_enabled: true,
             voice_activation_wake_phrase: default_voice_activation_wake_phrase(),
@@ -1997,6 +2130,7 @@ impl Default for UserPreferences {
             output_language_preference: OutputLanguagePreference::Auto,
             qa_hotkey: default_qa_hotkey(),
             qa_companion_key: default_qa_companion_key(),
+            qa_shortcut_behavior: None,
             quick_note_hotkey: None,
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
@@ -2011,6 +2145,8 @@ impl Default for UserPreferences {
             qa_save_history: false,
             custom_combo_hotkey: None,
             translation_hotkey: default_translation_hotkey(),
+            skip_auto_style_hotkey: default_skip_auto_style_hotkey(),
+            skip_auto_style_picker_enabled: false,
             switch_style_hotkey: default_switch_style_hotkey(),
             open_app_hotkey: default_open_app_hotkey(),
             style_pack_hotkeys: Vec::new(),
@@ -2046,14 +2182,18 @@ impl Default for UserPreferences {
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
             polish_skip_max_chars: default_polish_skip_max_chars(),
+            polish_strategy_enabled: false,
+            polish_strategy_script: String::new(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),
             streaming_insert: true,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             windows_composition_input: false,
+            macos_composition_input: false,
             cursor_context_enabled: true,
             vocabulary_learning_enabled: false,
+            expression_learning_enabled: false,
             vocabulary_learning_settings: VocabularyLearningSettings::default(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
@@ -2843,6 +2983,12 @@ pub struct CapsulePayload {
     /// user immediately knows this output goes through the translation
     /// pipeline. See issue #4.
     pub translation: bool,
+    #[serde(default)]
+    pub skip_auto_style: bool,
+    #[serde(default)]
+    pub style_pack_id: Option<String>,
+    #[serde(default)]
+    pub style_pack_name: Option<String>,
     /// Whether this is a Less Computer (voice agent controlling the
     /// computer) session. The frontend switches the processing label from
     /// "thinking" to "using" — the agent is operating the computer, not
@@ -2869,6 +3015,8 @@ pub struct CapsulePayload {
     /// and copy stay untouched.
     #[serde(default)]
     pub selection_polish: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub qa: bool,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
@@ -2878,7 +3026,7 @@ pub struct CapsulePayload {
 pub struct CredentialsStatus {
     pub active_asr_provider: String,
     pub active_llm_provider: String,
-    /// Current recognition pipeline mode ("traditional" | "multimodal"); the
+    /// Current recognition pipeline mode ("traditional" | "multimodal" | "deepseek"); the
     /// frontend uses it to pick which config cards to render and which set
     /// the Overview treats as "configured".
     pub pipeline_mode: PipelineMode,
@@ -3088,10 +3236,14 @@ mod tests {
         value["qaHotkey"] = serde_json::json!({"primary":";", "modifiers":["cmd","shift"]});
         let migrated: UserPreferences = serde_json::from_value(value).unwrap();
         assert_eq!(migrated.qa_companion_key, "Space");
-        if !cfg!(target_os = "linux") { assert!(migrated.qa_hotkey.is_none()); }
+        if !cfg!(target_os = "linux") {
+            assert!(migrated.qa_hotkey.is_none());
+        }
         for key in ["F9", ""] {
-            let mut prefs = migrated.clone(); prefs.qa_companion_key = key.into();
-            let restored: UserPreferences = serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+            let mut prefs = migrated.clone();
+            prefs.qa_companion_key = key.into();
+            let restored: UserPreferences =
+                serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
             assert_eq!(restored.qa_companion_key, key);
         }
     }
@@ -3473,9 +3625,13 @@ mod tests {
     fn capsule_style_pref_defaults_to_openless_and_migrates_typeless() {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(prefs.capsule_style, CapsuleStyle::Classic);
-        let legacy: UserPreferences = serde_json::from_str(r#"{"capsuleStyle":"typeless"}"#).unwrap();
+        let legacy: UserPreferences =
+            serde_json::from_str(r#"{"capsuleStyle":"typeless"}"#).unwrap();
         assert_eq!(legacy.capsule_style, CapsuleStyle::Classic);
-        assert_eq!(serde_json::to_value(legacy).unwrap()["capsuleStyle"], "classic");
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap()["capsuleStyle"],
+            "classic"
+        );
 
         for (style, wire_name) in [
             (CapsuleStyle::Siri, "siri"),
@@ -3730,6 +3886,28 @@ mod tests {
 
         let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(from_empty.paste_shortcut, PasteShortcut::CtrlV);
+    }
+
+    #[test]
+    fn polish_strategy_defaults_disabled_and_round_trips() {
+        assert!(!UserPreferences::default().polish_strategy_enabled);
+        assert!(UserPreferences::default().polish_strategy_script.is_empty());
+        let from_empty: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!from_empty.polish_strategy_enabled);
+        assert!(from_empty.polish_strategy_script.is_empty());
+
+        let configured: UserPreferences = serde_json::from_str(
+            r#"{"polishStrategyEnabled":true,"polishStrategyScript":"fn strategy(input) { #{ action: \"polish\" } }"}"#,
+        )
+        .unwrap();
+        assert!(configured.polish_strategy_enabled);
+        assert!(configured.polish_strategy_script.contains("strategy"));
+        let saved = serde_json::to_value(&configured).unwrap();
+        assert_eq!(saved["polishStrategyEnabled"], true);
+        assert!(saved["polishStrategyScript"]
+            .as_str()
+            .unwrap()
+            .contains("strategy"));
     }
 
     #[test]

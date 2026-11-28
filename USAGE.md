@@ -1,142 +1,162 @@
-# OpenLess 使用指南
+# OpenLess User Guide
 
-## 安装
+[English](USAGE.md) | [简体中文](USAGE.zh.md)
 
-### macOS
+> Online documentation is continuously updated at **<https://openless.top/en/docs/>** (Chinese: **<https://openless.top/zh/docs/>**). Use this guide as the in-repo reference for installation, permissions, daily dictation, and troubleshooting.
 
-1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_aarch64.dmg`。
-2. 打开 dmg，将 OpenLess.app 拖入「应用程序」文件夹。
-3. 双击启动。
+## Installation
 
-### Windows
+See also the website download & installation guide: <https://openless.top/en/docs/installation/>.
 
-1. 从 [Releases](https://github.com/Open-Less/openless/releases/latest) 下载 `OpenLess_<版本>_x64-setup.exe`。
-2. 运行安装程序，按提示完成安装。
-3. 从开始菜单启动 OpenLess。
+### macOS (14 Sonoma+)
+
+1. Download `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel) from [GitHub Releases](https://github.com/Open-Less/openless/releases/latest).
+2. Open the DMG and drag **OpenLess.app** into **Applications**.
+3. Launch OpenLess from Applications.
+
+You can also install the Stable release via Homebrew (optional update reminder setup in [docs/guides/homebrew.md](docs/guides/homebrew.md)):
+
+```bash
+brew tap Open-Less/openless https://github.com/Open-Less/openless
+brew install --cask openless
+brew update && brew upgrade openless
+```
+
+Published releases follow the signing and notarization checks in [RELEASING.md](RELEASING.md). Separately distributed dev builds may use ad-hoc signing.
+
+### Windows (10+)
+
+1. Download `OpenLess_<version>_x64-setup.exe` or `OpenLess_<version>_x64_en-US.msi` from [GitHub Releases](https://github.com/Open-Less/openless/releases/latest).
+2. Run the installer and follow the prompts.
+3. Launch OpenLess from the Start menu.
+
+### Linux
+
+Linux runs on a native `egui` host with no Tauri or WebKitGTK dependency.
+
+1. Linux release packaging is currently paused pending on-device acceptance; build from source using [openless-all/README.md#shared-backend-and-linux-host](openless-all/README.md#shared-backend-and-linux-host).
+2. Requires glibc ≥ 2.39 (Ubuntu 24.04 or equivalent).
+3. Global hotkeys are handled by the `fcitx5` plugin — enable the OpenLess addon in `fcitx5` and bind a trigger key. Linux has no AppImage and no in-app updater.
+
+### Android (8.0+)
+
+1. Download `OpenLess_<version>_arm64-v8a.apk` from [GitHub Releases](https://github.com/Open-Less/openless/releases/latest) (use `armeabi-v7a` for older 32-bit devices).
+2. Allow installing unknown apps and install the APK.
+3. Grant microphone permission on first recording. To dictate into other apps, enable the OpenLess keyboard in system input-method settings and switch to it.
+4. Check for updates under **Settings → About & updates**.
+
+### iOS (16+)
+
+1. Pre-signed IPAs are not distributed. Build from `openless-all/ios/` with Xcode and sign with your personal Apple team.
+2. Follow [openless-all/ios/README.md](openless-all/ios/README.md) for build, signing, and keyboard setup.
+
+### HarmonyOS (adapting)
+
+1. Download the unsigned `OpenLess_harmony_arm64.hap` from the release assets.
+2. Sign it for your device before installing (devices reject unsigned HAPs; debug certificate must match bundle `openless.hm.com` and profile must include your device). DevEco Studio automatic signing handles this, or place signing files in `~/.local/share/harmony/signing/local-test` (`OPENLESS_HARMONY_SIGNING_DIR`).
+3. Install with DevEco Studio or `hdc`. Open the main app once to configure speech services before using the input method.
 
 ---
 
-## 首次配置
+## First-Time Setup
 
-### macOS 权限
+### System Permissions
 
-首次启动后，在「系统设置 → 隐私与安全」中授予以下权限：
+- **macOS**: Open **System Settings → Privacy & Security** and grant **Microphone** and **Accessibility**. After granting Accessibility, **quit OpenLess completely and relaunch** so global hotkeys take effect.
+- **Windows**: Grant **Microphone** permission when prompted, then check **Settings → Permissions & data** to confirm the global hotkey listener is active.
+- **Android**: Grant **Microphone** on first use and enable **OpenLess Keyboard** under System Settings → Language & input. Accessibility is optional and only needed if you enable local vocabulary learning inside supported editors.
+- **iOS**: Grant **Microphone** (and Speech Recognition if used). Enable **Settings → General → Keyboard → Keyboards → Add New Keyboard → OpenLess** and turn on **Allow Full Access** for shared settings and voice control.
+- **HarmonyOS**: Grant **Microphone** and **Network**, then enable **OpenLess InputMethod** in system input-method settings (no accessibility permission required).
 
-1. **麦克风** — 允许 OpenLess 录音。
-2. **辅助功能** — 允许 OpenLess 读写当前焦点输入框。授权后须**完全退出并重新启动** OpenLess，快捷键才会生效。
+### Configure Speech & Model Services
 
-### Windows 权限
+Open **Settings → AI Services & Models** and choose one of three dictation pipelines. Complete step-by-step provider instructions live on the official docs:
 
-1. 按系统提示授予**麦克风**权限。
-2. 打开 OpenLess → 「设置 → 权限」，确认全局快捷键监听器状态显示为「已启动」。
+- **Official Setup Guide**: <https://openless.top/en/docs/setup/> (Chinese: <https://openless.top/zh/docs/setup/>)
+- **Quick Reference**: [docs/guides/speech-services.md](docs/guides/speech-services.md)
 
-### 填入凭据
+The three pipelines are:
+1. **Traditional (ASR + optional LLM)**: Transcribe via an ASR provider (Volcengine, Alibaba Cloud Bailian, iFlytek RTASR, Tencent Hunyuan, OpenAI-compatible, or local models), then optionally polish/translate with an LLM provider.
+2. **Multimodal (single model)**: Send audio directly to an audio-capable model (Google Gemini, OpenAI Audio, Qwen-Omni) for one-step transcription and rewriting.
+3. **DeepSeek Suite**: Use an official DeepSeek API key for voice dictation, Ask, web search, and spoken readback.
 
-不会配火山 ASR 的话，先看这篇图文引导：  
-[OpenLess 火山 ASR 配置](docs/volcengine-setup.md)
+All API keys are stored in the OS credential vault (service = `com.openless.app`: macOS Keychain, Windows Credential Manager, Linux Secret Service, iOS Keychain) and are never saved in plaintext config files.
 
-用讯飞实时语音转写的话，看 [OpenLess 讯飞 ASR 配置](docs/xfyun-asr.md)（AppID + API Key，设置 → 语音提供商 → 讯飞实时语音转写）。
+---
 
-打开 OpenLess → **设置**，填入以下字段：
+## Daily Usage
 
-| 字段 | 说明 |
+See also <https://openless.top/en/docs/voice-input/> for live examples and polish tips.
+
+### Recording & Continuous Dictation
+
+- **Start / Stop**: Press the global hotkey (defaults: macOS right Option, Windows right Control; Linux via `fcitx5`; mobile via app or keyboard). Both **toggle** and **push-to-talk** modes are supported, plus `MediaPlayPause` for wired headset buttons.
+- **Continuous background dictation**: As soon as you stop recording one segment, it moves to an asynchronous background queue while freezing its target app and cursor context — you can start the next segment immediately, and finished results are inserted in order.
+- **Cancel**: Press `Esc` at any time (recording, polishing, or insertion) to discard the current segment cleanly.
+- **Safe insertion**: Text inserts straight into the focused input field; if an app blocks direct insertion, OpenLess automatically copies the result to your clipboard so nothing is lost.
+
+### Output Modes, Style Packs & Marketplace
+
+Switch modes in the main window, capsule, or Settings:
+
+| Mode | Behavior |
 | --- | --- |
-| 火山引擎 App ID | 语音识别服务的应用 ID |
-| 火山引擎 Access Token | 语音识别访问凭据 |
-| 火山引擎 Resource ID | 语音识别资源 ID |
-| Ark API Key | 文本润色服务的 API Key |
-| Ark Model ID | 使用的模型 ID（如 `doubao-pro-32k`） |
-| Ark Endpoint | 接口地址，默认 `https://ark.cn-beijing.volces.com/api/v3/chat/completions` |
+| **Raw** | Outputs the ASR transcript directly without LLM rewriting |
+| **Light Polish** | Removes filler words, fixes punctuation and self-corrections, keeps your original tone |
+| **Structured (AI Prompt)** | Organizes spoken thoughts into structured context, constraints, and requests ready for ChatGPT / Claude / Cursor |
+| **Formal** | Rewrites spoken input into clean, professional written prose |
 
-保存后设置立即生效，无需重启。
+You can also assign **Style Packs** (custom system prompts, hotkey switching, per-app automatic routing) and browse or install community packs from the in-app **Marketplace**. See reference polish examples in [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl).
 
----
+### Ask & Selection Rewrite
 
-## 基本使用
+Desktop hosts provide a standalone **Ask** window and selected-text rewrite workflow. Generated replies stay inside the Ask window until the original target input can be safely verified for writeback, or can be copied manually.
 
-### 开始录音
+### Dictionary & Optional Cursor Context
 
-按下全局快捷键（默认 macOS 右 Option，Windows 右 Control）。  
-屏幕边缘会出现状态胶囊，显示「录音中」。
+- **Personal Dictionary**: Add names, domain terms, and acronyms under **Dictionary**. Enabled entries are sent as ASR hotwords (where supported) and injected into the polish prompt.
+- **Learn from Corrections (experimental, opt-in)**: Under **Settings → Experiments & Extensions**, OpenLess can observe post-insertion edits in supported editors and suggest new terms for explicit confirmation (never silently added, never uploaded).
+- **Cursor Context (opt-in, off by default)**: Under **Settings → Privacy → Data storage**, OpenLess can read a few hundred characters around the caret (macOS / Windows UIA / Android IME `InputConnection`) to disambiguate homophones. Password fields, Secure Input, password managers, and terminals are always excluded.
 
-### 结束录音
+### History, Remote Input & Encrypted Cloud Sync
 
-再次按下同一快捷键。OpenLess 会：
+- **History**: Inspect every recording's raw transcript and polished result in **History**.
+- **Mobile Remote Input**: Turn on Remote Input on desktop, verify the local HTTPS certificate SHA-256 fingerprint on your phone, enter the pairing code, and dictate from your phone straight to your computer's cursor. See [docs/guides/remote-input.md](docs/guides/remote-input.md).
+- **Encrypted Cloud Sync**: Sign in with GitHub under **Settings → Cloud Services**, review the scope disclosure, and set a sync passphrase. Settings, registered service keys, and history text are end-to-end encrypted locally before upload; keep your sync passphrase safe.
 
-1. 停止录音并发送音频进行转写。
-2. 对转写结果按当前输出模式进行润色。
-3. 将润色后的文字插入当前焦点输入框（失败时自动复制到剪贴板）。
+### Changing Hotkeys
 
-### 取消录音
-
-录音过程中按 `Esc`，当前录音内容会被丢弃，不做任何插入。
+Open **Settings → Shortcuts**. macOS supports right-side modifier keys (Option / Control / Command / Shift); Windows supports left/right modifiers and mouse side buttons (Mouse4 / Mouse5); Linux binds hotkeys inside `fcitx5`.
 
 ---
 
-## 输出模式
+## Troubleshooting
 
-在 OpenLess 主窗口的胶囊或「设置」中切换模式：
+**Q: Hotkey does nothing?**  
+macOS: Confirm Accessibility permission is enabled, then **quit and relaunch** OpenLess.  
+Windows: Check **Settings → Permissions & data** to confirm the listener is running.
 
-| 模式 | 说明 |
-| --- | --- |
-| 原文 | 直接输出转写文字，不做任何修改 |
-| 轻度润色 | 修正语气词、标点、明显错字，保留原意 |
-| 清晰结构（AI prompt 模式） | 把口语整理成有结构、有约束、有上下文的 prompt，适合直接喂给 ChatGPT / Claude / Cursor |
-| 正式表达 | 将口语转换为正式书面语 |
+**Q: Transcript is empty or placeholder text?**  
+Verify your selected ASR / Multimodal / DeepSeek credentials in **Settings → AI Services & Models** and run a test check (see <https://openless.top/en/docs/setup/>).
 
----
+**Q: Text was copied to the clipboard instead of inserted?**  
+When a focused field restricts accessibility or IME injection, OpenLess falls back to the clipboard automatically — press `Cmd+V` / `Ctrl+V` to paste.
 
-## 词典
+**Q: In Windows fullscreen games (e.g. Minecraft), the capsule does not appear or text is not typed?**  
+This is a Windows OS limitation ([issue #457](https://github.com/Open-Less/openless/issues/457)):
+- **Exclusive fullscreen**: Standard windows cannot render over exclusive fullscreen DirectX/OpenGL apps. Switch the game to **Borderless Windowed Fullscreen**.
+- **Privilege mismatch (UIPI)**: If the game runs as Administrator while OpenLess does not, Windows blocks keyboard events. Run both at the same privilege level.
+- **Chat box closed**: Open the in-game chat box first (e.g. press `T` in Minecraft) before dictating.
 
-词典用于提高特定词汇的识别准确率（产品名、人名、专有名词等）。
+**Q: How do I use local ASR so audio never leaves my machine?**  
+Download a local model (Windows: **Settings → AI & Models → Local ASR Models**; macOS: **Settings → Experiments & Extensions → Experimental Local Speech Models**), then enable the local provider in **ASR Providers** and **drag it to the very top** of the list. Requests always use the first enabled provider (switch back to Traditional mode if you were in Multimodal mode).
 
-1. 打开主窗口 → **词典**。
-2. 点击「新建」，填入正确拼写、分类和备注。
-3. 启用后，词条会作为热词注入 ASR 识别阶段，并在润色阶段辅助语义判断。
-
----
-
-## 历史记录
-
-主窗口 → **历史**，可查看所有录音记录，包括原始转写和润色结果。
+**Q: Do Linux, iOS, or HarmonyOS support auto-updates?**  
+No. Linux is updated via rebuilt source or manually installed packages; iOS is rebuilt and signed from source; HarmonyOS currently requires installing a new signed HAP.
 
 ---
 
-## 更换快捷键
+## Community
 
-主窗口 → **设置 → 快捷键**，选择触发键。  
-macOS 支持右侧修饰键（Option / Control / Command / Shift）；Windows 支持右 Control。
-
----
-
-## 常见问题
-
-**Q: 快捷键没反应？**  
-macOS：确认已授予辅助功能权限，且授权后重启过 OpenLess。  
-Windows：在「设置 → 权限」中检查监听器状态。
-
-**Q: 识别结果为空或是占位文字？**  
-检查火山引擎 ASR 凭据是否填写正确。填写正确后识别才能正常工作。
-
-**Q: 文字没有插入，只是复制到了剪贴板？**  
-当目标输入框不支持辅助功能写入时（如某些安全限制的应用），OpenLess 会自动回退到剪贴板复制，手动粘贴即可。
-
-**Q: 在 Windows 玩 Minecraft 等全屏游戏时，OpenLess capsule 不弹出 / 字符无法输入？**  
-这是 **Windows 操作系统层面的限制**，OpenLess 应用本身无法绕过（详见 [issue #457](https://github.com/Open-Less/openless/issues/457)）：
-
-- **独占全屏（exclusive fullscreen）**：标准应用窗口（包括 OpenLess capsule）**不会绘制在独占全屏 DirectX/OpenGL 应用之上**。请把游戏切换到 **无边框窗口化全屏（Borderless Windowed Fullscreen）**。Minecraft：视频设置 → 全屏 关闭（保持窗口最大化即可）。
-- **管理员权限不一致（UIPI）**：若游戏以管理员身份运行而 OpenLess 不是，Windows 阻止 OpenLess 接收游戏前台的按键，hotkey 完全不触发。让两者权限对齐（要么都以管理员运行，要么都以普通用户运行）。
-- **游戏聊天框未打开**：识别字符通过模拟键盘事件落字。Minecraft 中必须先按 `T` 打开聊天框，OpenLess 的输入才会落到聊天里。
-
-macOS 不存在独占全屏（所有"全屏"都是带 Spaces 的无边框窗口），所以此限制不适用。
-
-**Q: 润色结果和预期不符？**  
-尝试切换输出模式，或在词典中添加相关专有名词。
-
----
-
-## 社区与支持
-
-欢迎通过 QQ 加入用户群，反馈问题或交流使用体验：
-
-**QQ 群：1078960553**
+- **QQ Group 1**: `1078960553` (full)
+- **QQ Group 2**: `1095794054`

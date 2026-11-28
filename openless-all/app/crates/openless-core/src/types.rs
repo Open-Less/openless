@@ -56,6 +56,7 @@ impl PolishMode {
 pub enum HistorySource {
     #[default]
     Voice,
+    Qa,
     QuickNote,
     SelectionPolish,
     SelectionVoiceEdit,
@@ -112,6 +113,19 @@ pub struct DictationSession {
     pub asr_ms: Option<u64>,
     #[serde(default)]
     pub polish_ms: Option<u64>,
+}
+
+impl DictationSession {
+    /// Empty ASR was historically mislabeled as a polish failure. Repair those
+    /// rows too, but never replace a real transcript or completed result.
+    pub fn can_apply_retranscription(&self) -> bool {
+        self.source == HistorySource::QuickNote
+            || matches!(self.error_code.as_deref(), Some("recording" | "transcribeFailed" | "emptyTranscript"))
+            || (self.error_code.as_deref() == Some("polishFailed")
+                && self.raw_transcript.trim().is_empty()
+                && self.final_text.trim().is_empty()
+                && self.asr_transcript.as_deref().is_none_or(|text| text.trim().is_empty()))
+    }
 }
 
 /// Origin of a deterministic correction rule.
@@ -225,6 +239,12 @@ pub struct DictationStateSnapshot {
     /// must keep their warming presentation until that callback is observed.
     #[serde(default)]
     pub recording_ready: bool,
+    #[serde(default)]
+    pub skip_auto_style: bool,
+    #[serde(default)]
+    pub style_pack_id: Option<String>,
+    #[serde(default)]
+    pub style_pack_name: Option<String>,
 }
 
 impl Default for DictationStateSnapshot {
@@ -237,6 +257,9 @@ impl Default for DictationStateSnapshot {
             message: None,
             translation_active: false,
             recording_ready: false,
+            skip_auto_style: false,
+            style_pack_id: None,
+            style_pack_name: None,
         }
     }
 }
@@ -435,6 +458,7 @@ mod tests {
             message: None,
             translation_active: true,
             recording_ready: true,
+            ..Default::default()
         };
         let value = serde_json::to_value(snapshot).unwrap();
         assert_eq!(value["phase"], "transcribing");

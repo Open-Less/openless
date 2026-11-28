@@ -382,6 +382,27 @@ pub struct SyncWriteGate {
     runtime_blocked: AtomicBool,
 }
 
+fn contains_existing_sync_state(directory: &Path) -> DocumentResult<bool> {
+    for root in [
+        directory.to_path_buf(),
+        directory.with_file_name(crate::cloud_sync_e2ee::LIMITED_LOCAL_ROOT),
+    ] {
+        match std::fs::read_dir(root) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(|_| DocumentError::JournalUnavailable)?;
+                    if entry.file_name().to_str().is_none_or(is_owned_sync_entry) {
+                        return Ok(true);
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(DocumentError::JournalUnavailable),
+        }
+    }
+    Ok(false)
+}
+
 impl SyncWriteGate {
     /// An unreadable/corrupt counter is an error, never a reset to zero.
     pub fn open(state_path: PathBuf) -> DocumentResult<Arc<Self>> {
@@ -395,10 +416,7 @@ impl SyncWriteGate {
                 if initialized_path.exists()
                     || (directory.file_name().and_then(|name| name.to_str())
                         == Some("encrypted-sync")
-                        && std::fs::read_dir(directory)
-                            .map_err(|_| DocumentError::JournalUnavailable)?
-                            .next()
-                            .is_some())
+                        && contains_existing_sync_state(directory)?)
                 {
                     return Err(DocumentError::RecoveryRequired);
                 }
@@ -609,6 +627,35 @@ impl SyncWriteGate {
 
 fn orphaned(state: &State) -> bool {
     state.stored.incomplete_mutations != state.active
+}
+
+/// Names OpenLess itself writes under `encrypted-sync/` (and its protected subdirectories).
+/// Endpoint-security tools may drop decoy files into every new directory; those must not be
+/// mistaken for prior sync state, or a fresh install fails closed and never starts.
+pub(crate) fn is_owned_sync_entry(name: &str) -> bool {
+    matches!(
+        name,
+        "generation.json"
+            | "generation.initialized"
+            | "device-id"
+            | "unlock-disabled"
+            | "protected"
+            | "local-migration-protected"
+    ) || (name.starts_with("restore-") && name.ends_with(".bin"))
+        || name.ends_with(".enc")
+        || (name.starts_with('.') && name.ends_with(".tmp"))
+        || name.contains(".tmp-")
+}
+
+/// True when the directory holds anything OpenLess could have written; foreign files are ignored.
+pub(crate) fn contains_owned_sync_entry(directory: &Path) -> DocumentResult<bool> {
+    for entry in std::fs::read_dir(directory).map_err(|_| DocumentError::JournalUnavailable)? {
+        let entry = entry.map_err(|_| DocumentError::JournalUnavailable)?;
+        if entry.file_name().to_str().is_none_or(is_owned_sync_entry) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn decode(bytes: &[u8]) -> DocumentResult<PersistedState> {
@@ -1071,6 +1118,49 @@ mod tests {
             open_for_data_dir(&other.0),
             Err(DocumentError::RecoveryRequired)
         ));
+    }
+
+    #[test]
+    fn foreign_decoy_files_do_not_block_first_initialization() {
+        let temp = Temp::new();
+        let directory = temp.0.join("encrypted-sync");
+        std::fs::create_dir(&directory).unwrap();
+        // Endpoint-security software seeds new directories with bait documents.
+        for decoy in ["Ak9AD813Sq.docx", "!antsec baitfile description.txt"] {
+            std::fs::write(directory.join(decoy), b"decoy").unwrap();
+        }
+        assert!(open_for_data_dir(&temp.0).is_ok());
+        assert!(directory.join("generation.json").is_file());
+        for name in [
+            "generation.json",
+            "device-id",
+            "protected",
+            "x.enc",
+            "restore-a.bin",
+        ] {
+            assert!(is_owned_sync_entry(name), "{name}");
+        }
+        for name in ["Ak9AD813Sq.pdf", "desktop.ini", "notes.txt"] {
+            assert!(!is_owned_sync_entry(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn lost_counter_never_resets_over_a_retained_limited_policy_root() {
+        let temp = Temp::new();
+        let limited = temp.0.join(crate::cloud_sync_e2ee::LIMITED_LOCAL_ROOT);
+        std::fs::create_dir_all(&limited).unwrap();
+        let ciphertext = limited.join("fixture.enc");
+        std::fs::write(&ciphertext, b"retained-limited-ciphertext").unwrap();
+        assert!(matches!(
+            open_for_data_dir(&temp.0),
+            Err(DocumentError::RecoveryRequired)
+        ));
+        assert!(!temp.0.join("encrypted-sync/generation.json").exists());
+        assert_eq!(
+            std::fs::read(ciphertext).unwrap(),
+            b"retained-limited-ciphertext"
+        );
     }
 
     #[test]

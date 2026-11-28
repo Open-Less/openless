@@ -82,8 +82,31 @@ try {
   expect('docs only', every('false'));
   reset();
 
+  // Only these exact generated AOCI index paths are non-product artifacts.
+  for (const files of [
+    { '.aoci/baseline.json': '{}\n' },
+    { 'aoci.code.txt': 'index\n' },
+    { '.aoci/baseline.json': '{}\n', 'aoci.code.txt': 'index\n' },
+  ]) {
+    const label = Object.keys(files).join(' + ');
+    commit(files, 'AOCI index refresh');
+    expect(label, every('false'));
+    reset();
+  }
+  for (const path of ['.aoci/config.json', '.aoci/unknown.json', '.aoci/new-tool.rs']) {
+    commit({ [path]: '{}\n' }, 'AOCI configuration or unknown path');
+    expect(path, every('true'));
+    reset();
+  }
+  commit(
+    { '.aoci/baseline.json': '{}\n', '.github/workflows/ci.yml': 'name: CI\n' },
+    'AOCI index with workflow changes',
+  );
+  expect('AOCI index with workflow changes', every('true'));
+  reset();
+
   // The Linux host is a separate crate in its own target graph.
-  commit({ 'openless-all/app/linux-egui/src/ui/theme.rs': 'fn x() {}\n' }, 'linux host source');
+  commit({ 'openless-all/linux/egui/src/ui/theme.rs': 'fn x() {}\n' }, 'linux host source');
   expect('linux host source', {
     tauri: 'false',
     msrv: 'true',
@@ -95,11 +118,16 @@ try {
   });
   reset();
 
+  commit({ 'openless-all/linux/egui/package-revision': '81\n' }, 'shared package revision');
+  expect('shared package revision', {
+    ...every('false'),
+    linux: 'true',
+    harmony: 'true',
+  });
+  reset();
+
   // ArkTS lives only in the HarmonyOS host.
-  commit(
-    { 'openless-all/app/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' },
-    'arkts',
-  );
+  commit({ 'openless-all/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' }, 'arkts');
   expect('arkts source', {
     tauri: 'false',
     harmony: 'true',
@@ -110,7 +138,7 @@ try {
   reset();
 
   // The Linux workflow owns Harmony Rust unit tests as well as the egui host.
-  commit({ 'openless-all/app/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
+  commit({ 'openless-all/harmony/rust/src/lib.rs': 'pub fn x() {}\n' }, 'harmony rust');
   expect('harmony rust', {
     tauri: 'false',
     harmony: 'true',
@@ -136,7 +164,7 @@ try {
 
   // ...but its manifest moves the workspace dependency graph for everyone.
   commit(
-    { 'openless-all/app/linux-egui/Cargo.toml': '[package]\nname = "x"\n' },
+    { 'openless-all/linux/egui/Cargo.toml': '[package]\nname = "x"\n' },
     'linux host manifest',
   );
   expect('linux host manifest', { tauri: 'true', msrv: 'true', linux: 'true', harmony: 'true' });
@@ -168,7 +196,10 @@ try {
   // The rendered bundle is embedded by every shell that paints it; the Linux
   // host draws a native egui UI and never reads `dist/`, and the Android job only
   // compiles Rust, so neither is in scope.
-  commit({ 'openless-all/app/src/pages/Style.tsx': 'export const x = 1;\n' }, 'frontend only');
+  commit(
+    { 'openless-all/app/src/features/style-packs/Style.tsx': 'export const x = 1;\n' },
+    'frontend only',
+  );
   expect('frontend only', {
     tauri: 'true',
     msrv: 'false',
@@ -213,7 +244,59 @@ try {
   });
   reset();
 
-  // iOS project work is the only thing that can break the Xcode build.
+  commit(
+    { 'openless-all/android/frontend/components/AndroidPermissionsPanel.tsx': 'export {};\n' },
+    'external Android frontend',
+  );
+  expect('external Android frontend', {
+    tauri: 'true',
+    msrv: 'false',
+    frontend: 'true',
+    harmony: 'true',
+    android: 'false',
+    linux: 'false',
+  });
+  reset();
+
+  for (const path of [
+    'openless-all/android/kotlin/OpenLessImeService.kt',
+    'openless-all/android/scripts/copy-android-scaffolding.mjs',
+  ]) {
+    commit({ [path]: '// platform input\n' }, 'Android host or tooling');
+    expect(path, { android: 'true', tauri: 'true', frontend: 'false', linux: 'false' });
+    reset();
+  }
+
+  commit({ 'openless-all/app/mobile-ime/openless_rime.cpp': '// shared IME\n' }, 'shared IME');
+  expect('shared IME', {
+    android: 'true',
+    harmony: 'true',
+    tauri: 'true',
+    linux: 'false',
+    frontend: 'false',
+  });
+  reset();
+
+  for (const path of [
+    'openless-all/windows/nsis/openless-ime-hooks.nsh',
+    'openless-all/windows/wix/openless-ime.wxs',
+    'openless-all/windows/scripts/windows-build-gnu.ps1',
+    'openless-all/macos/dmg/layout.json',
+    'openless-all/macos/Info.plist',
+    'openless-all/macos/scripts/build-mac.sh',
+  ]) {
+    commit({ [path]: '# packaging input\n' }, 'desktop packaging');
+    expect(path, every('true'));
+    reset();
+  }
+  commit(
+    { 'openless-all/linux/fcitx5-plugin/openless.cpp': '// plugin input\n' },
+    'external Linux plugin',
+  );
+  expect('external Linux plugin', { linux: 'true', android: 'false', harmony: 'false' });
+  reset();
+
+  // iOS project sources also reach the independent Xcode device build.
   commit({ 'openless-all/ios/Packages/OpenLessShared/Sources/X.swift': 'let x = 1\n' }, 'swift');
   expect('ios project source', {
     tauri: 'false',
@@ -253,15 +336,7 @@ const workflow = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.github/workflows/ci.yml'),
   'utf8',
 );
-const reusable = readFileSync(
-  resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    '../../..',
-    '.github/workflows/check-linux-egui.yml',
-  ),
-  'utf8',
-);
-const areas = ['tauri', 'msrv', 'linux', 'harmony', 'frontend', 'android', 'capsule'];
+const areas = ['tauri', 'msrv', 'harmony', 'frontend', 'android', 'capsule'];
 check(
   'workflow publishes every area',
   areas.every((area) => workflow.includes(area + ': ${{ steps.detect.outputs.' + area + ' }}')),
@@ -269,7 +344,7 @@ check(
 );
 check(
   'workflow computes every area in the detect step',
-  /for area in tauri msrv linux harmony frontend android capsule; do/.test(workflow),
+  /for area in tauri msrv harmony frontend android capsule ios-device; do/.test(workflow),
   true,
 );
 check(
@@ -288,15 +363,12 @@ check(
   workflow.includes("if: needs.changes.outputs.msrv != 'false' &&"),
   false,
 );
+// Windows runs the same pinned checks in parallel, with its own target cache.
 check(
-  'changes job publishes the native-source gate for pinned toolchains',
-  workflow.includes('msrv_needed: ${{ steps.detect.outputs.msrv }}'),
-  true,
-);
-// The secondary platform uses the same native-source gate.
-check(
-  'windows msrv steps follow the source gate',
-  workflow.includes("if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'"),
+  'windows msrv job follows the source gate',
+  /windows-msrv:[\s\S]*?inputs\.platform != 'macos'\) && needs\.changes\.outputs\.msrv != 'false'/.test(
+    workflow,
+  ),
   true,
 );
 // `cargo check` immediately followed by `cargo test --no-run` compiles the graph
@@ -333,30 +405,18 @@ check(
   workflow.includes("needs.changes.outputs.harmony != 'false'"),
   true,
 );
-check(
-  'linux scope defaults to full',
-  workflow.includes("needs.changes.outputs.linux == 'false' && 'none' || 'full'"),
-  true,
-);
-check(
-  'reusable workflow defaults to a full build',
-  /scope:[\s\S]{0,80}default: full/.test(reusable),
-  true,
-);
-check(
-  'reusable workflow gates every build step',
-  (reusable.match(/if: inputs\.scope != 'none'/g) ?? []).length >= 10,
-  true,
-);
+check('Linux CI is paused', workflow.includes('\n  linux-egui-package:'), false);
 
-// Wall-clock guards: the Windows runner is the slowest one, so the frontend
-// suite must not serialise behind the Rust compile, and the Linux tests must not
-// serialise in front of the deb/rpm build.
+// Balance VM count and latency: the small Windows-only subset reuses the
+// existing stable runner; Linux tests and packaging remain parallel.
 check(
-  'windows frontend runs in its own job',
-  /  windows-frontend:[\s\S]*?runs-on: windows-latest/.test(workflow),
+  'windows contracts reuse the stable job',
+  /  cross-platform:[\s\S]*?name: Run the platform-sensitive contracts\n[\s\S]*?if: runner\.os == 'Windows'\n\s+timeout-minutes: 10\n\s+run: node scripts\/frontend-test-runner\.mjs --platform-only windows/.test(
+    workflow,
+  ),
   true,
 );
+check('no duplicate Windows frontend VM', workflow.includes('\n  windows-frontend:'), false);
 check(
   'windows only runs the platform-sensitive contracts',
   workflow.includes('--platform-only windows'),
@@ -370,7 +430,7 @@ check(
 
 // `tauri::generate_context!()` embeds ../dist at compile time, so any job that
 // compiles the Tauri lib must build the frontend first — including the matrix
-// job on Windows, where the contract suite moved to its own job.
+// job on Windows, which also runs the Windows-specific contract subset.
 check(
   'windows builds the frontend before compiling the Tauri lib',
   /if: runner\.os == 'Windows'\n\s+run: npm run build/.test(workflow),
@@ -392,8 +452,11 @@ for (const [label, changed] of [
     ),
   ],
   [
-    'missing separate frontend job',
-    workflow.replace('\n  windows-frontend:', '\n  removed-frontend:'),
+    'missing Windows contracts in the stable job',
+    workflow.replace(
+      'node scripts/frontend-test-runner.mjs --platform-only windows',
+      'echo missing-windows-contracts',
+    ),
   ],
 ]) {
   check(label + ': mutation applied', changed !== workflow, true);
@@ -404,7 +467,6 @@ for (const [label, changed] of [
         wiring,
       {
         workflow: changed,
-        reusable,
         vm,
         check: undefined,
         console: { log() {}, error() {} },

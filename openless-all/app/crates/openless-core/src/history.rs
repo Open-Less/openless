@@ -82,8 +82,13 @@ impl HistoryStore {
             || {
                 let _guard = self.lock_store()?;
                 let mut sessions = self.read_locked()?;
+                let ask = session.source == HistorySource::Qa;
                 sessions.insert(0, session);
-                retain_with_policy(&mut sessions, retention_days, max_entries, self.now_utc());
+                if ask {
+                    retain_ask_history(&mut sessions, retention_days, max_entries, self.now_utc());
+                } else {
+                    retain_with_policy(&mut sessions, retention_days, max_entries, self.now_utc());
+                }
                 self.write_locked(&sessions)
             },
         )
@@ -232,8 +237,11 @@ fn retain_with_policy(
     if retention_days > 0 {
         let cutoff = now - chrono::Duration::days(i64::from(retention_days));
         sessions.retain(|session| {
-            session.source == HistorySource::QuickNote
-                || session.error_code.as_deref() == Some("recording")
+            matches!(session.source, HistorySource::QuickNote | HistorySource::Qa)
+                || matches!(
+                    session.error_code.as_deref(),
+                    Some("recording" | "selectionProcessing")
+                )
                 || chrono::DateTime::parse_from_rfc3339(&session.created_at)
                     .map(|time| time.with_timezone(&chrono::Utc) >= cutoff)
                     .unwrap_or(true)
@@ -244,14 +252,35 @@ fn retain_with_policy(
         .unwrap_or(HISTORY_CAP);
     let mut ordinary_seen = 0usize;
     sessions.retain(|session| {
-        if session.source == HistorySource::QuickNote
-            || session.error_code.as_deref() == Some("recording")
+        if matches!(session.source, HistorySource::QuickNote | HistorySource::Qa)
+            || matches!(
+                session.error_code.as_deref(),
+                Some("recording" | "selectionProcessing")
+            )
         {
             true
         } else {
             ordinary_seen += 1;
             ordinary_seen <= cap
         }
+    });
+}
+
+fn retain_ask_history(
+    sessions: &mut Vec<DictationSession>,
+    retention_days: u32, max_entries: Option<u32>, now: chrono::DateTime<chrono::Utc>,
+) {
+    let cutoff = (retention_days > 0).then(|| now - chrono::Duration::days(i64::from(retention_days)));
+    let cap = max_entries.map(|count| (count as usize).clamp(5, HISTORY_CAP)).unwrap_or(HISTORY_CAP);
+    let mut seen = 0;
+    sessions.retain(|session| {
+        if session.source != HistorySource::Qa { return true; }
+        if cutoff.is_some_and(|cutoff| chrono::DateTime::parse_from_rfc3339(&session.created_at)
+            .is_ok_and(|time| time.with_timezone(&chrono::Utc) < cutoff)) {
+            return false;
+        }
+        seen += 1;
+        seen <= cap
     });
 }
 
@@ -287,6 +316,35 @@ mod tests {
             asr_ms: None,
             polish_ms: None,
         }
+    }
+
+    #[test]
+    fn legacy_selection_history_keeps_the_full_original_separate_from_the_result() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-legacy-selection-{}.json", uuid::Uuid::new_v4()
+        ));
+        let original = format!(" \t{} LEGACY_MIDDLE {}\n ", "字".repeat(9000), "尾".repeat(9000));
+        let mut row = session("legacy-selection", chrono::Utc::now().to_rfc3339());
+        row.source = HistorySource::SelectionPolish;
+        row.raw_transcript = original.clone();
+        row.final_text = "existing result".into();
+        let mut legacy = serde_json::to_value(&row).unwrap();
+        for field in ["asrTranscript", "polishSource", "pipelineMode", "hasAudioRecording"] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        let bytes = serde_json::to_vec(&vec![legacy]).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let store = HistoryStore::at_path(path.clone());
+        let mut read = store.list().unwrap().remove(0);
+        assert_eq!(read.raw_transcript, original);
+        assert_eq!(read.final_text, "existing result");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        read.final_text = "new result".into();
+        store.update_entry(read).unwrap();
+        let read = store.list().unwrap();
+        assert_eq!(read[0].raw_transcript, original);
+        assert_eq!(read[0].final_text, "new result");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

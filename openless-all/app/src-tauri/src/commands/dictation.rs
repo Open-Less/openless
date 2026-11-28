@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(not(mobile))]
+#[path = "capsule_picker.rs"]
+mod capsule_picker;
+
 #[tauri::command]
 pub async fn get_startup_snapshot(
     core: CoreState<'_>,
@@ -15,11 +19,57 @@ pub async fn get_capsule_snapshot(
     Ok(coord.tauri_host().capsule_snapshot())
 }
 
+#[cfg(not(mobile))]
+fn caption_trace_surface(
+    window: &tauri::WebviewWindow,
+) -> Option<openless_core::main_dictation_trace::CaptionTraceSurface> {
+    use openless_core::main_dictation_trace::CaptionTraceSurface;
+    match window.label() {
+        "capsule" => Some(CaptionTraceSurface::Capsule),
+        "capsule-rail" => Some(CaptionTraceSurface::Rail),
+        _ => None,
+    }
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub fn main_caption_trace_enabled(core: CoreState<'_>, window: tauri::WebviewWindow) -> bool {
+    core.main_dictation_trace_enabled() && caption_trace_surface(&window).is_some()
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub fn report_main_caption_trace(
+    core: CoreState<'_>,
+    window: tauri::WebviewWindow,
+    session_id: openless_core::SessionId,
+    sequence: u64,
+    stage: openless_core::main_dictation_trace::CaptionTraceStage,
+) {
+    if let Some(surface) = caption_trace_surface(&window) {
+        core.trace_main_dictation_webview(session_id, sequence, surface, stage);
+    }
+}
+
 async fn ensure_core_started(core: &openless_core::OpenLessBackend) -> Result<(), String> {
     if !core.snapshot().running {
         core.start().await.map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_dictation_style_target(core: CoreState<'_>) -> Option<openless_core::DictationStyleTarget> {
+    core.dictation_style_target()
+}
+
+#[tauri::command]
+pub fn update_dictation_style(
+    core: CoreState<'_>,
+    session_id: openless_core::SessionId,
+    selection: openless_core::dictation_context::DictationStyleSelection,
+) -> Result<openless_core::DictationStyleTarget, String> {
+    core.update_dictation_style(session_id, selection).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -35,12 +85,25 @@ pub async fn start_dictation(core: CoreState<'_>) -> Result<(), String> {
 pub async fn stop_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    window: tauri::WebviewWindow,
+    session_id: Option<String>,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    if ask_capsule_action(&window, session_id.as_deref(), false) {
+        return Ok(());
+    }
+    let _ = &window;
     ensure_core_started(&core).await?;
+    if let Some(id) = session_id {
+        let id: openless_core::SessionId = serde_json::from_value(serde_json::Value::String(id))
+            .map_err(|_| "invalid session id".to_string())?;
+        return core.submit_dictation_session(id, Default::default()).await.map(|_| ()).map_err(|error| error.to_string());
+    }
     if coord.stop_less_computer_recording().await? {
         return Ok(());
     }
-    core.stop_dictation()
+    let id = core.snapshot().dictation.session_id.ok_or("no active dictation session")?;
+    core.submit_dictation_session(id, Default::default())
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -50,10 +113,37 @@ pub async fn stop_dictation(
 pub async fn cancel_dictation(
     core: CoreState<'_>,
     coord: CoordinatorState<'_>,
+    window: tauri::WebviewWindow,
+    session_id: Option<String>,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    if ask_capsule_action(&window, session_id.as_deref(), true) {
+        return Ok(());
+    }
+    let _ = &window;
     ensure_core_started(&core).await?;
+    let parsed_id = session_id
+        .map(|id| {
+            serde_json::from_value::<openless_core::SessionId>(serde_json::Value::String(id))
+                .map_err(|_| "invalid session id".to_string())
+        })
+        .transpose()?;
+    if let Some(id) = parsed_id.or_else(|| core.dictation_cancel_target()) {
+        return core.cancel_dictation(Some(id)).await.map_err(|error| error.to_string());
+    }
     coord.cancel_active_voice().await;
     Ok(())
+}
+
+#[cfg(not(mobile))]
+fn ask_capsule_action(window: &tauri::WebviewWindow, session_id: Option<&str>, cancel: bool) -> bool {
+    window.label() == "capsule"
+        && session_id.is_some_and(|id| {
+            window.try_state::<Arc<crate::ask_window::Desktop>>().is_some_and(|ask| {
+                (if cancel { ask.capsule_cancel(id) } else { ask.capsule_stop(id) })
+                    || ask.recognizes_capsule(id)
+            })
+        })
 }
 
 #[cfg(not(mobile))]
@@ -153,8 +243,46 @@ pub async fn set_capsule_language_menu(
     session_id: openless_core::SessionId,
     open: bool,
 ) -> Result<(), String> {
+    set_capsule_picker_menu_impl(window, coord, session_id, open, false, None, None).await.map(|_| ())
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub fn get_capsule_style_menu_request(
+    window: Window,
+) -> Result<Option<crate::capsule_style_menu::Request>, String> {
+    if !crate::capsule_style_menu::capsule_label(window.label()) {
+        return Err("capsule_window_required".into());
+    }
+    Ok(crate::capsule_style_menu::pending(window.label()))
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn set_capsule_style_menu(
+    window: Window,
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+    open: bool,
+    request_id: Option<String>,
+    menu_id: Option<String>,
+) -> Result<Option<crate::capsule_style_menu::Owner>, String> {
+    set_capsule_picker_menu_impl(window, coord, session_id, open, true, request_id, menu_id).await
+}
+
+/// Shared geometry, focus policy and session-bound lifecycle for both pickers.
+#[cfg(not(mobile))]
+async fn set_capsule_picker_menu_impl(
+    window: Window,
+    coord: CoordinatorState<'_>,
+    session_id: openless_core::SessionId,
+    open: bool,
+    style: bool,
+    request_id: Option<String>,
+    menu_id: Option<String>,
+) -> Result<Option<crate::capsule_style_menu::Owner>, String> {
     let label = window.label().to_string();
-    if label != "capsule" && !label.starts_with("capsule-mirror-") {
+    if !crate::capsule_style_menu::capsule_label(&label) {
         return Err("capsule_window_required".into());
     }
     let core = coord.backend();
@@ -164,15 +292,14 @@ pub async fn set_capsule_language_menu(
         .ok_or("capsule_window_unavailable")?;
     let (send, receive) = tokio::sync::oneshot::channel();
     capsule.run_on_main_thread(move |capsule| {
-        if open
-            && !core
-                .dictation_translation_target()
-                .is_some_and(|active| active.mutable && active.session_id == session_id)
-        {
-            let _ = send.send(Err("recording_translation_required".into()));
-            return;
-        }
-        let _ = send.send(capsule.set_translation_menu_open(label, session_id, open));
+        let result = capsule_picker::dispatch(&core, session_id, open, style, || {
+            if style {
+                capsule.set_style_menu_open(label, session_id, open, request_id, menu_id)
+            } else {
+                capsule.set_translation_menu_open(label, session_id, open).map(|_| None)
+            }
+        });
+        let _ = send.send(result);
     })?;
     receive
         .await

@@ -1,22 +1,36 @@
+import { previewHistory } from '../../preview/history';
 import { isDesktop } from './platform-exports';
-import { invokeOrMock, isTauriNow, platformCapabilities } from './shared';
-import type { CapsuleSnapshot } from '../types';
+import { invokeOrMock, isTauriNow, platformCapabilities, requireBackendReady } from './shared';
+import type {
+  CapsuleSnapshot,
+  CapsuleStyleMenuOwner,
+  CapsuleStyleMenuRequest,
+  DictationStyleSelection,
+  DictationStyleTarget,
+} from '../types';
 
 export function startDictation(): Promise<void> {
-  return invokeOrMock('start_dictation', undefined, () => undefined);
+  return invokeOrMock('start_dictation', undefined, () => {
+    previewHistory.startRecording();
+  });
 }
 
-export function stopDictation(): Promise<void> {
-  return invokeOrMock('stop_dictation', undefined, () => undefined);
+export function stopDictation(sessionId?: string): Promise<void> {
+  return invokeOrMock('stop_dictation', sessionId ? { sessionId } : undefined, () =>
+    previewHistory.stopRecording(),
+  );
 }
 
-export function cancelDictation(): Promise<void> {
-  return invokeOrMock('cancel_dictation', undefined, () => undefined);
+export function cancelDictation(sessionId?: string): Promise<void> {
+  return invokeOrMock('cancel_dictation', sessionId ? { sessionId } : undefined, () =>
+    previewHistory.cancelRecording(),
+  );
 }
 
 export async function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {
   if (!isDesktop()) return;
   if (isTauriNow()) {
+    await requireBackendReady();
     const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
     // Mirrors render the shared transcript but never own the primary rail's native layout.
     // This also prevents a retained/closing mirror's cleanup from hiding the active rail.
@@ -60,6 +74,19 @@ export function getDictationTranslationTarget(): Promise<DictationTranslationTar
   return invokeOrMock('get_dictation_translation_target', undefined, () => null);
 }
 
+export function getDictationStyleTarget(): Promise<DictationStyleTarget | null> {
+  return invokeOrMock('get_dictation_style_target', undefined, () => null);
+}
+
+export function updateDictationStyle(
+  sessionId: string,
+  selection: DictationStyleSelection,
+): Promise<DictationStyleTarget> {
+  return invokeOrMock('update_dictation_style', { sessionId, selection }, () => {
+    throw new Error('No active native recording');
+  });
+}
+
 export function selectDictationTranslationTarget(
   sessionId: string,
   targetLanguage: string,
@@ -72,4 +99,21 @@ export function selectDictationTranslationTarget(
 /** Reserve native headroom for the shared Base UI popup; close is session-bound. */
 export function setCapsuleLanguageMenu(open: boolean, sessionId: string): Promise<void> {
   return invokeOrMock('set_capsule_language_menu', { open, sessionId }, () => undefined);
+}
+
+export function getCapsuleStyleMenuRequest(): Promise<CapsuleStyleMenuRequest | null> {
+  return invokeOrMock('get_capsule_style_menu_request', undefined, () => null);
+}
+
+/** Shares headroom with the language popup and binds input/close to the returned menu ID. */
+export function setCapsuleStyleMenu(
+  open: boolean,
+  sessionId: string,
+  owner?: { requestId?: string; menuId?: string },
+): Promise<CapsuleStyleMenuOwner | null> {
+  return invokeOrMock(
+    'set_capsule_style_menu',
+    { open, sessionId, requestId: owner?.requestId, menuId: owner?.menuId },
+    () => null,
+  );
 }

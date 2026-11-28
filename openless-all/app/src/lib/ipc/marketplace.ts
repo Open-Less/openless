@@ -57,17 +57,23 @@ export function uploadMarketplacePack(
   }));
 }
 
+// Preview sessions have no credential vault. A toggle that always reported
+// alreadyLiked: false snapped the heart back off on the server response.
+const previewLikes = new Set<string>();
+
 export function likeMarketplacePack(
   packId: string,
 ): Promise<{ likeCount: number; alreadyLiked: boolean }> {
-  return invokeOrMock('marketplace_like', { packId }, () => ({
-    likeCount: 13,
-    alreadyLiked: false,
-  }));
+  return invokeOrMock('marketplace_like', { packId }, () => {
+    const liked = previewLikes.has(packId);
+    if (liked) previewLikes.delete(packId);
+    else previewLikes.add(packId);
+    return { likeCount: liked ? 12 : 13, alreadyLiked: !liked };
+  });
 }
 
 export function marketplaceMyLikes(): Promise<string[]> {
-  return invokeOrMock<string[]>('marketplace_my_likes', undefined, () => []);
+  return invokeOrMock<string[]>('marketplace_my_likes', undefined, () => [...previewLikes]);
 }
 
 export function marketplaceMyPacks(): Promise<MarketplaceMyPackItem[]> {

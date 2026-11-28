@@ -1,0 +1,40 @@
+%% OpenLess 客户端数据流：录音、流式输出、持久化与可选远程服务
+flowchart TD
+    HOTKEY[全局快捷键或应用操作]
+    COORD[Coordinator\n按键边沿、会话所有权]
+    REC[录音器\nPCM 采集与有界缓冲]
+    ENGINE[openless-core 听写引擎]
+    PREP[服务准备\n语音识别、润色与本地运行时]
+    ASR[语音识别服务]
+    DELTA[转写增量\nbackend:event]
+    CAPSULE[语音胶囊 WebView\n音量、文本与状态]
+    POLISH[大模型润色或翻译]
+    INSERT[宿主插入\n剪贴板、辅助功能或 TSF]
+    HISTORY[历史与活动持久化]
+    PREFS[偏好与凭据保险库]
+    SYNC[可选加密云同步]
+    MARKET[风格包市场\n获取与导入]
+    MAIN[主界面 WebView\n设置、历史与风格]
+
+    HOTKEY --> COORD
+    COORD -->|开始、停止、取消| ENGINE
+    COORD -->|录音状态| CAPSULE
+    ENGINE --> REC
+    ENGINE --> PREP
+    REC -->|有序 PCM 音频帧| ASR
+    PREP --> ASR
+    ASR -->|部分与最终文本| ENGINE
+    ENGINE --> DELTA
+    DELTA --> CAPSULE
+    ENGINE --> POLISH
+    POLISH -->|流式输出| DELTA
+    POLISH --> INSERT
+    ENGINE --> INSERT
+    INSERT --> HISTORY
+    ENGINE --> HISTORY
+    MAIN --> PREFS
+    PREFS --> COORD
+    PREFS -. 设置与凭据同步 .-> SYNC
+    MAIN -. 列出与安装风格包 .-> MARKET
+    MARKET -. 导入本地风格包 .-> PREFS
+    HISTORY --> MAIN

@@ -1,17 +1,19 @@
-import { isTauri, invokeOrMock } from './shared';
-import { isHarmonyHost, invokeHarmony } from '../harmonyBridge';
+import { isTauri, invokeOrMock, requireBackendReady } from './shared';
+import { isHarmonyRuntime, isPreviewHost } from '../../runtime/environment';
+import { isAndroid } from '../../runtime/platform';
 
 export { isTauri };
 
 export async function openExternal(url: string): Promise<void> {
-  if (isHarmonyHost) {
-    await invokeHarmony<void>('open_external_url', { url });
+  if (isHarmonyRuntime()) {
+    await invokeOrMock<void>('open_external_url', { url }, () => undefined);
     return;
   }
-  if (!isTauri) {
+  if (isPreviewHost()) {
     window.open(url, '_blank', 'noopener,noreferrer');
     return;
   }
+  await requireBackendReady();
   try {
     const { open } = await import('@tauri-apps/plugin-shell');
     await open(url);
@@ -37,21 +39,23 @@ export async function openExternal(url: string): Promise<void> {
  * Android writes the log to public Downloads through MediaStore.
  */
 export async function exportErrorLog(suggestedFileName: string): Promise<string | null> {
-  if (isHarmonyHost)
-    return invokeHarmony<string | null>('export_harmony_error_log', {
-      fileName: suggestedFileName,
-    });
-  if (!isTauri) {
+  if (isHarmonyRuntime())
+    return invokeOrMock<string | null>(
+      'export_harmony_error_log',
+      { fileName: suggestedFileName },
+      () => null,
+    );
+  if (isPreviewHost()) {
     return `~/Downloads/${suggestedFileName}`;
   }
-  const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
-  if (isAndroid) {
+  if (isAndroid()) {
     return invokeOrMock<string>(
       'export_error_log_to_downloads',
       { fileName: suggestedFileName },
       () => `~/Downloads/${suggestedFileName}`,
     );
   }
+  await requireBackendReady();
   const { save } = await import('@tauri-apps/plugin-dialog');
   const target = await save({
     defaultPath: suggestedFileName,
@@ -85,7 +89,8 @@ export async function logClientError(message: string): Promise<void> {
 export async function debugReadCursorContext(
   delayMs: number,
 ): Promise<import('../types').HostDocumentReadResult> {
-  if (isHarmonyHost) throw new Error('鸿蒙跨应用文字读取尚未接入');
-  const { invoke } = await import('@tauri-apps/api/core');
-  return invoke('debug_read_cursor_context', { delayMs });
+  if (isHarmonyRuntime()) throw new Error('鸿蒙跨应用文字读取尚未接入');
+  return invokeOrMock('debug_read_cursor_context', { delayMs }, () => {
+    throw new Error('Host document access is unavailable in browser preview');
+  });
 }

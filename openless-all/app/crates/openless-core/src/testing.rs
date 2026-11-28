@@ -340,6 +340,13 @@ impl FixtureSelectionRuntime {
 }
 
 impl SelectionRuntimeAdapter for FixtureSelectionRuntime {
+    fn protect_original(
+        &self,
+        _: SessionId,
+        _: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        Box::pin(async { Ok(Some(1)) })
+    }
     fn capture(
         &self,
         session_id: SessionId,

@@ -3,7 +3,10 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-const source = readFileSync(new URL('../src/components/Capsule.tsx', import.meta.url), 'utf8');
+const source = readFileSync(
+  new URL('../src/features/capsule/Capsule.tsx', import.meta.url),
+  'utf8',
+);
 const ast = ts.createSourceFile(
   'Capsule.tsx',
   source,
@@ -29,14 +32,51 @@ const compile = (text) =>
   ts.transpileModule(text, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
+function compileStandalone(relativePath) {
+  const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+  const parsed = ts.createSourceFile(relativePath, source, ts.ScriptTarget.ES2020, true);
+  return compile(
+    parsed.statements
+      .filter(
+        (node) =>
+          !ts.isImportDeclaration(node) && !(ts.isExportDeclaration(node) && node.moduleSpecifier),
+      )
+      .map((node) => node.getFullText(parsed))
+      .join(String.fromCharCode(10)),
+  );
+}
+const auxiliaryEventsCode = compileStandalone('../src/runtime/windows/auxiliaryEvents.ts');
+const dictationEventsCode = compileStandalone('../src/api/dictation.ts');
+const outputStyleCode = compileStandalone('../src/features/capsule/capsuleOutputStyle.ts');
+
+function bindNativeAdapter(scope, tauri = true) {
+  const runtime = {
+    exports: {},
+    isTauriHost: () => tauri,
+    requireBackendReady: async () => undefined,
+    require: scope.require,
+  };
+  vm.runInNewContext(auxiliaryEventsCode, runtime);
+  const api = {
+    exports: {},
+    ...runtime.exports,
+    invokeOrPreview: (command, args, preview) =>
+      tauri ? scope.require('@tauri-apps/api/core').invoke(command, args) : preview(),
+  };
+  vm.runInNewContext(dictationEventsCode, api);
+  Object.assign(scope, api.exports);
+}
+
 const backend = { exports: {} };
 vm.runInNewContext(
   compile(readFileSync(new URL('../src/lib/backendEvent.ts', import.meta.url), 'utf8')),
   backend,
 );
+const outputStyle = { exports: {} };
+vm.runInNewContext(outputStyleCode, outputStyle);
 const effectCode = compile(`globalThis.replayEffect = (${effect});`);
 const railSource = readFileSync(
-  new URL('../src/components/LiveTranscriptPill.tsx', import.meta.url),
+  new URL('../src/features/capsule/LiveTranscriptPill.tsx', import.meta.url),
   'utf8',
 );
 const railAst = ts.createSourceFile(
@@ -131,6 +171,7 @@ function mount({
     throw new Error('unsupported');
   },
   label = 'capsule',
+  preferences = () => ({ capsuleStyle: 'classic' }),
   bus,
   overlay = false,
 } = {}) {
@@ -139,11 +180,14 @@ function mount({
   const delays = [];
   const writes = [];
   const warnings = [];
-  const values = { setState: 'idle', setLocalAsrText: '' };
+  const traceCalls = [];
+  const values = { setState: 'idle', setLocalAsrText: '', setOutputStyle: null };
   let requests = 0;
   const scope = {
     ...backend.exports,
+    ...outputStyle.exports,
     isTauri: true,
+    isTauriHost: () => true,
     capsuleStateFirstLogged: true,
     capsuleStateRef: { current: 'idle' },
     transcriptViewRef: { current: backend.exports.createTranscriptViewState() },
@@ -152,10 +196,14 @@ function mount({
     operatingRef: { current: false },
     transcriptRef: { current: backend.exports.createTranscriptViewState() },
     stateRef: { current: 'idle' },
+    observeCaptionTrace: (payload, before, after) => {
+      traceCalls.push({ sequence: payload.sequence, before: before.text, after: after.text });
+    },
     snapshotRetryDelays: [0, 16, 32, 64, 128, 256],
     capsuleTranscriptFontSize: (value) => value ?? 14,
-    getSettings: async () => ({ capsuleStyle: 'classic' }),
-    parseCapsuleStyle: () => undefined,
+    getSettings: async () => preferences(),
+    parseCapsuleStyle: (value) =>
+      ['classic', 'typeless', 'siri'].includes(value) ? value : undefined,
     console: { info() {}, warn: (...args) => warnings.push(args) },
     window: {
       setTimeout: (done, delay) => {
@@ -166,7 +214,7 @@ function mount({
     getCapsuleSnapshot: async () => {
       assert.equal(
         listeners.size,
-        overlay ? 3 : 4,
+        overlay ? 3 : 5,
         'all event subscriptions must precede snapshot reads',
       );
       requests += 1;
@@ -179,7 +227,7 @@ function mount({
         return {
           invoke: async (command) => {
             assert.equal(command, 'get_capsule_auxiliary_snapshot');
-            assert.equal(listeners.size, 4);
+            assert.equal(listeners.size, 5);
             return auxiliary();
           },
         };
@@ -200,12 +248,16 @@ function mount({
   };
   for (const name of [
     'setState',
+    'setDisplayedSession',
+    'setProcessingJobs',
     'setLevel',
     'setMessage',
     'setLocalAsrText',
     'setTranslation',
+    'setOutputStyle',
     'setWarming',
     'setSelectionPolish',
+    'setQa',
     'setCapsuleStyle',
     'setSuggestions',
     'setInsertFallback',
@@ -214,11 +266,13 @@ function mount({
     'setEnabled',
     'setFontSize',
   ]) {
-    scope[name] = (value) => {
+    scope[name] = (update) => {
+      const value = typeof update === 'function' ? update(values[name]) : update;
       values[name] = value;
       writes.push([name, value]);
     };
   }
+  bindNativeAdapter(scope);
   vm.runInNewContext(overlay ? railEffectCode : effectCode, scope);
   const cleanup = scope.replayEffect();
   return {
@@ -228,6 +282,7 @@ function mount({
     delays,
     writes,
     warnings,
+    traceCalls,
     values,
     scope,
     get requests() {
@@ -256,15 +311,27 @@ function transcript(view, sequence, text, sessionId = 'session') {
 
 // A lazy mirror replays a session whose starting event already happened.
 {
-  const view = mount({ snapshot: () => frame() });
-  await until(() => view.values.setState === 'recording');
+  const style = { skipAutoStyle: true, stylePackId: 'builtin.formal', stylePackName: 'Formal' };
+  const view = mount({ snapshot: () => frame(style) });
+  await until(
+    () => view.values.setOutputStyle?.packId === style.stylePackId || view.warnings.length > 0,
+  );
+  assert.equal(view.warnings.length, 0, view.warnings.map(([, error]) => String(error)).join('\n'));
+  assert.equal(view.values.setState, 'recording');
+  assert.equal(view.values.setOutputStyle.name, 'Formal');
   assert.equal(view.values.setLocalAsrText, 'existing text');
-  view.emit('capsule:state', { state: 'recording', sessionId: 'session' });
+  view.emit('capsule:state', { ...style, state: 'recording', sessionId: 'session' });
   assert.equal(view.values.setLocalAsrText, 'existing text');
   transcript(view, 11, 'updated text');
   assert.equal(view.values.setLocalAsrText, 'updated text');
+  assert.deepEqual(view.traceCalls.at(-1), {
+    sequence: 11,
+    before: 'existing text',
+    after: 'updated text',
+  });
   view.emit('capsule:state', { state: 'done', sessionId: 'session' });
   assert.equal(view.values.setLocalAsrText, '');
+  assert.equal(view.values.setOutputStyle, null);
   release(view);
 }
 
@@ -360,7 +427,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
     },
   });
   await until(() => view.warnings.length === 1);
-  assert.equal(view.listeners.size, 4);
+  assert.equal(view.listeners.size, 5);
   view.emit('capsule:state', { state: 'recording', sessionId: 'session' });
   transcript(view, 11, 'live after failure');
   assert.equal(view.values.setLocalAsrText, 'live after failure');
@@ -386,12 +453,12 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
   const view = mount({
     beforeListen: (name) => (name === 'vocab:suggested' ? pending.promise : undefined),
   });
-  await until(() => view.listeners.size === 2);
+  await until(() => view.listeners.size === 3);
   release(view);
   pending.resolve();
   await tick();
   assert.equal(view.listeners.size, 0);
-  assert.equal(view.stopped.length, 3);
+  assert.equal(view.stopped.length, 4);
   assert.equal(view.requests, 0);
 }
 
@@ -404,7 +471,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
   });
   await until(() => view.warnings.length === 1);
   assert.equal(view.listeners.size, 0);
-  assert.equal(view.stopped.length, 2);
+  assert.equal(view.stopped.length, 3);
   assert.equal(view.requests, 0);
   release(view);
 }
@@ -413,7 +480,19 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
 {
   const pending = deferred();
   const view = mount({ auxiliary: () => pending.promise });
-  await until(() => view.listeners.size === 4);
+  await until(() => view.listeners.size === 5);
+  await tick();
+  const processing = [{ sessionId: 'live-processing' }];
+  view.emit('dictation:jobs', processing);
+  pending.resolve({ suggestions: [], fallback: null, processing: [{ sessionId: 'stale' }] });
+  await until(() => view.values.setInsertFallback === null);
+  assert.equal(view.values.setProcessingJobs, processing);
+  release(view);
+}
+{
+  const pending = deferred();
+  const view = mount({ auxiliary: () => pending.promise });
+  await until(() => view.listeners.size === 5);
   await tick();
   const live = [{ id: 'live', pattern: 'old', replacement: 'new' }];
   const fallback = { text: 'not inserted', reason: 'missing target' };
@@ -426,7 +505,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
 {
   const pending = deferred();
   const view = mount({ auxiliary: () => pending.promise });
-  await until(() => view.listeners.size === 4);
+  await until(() => view.listeners.size === 5);
   await tick();
   view.emit('insert:fallback', null);
   const suggestions = [{ id: 'pending', pattern: 'a', replacement: 'b' }];
@@ -438,7 +517,7 @@ for (const snapshot of [() => frame({ payloadRevision: 9 }), () => null]) {
 {
   const pending = deferred();
   const view = mount({ auxiliary: () => pending.promise });
-  await until(() => view.listeners.size === 4);
+  await until(() => view.listeners.size === 5);
   release(view);
   const writes = view.writes.length;
   pending.resolve({ suggestions: [], fallback: null });
@@ -506,6 +585,33 @@ for (const overlay of [false, true]) {
   assert.equal(bus.size, 0);
   probe('P4', 'cleanup_finished', { overlay, listeners: bus.size });
 }
+// A newer rail preference must outlive both the first settings read and replayed frame.
+{
+  const oldSettings = deferred();
+  let reading = false;
+  const rail = mount({
+    label: 'capsule-rail',
+    overlay: true,
+    snapshot: () => frame({ capsuleStyle: 'classic' }),
+    preferences: () => {
+      reading = true;
+      return oldSettings.promise;
+    },
+  });
+  await until(() => reading);
+  rail.emit('prefs:changed', {
+    capsuleStyle: 'siri',
+    capsuleTranscriptEnabled: false,
+    capsuleTranscriptFontSize: 18,
+  });
+  oldSettings.resolve({ capsuleStyle: 'classic', capsuleTranscriptEnabled: true });
+  await until(() => rail.requests > 0);
+  await tick();
+  assert.equal(rail.values.setStyle, 'siri');
+  assert.equal(rail.values.setEnabled, false);
+  assert.equal(rail.values.setFontSize, 18);
+  release(rail);
+}
 // Only the primary capsule may drive native transcript visibility, including teardown.
 {
   const code = compile(
@@ -523,10 +629,22 @@ for (const overlay of [false, true]) {
     vm.runInNewContext(code, {
       exports: module.exports,
       require(name) {
+        if (name === '../../preview/history')
+          return {
+            previewHistory: new Proxy(
+              {},
+              {
+                get() {
+                  assert.fail('native rail visibility must not enter preview data');
+                },
+              },
+            ),
+          };
         if (name === './platform-exports') return { isDesktop: () => true };
         if (name === './shared')
           return {
             isTauriNow: () => true,
+            requireBackendReady: async () => undefined,
             invokeOrMock: async (command, args) => calls.push({ command, visible: args.visible }),
           };
         assert.equal(name, '@tauri-apps/api/webviewWindow');
@@ -545,7 +663,7 @@ for (const overlay of [false, true]) {
 // The main window's recording cue must not see synthetic mirror lifecycle events either.
 {
   const cueSource = readFileSync(
-    new URL('../src/components/AudioCue.tsx', import.meta.url),
+    new URL('../src/features/capsule/AudioCue.tsx', import.meta.url),
     'utf8',
   );
   const cueAst = ts.createSourceFile(
@@ -560,44 +678,71 @@ for (const overlay of [false, true]) {
     if (
       ts.isCallExpression(node) &&
       node.expression.getText(cueAst) === 'useEffect' &&
-      node.arguments[0]?.getText(cueAst).includes("'capsule:state'")
+      node.arguments[0]?.getText(cueAst).includes('events.state(')
     )
       cueEffect = node.arguments[0].getText(cueAst);
     ts.forEachChild(node, visitCue);
   }
   visitCue(cueAst);
   assert.ok(cueEffect);
-  const bus = eventBus();
-  let plays = 0;
-  let stops = 0;
+  for (const label of ['main', 'capsule', 'capsule-mirror-0']) {
+    const bus = eventBus();
+    let plays = 0;
+    let primes = 0;
+    let stops = 0;
+    let disposals = 0;
+    const scope = {
+      audioCueRuntimeEnabled: true,
+      prevStateRef: { current: 'idle' },
+      audioCueEnabledRef: { current: true },
+      getSettings: async () => ({ audioCueOnRecord: true }),
+      primeAudioCue: () => primes++,
+      playRecordStartCue: () => plays++,
+      stopAudioCue: () => stops++,
+      disposeAudioCue: () => disposals++,
+      require(name) {
+        if (name === '@tauri-apps/api/webviewWindow')
+          return { getCurrentWebviewWindow: () => ({ label }) };
+        assert.equal(name, '@tauri-apps/api/event');
+        return {
+          listen: async (name, callback, options) => bus.listen(label, name, callback, options),
+        };
+      },
+    };
+    bindNativeAdapter(scope);
+    vm.runInNewContext(compile(`globalThis.effect = (${cueEffect});`), scope);
+    const cleanup = scope.effect();
+    await tick();
+    const primary = label === 'capsule';
+    assert.equal(bus.size, primary ? 2 : 0, 'only the resident capsule may own cue subscriptions');
+    assert.equal(primes, 0, 'mounting any WebView must leave the output device closed');
+    assert.equal(plays, 0, 'mounting cannot replay a recording edge');
+    bus.emit('capsule-mirror-0', 'capsule:state', { state: 'recording' });
+    assert.equal(plays, 0, 'a mirror event cannot play the primary capsule cue');
+    bus.emit('capsule', 'capsule:state', { state: 'recording' });
+    bus.emit('capsule', 'capsule:state', { state: 'recording' });
+    assert.equal(plays, primary ? 1 : 0, 'only a fresh primary recording edge may play');
+    bus.emit('capsule', 'capsule:state', { state: 'done' });
+    assert.equal(stops, primary ? 1 : 0);
+    bus.emit('capsule', 'prefs:changed', { audioCueOnRecord: false });
+    assert.equal(disposals, primary ? 1 : 0, 'disabling cues disposes the owned output');
+    bus.emit('capsule', 'capsule:state', { state: 'recording' });
+    assert.equal(plays, primary ? 1 : 0, 'disabled cues cannot play on a new recording');
+    cleanup();
+    assert.equal(bus.size, 0);
+    assert.equal(disposals, primary ? 2 : 0, 'only the cue owner disposes output on unmount');
+  }
+}
+{
   const scope = {
-    isTauri: true,
-    audioCueRuntimeEnabled: true,
-    prevStateRef: { current: 'idle' },
-    audioCueEnabledRef: { current: true },
-    playRecordStartCue: () => plays++,
-    stopAudioCue: () => stops++,
-    require(name) {
-      if (name === '@tauri-apps/api/webviewWindow')
-        return { getCurrentWebviewWindow: () => ({ label: 'main' }) };
-      assert.equal(name, '@tauri-apps/api/event');
-      return {
-        listen: async (name, callback, options) => bus.listen('main', name, callback, options),
-      };
-    },
+    require: () => assert.fail('preview must not load any native auxiliary adapter'),
   };
-  vm.runInNewContext(compile(`globalThis.effect = (${cueEffect});`), scope);
-  const cleanup = scope.effect();
-  await until(() => bus.size === 1);
-  bus.emit('main', 'capsule:state', { state: 'recording' });
-  bus.emit('capsule-mirror-0', 'capsule:state', { state: 'idle' });
-  bus.emit('main', 'capsule:state', { state: 'recording' });
-  assert.equal(plays, 1, 'hidden mirror cleanup must not replay the recording cue');
-  assert.equal(stops, 0);
-  bus.emit('main', 'capsule:state', { state: 'idle' });
-  assert.equal(stops, 1);
-  cleanup();
-  assert.equal(bus.size, 0);
+  bindNativeAdapter(scope, false);
+  const events = scope.createCapsuleSubscriptions();
+  assert.equal(await events.label(), undefined);
+  assert.equal(await events.state(() => assert.fail('preview dispatched a native event')), false);
+  assert.equal((await scope.getCapsuleAuxiliarySnapshot()).suggestions.length, 0);
+  events.dispose();
 }
 console.log(
   'capsule ready replay: session, card ordering, bounded retries, cleanup and live display isolation passed',
