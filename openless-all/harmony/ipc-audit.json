@@ -1,8 +1,8 @@
 {
   "scope": "Static shared IPC and runtime adapter command coverage; excludes event subscriptions and dynamic command names.",
-  "total": 201,
+  "total": 200,
   "wired": 108,
-  "missing": 93,
+  "missing": 92,
   "commands": [
     {
       "name": "accept_history_learning",
@@ -841,13 +841,6 @@
       "name": "open_android_local_migration",
       "calledFrom": [
         "src/lib/ipc/local-migration.ts"
-      ],
-      "implementation": "unimplemented"
-    },
-    {
-      "name": "open_dictation_references_permission_settings",
-      "calledFrom": [
-        "src/api/dictationReferences.ts"
       ],
       "implementation": "unimplemented"
     },
