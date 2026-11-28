@@ -3698,10 +3698,20 @@ mod tests {
         context.polish.style_system_prompt = "SELECTED-STYLE".into();
         for translation in [false, true] {
             context.polish.translation_active = translation;
-            let prompt = super::build_omni_prompt(&context);
-            assert!(prompt.starts_with("当前应用：Frozen target\n\nSELECTED-STYLE"));
+            let (prompt, _) = super::build_omni_prompts(&context);
+            // With translation the polish+translate task header sits between the
+            // scene and the style rules, as on the polish path.
+            assert!(prompt.starts_with("当前应用：Frozen target\n\n"));
+            assert_eq!(
+                prompt.starts_with("当前应用：Frozen target\n\nSELECTED-STYLE"),
+                !translation
+            );
+            assert!(prompt.contains("SELECTED-STYLE"));
             assert_eq!(prompt.matches("当前应用：").count(), 1);
-            assert_eq!(prompt.contains("# 翻译"), translation);
+            assert_eq!(
+                prompt.contains(crate::prompt_compose::POLISH_TRANSLATE_TGT_MARKER),
+                translation
+            );
         }
     }
 
