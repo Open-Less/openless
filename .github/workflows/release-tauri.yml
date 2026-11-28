@@ -77,13 +77,19 @@ concurrency:
 jobs:
   dev-macos:
     name: Apple Silicon Dev package
-    if: github.event_name == 'workflow_dispatch' && inputs.dev_build
+    # The weekly beta run seeds the same dependency cache for future branches.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dev_build)
     runs-on: macos-latest
     timeout-minutes: 120
     permissions:
       contents: read
     env:
-      CARGO_BUILD_JOBS: '1'
+      # Match the macOS CI memory budget; one job serialized every dependency.
+      CARGO_BUILD_JOBS: '2'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      # Trial packages keep optimized code, but skip the expensive final LTO pass.
+      # The normal release job below retains Thin LTO.
+      CARGO_PROFILE_RELEASE_LTO: 'false'
       APPLE_SIGNING_IDENTITY: '-'
     steps:
       - uses: actions/checkout@v4
@@ -97,18 +103,43 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      - name: Configure Dev build environment
+        working-directory: openless-all/app
+        run: bash ../macos/scripts/macos-build-env.sh
+      - name: Cache Dev Rust dependencies
+        id: dev_rust_cache
+        uses: swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust-dev
+          shared-key: tauri-macos-dev
+          workspaces: 'openless-all/app/src-tauri -> target'
+          # Explicit branch dispatches may warm their next trial build. PRs never
+          # enter this job; tag dispatches cannot save. Cache dependencies, not app binaries
+          # or incremental state; cache-maintenance enforces the repository budget.
+          save-if: ${{ github.ref == 'refs/heads/beta' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/')) }}
+      - name: Verify Dev build cache contracts
+        run: |
+          node openless-all/app/scripts/dev-build-cache.test.mjs
+          node openless-all/app/scripts/ci-cache-sharing.test.mjs
       - name: Compile and package Dev
         working-directory: openless-all/app
         env:
           OFFICIAL_IDENTITY: ${{ inputs.official_identity }}
         run: |
           npm ci
-          source ../macos/scripts/macos-build-env.sh
           if [ "$OFFICIAL_IDENTITY" = "true" ]; then
-            npm run tauri -- build --ci --bundles dmg --config src-tauri/tauri.trial.conf.json -- --locked
+            npm run tauri -- build --ci --bundles dmg --config src-tauri/tauri.trial.conf.json -- --locked --timings
           else
-            npm run tauri -- build --ci --features dev-build --bundles dmg --config src-tauri/tauri.dev.conf.json -- --locked
+            npm run tauri -- build --ci --features dev-build --bundles dmg --config src-tauri/tauri.dev.conf.json -- --locked --timings
           fi
+      - name: Upload Dev Cargo timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-macos-cargo-timings
+          path: openless-all/app/src-tauri/target/cargo-timings/*.html
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload Dev package
         uses: actions/upload-artifact@v4
         with:
