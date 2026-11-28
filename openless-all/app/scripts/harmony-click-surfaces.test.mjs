@@ -98,12 +98,31 @@ const dockHead =
     .replace(/@Prop\s+/g, '')
     .replace('export struct ProductDock', 'export class ProductDock') + '\n}\n';
 const dockExports = {};
+const deviceInfo = { sdkApiVersion: 23 };
+let supportChecks = 0;
+let supported = false;
+const uiMaterial = {
+  isImmersiveMaterialSupported() {
+    supportChecks++;
+    return supported;
+  },
+  ImmersiveStyle: { THIN: 1 },
+  ImmersiveMaterial: class {
+    constructor(options) {
+      this.options = options;
+    }
+  },
+};
 vm.runInNewContext(
   ts.transpileModule(dockHead, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText,
   {
     exports: dockExports,
+    deviceInfo,
+    uiMaterial,
+    console,
+    Palette: { dockTint: () => '#ffffff' },
     Nav: {
       OVERVIEW: 'overview',
       STYLE: 'style',
@@ -125,4 +144,40 @@ dock.route = 'translation';
 assert.equal(dock.primaryActive('vocab'), false);
 console.log(
   'Harmony click surfaces: native activation, key/hit-test isolation and live dock selection passed',
+);
+
+// HarmonyOS 6.1/API 23 is the minimum; API 26 capability queries and modifiers
+// must be fully skipped, not invoked with an undefined material.
+{
+  assert.equal(dock.dockMaterial(), undefined);
+  assert.equal(supportChecks, 0, 'API 23 never queries the API 26 module');
+  const unavailable = {
+    get systemMaterial() {
+      throw new Error('API 26 attribute accessed on API 23');
+    },
+  };
+  new dockExports.DockMaterialModifier({ fixture: 'material' }).applyNormalAttribute(unavailable);
+  deviceInfo.sdkApiVersion = 26;
+  assert.equal(dock.dockMaterial(), undefined, 'unsupported hardware uses the blur fallback');
+  new dockExports.DockMaterialModifier(undefined).applyNormalAttribute(unavailable);
+  supported = true;
+  const material = dock.dockMaterial();
+  assert.ok(material);
+  const applied = [];
+  new dockExports.DockMaterialModifier(material).applyNormalAttribute({
+    systemMaterial: (value) => applied.push(value),
+  });
+  assert.deepEqual(applied, [material]);
+  assert.doesNotMatch(
+    navigation,
+    /\.systemMaterial\(this\.mat\)/,
+    'new attributes cannot be unconditionally called by older devices',
+  );
+  assert.equal(
+    (navigation.match(/\.attributeModifier\(this\.materialModifier\)/g) ?? []).length,
+    2,
+  );
+}
+console.log(
+  'HarmonyOS 6.1/7 material compatibility: API 23 skip, API 26 hardware fallback and guarded application passed',
 );

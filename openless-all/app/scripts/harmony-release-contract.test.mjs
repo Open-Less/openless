@@ -40,6 +40,26 @@ assert.match(workflow, /does not match package\.json version/);
 assert.match(workflow, /default: '\["ubuntu-latest"\]'/);
 assert.match(workflow, /prepare-harmony-sdk\.sh/);
 
+// The product targets HarmonyOS 7 (API 26) while staying installable on 6.1
+// (API 23). Huawei maps 26.0.0 -> HarmonyOS 7.0 and 6.1.0 -> API 23, so the
+// compiled HAP must keep that exact triple: a lower compile version drops the
+// API 26 material APIs, a higher compatible one cuts off 6.1 devices.
+{
+  const profile = JSON.parse(readFileSync(join(appRoot, '../harmony/build-profile.json5'), 'utf8'));
+  const product = profile.app.products.find((entry) => entry.name === 'default');
+  assert.ok(product, 'build-profile.json5 must keep the default product');
+  assert.equal(product.runtimeOS, 'HarmonyOS');
+  assert.equal(product.compatibleSdkVersion, '6.1.0(23)');
+  assert.equal(product.compileSdkVersion, '26.0.0');
+  assert.equal(product.targetSdkVersion, '26.0.0');
+  // compileSdkVersion drives the API surface; targetSdkVersion must not exceed
+  // it or the HAP claims behaviour the compiler never checked.
+  const minor = (value) => Number(/^(\d+)\./.exec(value)?.[1] ?? -1);
+  assert.equal(minor(product.compileSdkVersion), 26);
+  assert.equal(minor(product.targetSdkVersion), 26);
+  assert.equal(/^(\d+)\.(\d+)\.(\d+)\((\d+)\)$/.exec(product.compatibleSdkVersion)?.[4], '23');
+}
+
 // Node dependencies support tag tooling/contract tests; the native HAP does not
 // build a React bundle. Both CI and release must install the Tier-2 OHOS target
 // before compiling the shared Rust host.
@@ -58,9 +78,14 @@ assert.match(workflow, /run: npm ci/);
   assert.deepEqual(ohosTargets(workflow), ohosTargets(ciWorkflow));
 }
 const prepare = readFileSync(join(appRoot, '../harmony/scripts/prepare-harmony-sdk.sh'), 'utf8');
-assert.match(prepare, /DEFAULT_URL=https:\/\//);
+// The toolchain default is the pinned API 26 (HarmonyOS 7) release, shipped as
+// two ordered shards; the digest covers the concatenation.
+assert.match(prepare, /DEFAULT_PARTS="https:\/\/[^"]*\.tar\.gz\.aa https:\/\/[^"]*\.tar\.gz\.ab"/);
 assert.match(prepare, /DEFAULT_SHA256=[0-9a-f]{64}/);
+assert.match(prepare, /HARMONY_MIN_API:-26/);
+assert.match(prepare, /below the required API \$min_api/);
 assert.match(prepare, /checksum mismatch/);
+assert.doesNotMatch(prepare, /releases\/latest/);
 // No DevEco install: the standalone hvigor CLI must be usable.
 assert.match(packaging, /@ohos\/hvigor\/bin\/hvigor\.js/);
 const nativeBuild = readFileSync(join(appRoot, '../harmony/scripts/build-harmony-app.sh'), 'utf8');

@@ -9,6 +9,24 @@ import { Nav } from './Nav';
 const DOCK_HEIGHT: number = 62;
 const DOCK_GAP: number = 10;
 
+/** API 23 must never invoke an API 26 modifier, even with an undefined material.
+ * AttributeModifier supports guarded attribute calls without duplicating the dock tree.
+ * https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-user-defined-extension-attributemodifier
+ */
+export class DockMaterialModifier implements AttributeModifier<CommonAttribute> {
+  private material: SystemUiMaterial | undefined;
+
+  constructor(material: SystemUiMaterial | undefined) {
+    this.material = material;
+  }
+
+  applyNormalAttribute(instance: CommonAttribute): void {
+    if (deviceInfo.sdkApiVersion >= 26 && this.material !== undefined) {
+      instance.systemMaterial(this.material);
+    }
+  }
+}
+
 /** Native Button gives touch, keyboard activation and focus one shared action.
  * Huawei multi-input guidance:
  * https://developer.huawei.com/consumer/cn/doc/best-practices-V14/bpta-multi-interaction-V14
@@ -31,9 +49,11 @@ export struct ProductDock {
   @StorageLink('styleSection') section: number = 0;
   @StorageLink('reduceMotion') reduceMotion: boolean = false;
   private mat: SystemUiMaterial | undefined = undefined;
+  private materialModifier: DockMaterialModifier = new DockMaterialModifier(undefined);
 
   aboutToAppear(): void {
     this.mat = this.dockMaterial();
+    this.materialModifier = new DockMaterialModifier(this.mat);
   }
 
   private hasMaterial(): boolean {
@@ -135,7 +155,7 @@ export struct ProductDock {
       .borderRadius(Radius.pill)
       .border({ width: 0.5, color: Palette.glassEdge() })
       .shadow(floatShadow())
-      .systemMaterial(this.mat)
+      .attributeModifier(this.materialModifier)
 
       Row() {
         if (this.expanded()) {
@@ -157,7 +177,7 @@ export struct ProductDock {
       .borderRadius(Radius.pill)
       .border({ width: 0.5, color: Palette.glassEdge() })
       .shadow(floatShadow())
-      .systemMaterial(this.mat)
+      .attributeModifier(this.materialModifier)
     }
     .width('100%')
     .padding({ left: Space.md, right: Space.md, top: Space.xs, bottom: Space.xs })

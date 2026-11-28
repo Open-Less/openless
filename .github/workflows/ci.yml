@@ -723,6 +723,8 @@ jobs:
       - name: Harmony IPC audit gate regression
         run: |
           node scripts/harmony-ipc-audit-check.test.mjs
+      - name: Harmony SDK setup regression
+        run: node scripts/harmony-sdk-prepare.test.mjs
       - name: Harmony ArkTS contracts
         run: |
           set -euo pipefail
