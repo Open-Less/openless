@@ -30,6 +30,7 @@ pub struct AssistantMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum AssistantReference {
+    TurnReference { data: serde_json::Value },
     Selection {
         text: String,
     },
@@ -92,6 +93,12 @@ pub enum AssistantContextResult {
 
 /// Read-only, authorized data. Implementations retain native identities locally.
 pub trait AssistantContextProvider: Send + Sync {
+    /// Optional one-turn quotation, never persisted as conversation history.
+    fn turn_reference(&self, _key: AskTurnKey, _cancellation: AskCancellation)
+        -> BoxFuture<'_, Result<Option<AssistantContextResult>, BackendError>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn read(
         &self,
         key: AskTurnKey,

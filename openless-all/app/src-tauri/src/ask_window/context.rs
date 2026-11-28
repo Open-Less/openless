@@ -14,7 +14,7 @@ use openless_core::browser_scene::SceneAuthorization;
 use super::browser_context::BrowserReader;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 #[path = "context_native.rs"]
@@ -24,6 +24,7 @@ mod device;
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ReadPermissions {
     pub browser_tab: bool,
+    pub browser_selection: bool,
     pub voice_history: bool,
 }
 
@@ -48,8 +49,13 @@ struct ContextState {
     read_permissions: ReadPermissions,
     read_grant_epoch: u64,
     browser_sources: HashMap<Uuid, BrowserSource>,
+    browser_validity: HashMap<Uuid, std::sync::Arc<dyn BrowserReader>>,
     browser_grant_epoch: u64,
     browser_turns: HashMap<Uuid, AskTurnKey>,
+    manual_references: HashMap<Uuid, String>,
+    manual_owners: HashSet<Uuid>,
+    reference_turns: HashMap<Uuid, Option<AskTurnKey>>,
+    reference_epochs: HashMap<Uuid, SceneAuthorization>,
 }
 
 pub(crate) struct CapturedInvocation {
@@ -59,6 +65,52 @@ pub(crate) struct CapturedInvocation {
 }
 
 impl DesktopContext {
+    pub(crate) fn has_reference_scope(&self, conversation: Uuid) -> bool {
+        self.state.lock().reference_turns.contains_key(&conversation)
+    }
+    pub(crate) fn set_manual_reference(&self, conversation: Uuid, text: String) {
+        let mut state = self.state.lock();
+        state.manual_references.insert(conversation, text);
+        state.manual_owners.insert(conversation);
+        state.reference_turns.insert(conversation, None);
+        let grant = browser_grant(&state);
+        state.reference_epochs.insert(conversation, grant);
+    }
+
+    pub(crate) fn reference_submission_allowed(&self, conversation: Uuid) -> bool {
+        self.state.lock().reference_turns.get(&conversation).is_none_or(Option::is_none)
+    }
+
+    pub(crate) fn reference_snapshot(&self, conversation: Uuid) -> Option<serde_json::Value> {
+        let state = self.state.lock();
+        if !state.conversations.contains_key(&conversation) { return None; }
+        if let Some(text) = state.manual_references.get(&conversation) {
+            return Some(serde_json::json!({"source":"userProvided", "text":text, "characters":text.chars().count(), "temporary":true}));
+        }
+        if state.manual_owners.contains(&conversation) {
+            return Some(serde_json::json!({"source":"userProvided", "active":true, "temporary":true}));
+        }
+        if !state.read_permissions.browser_selection { return None; }
+        let reader = state.browser_validity.get(&conversation).cloned();
+        drop(state);
+        let text = reader?.selected_text()?;
+        Some(serde_json::json!({"source":"originalInputAccessibility", "text":text, "characters":text.chars().count(), "temporary":true}))
+    }
+
+    pub(crate) fn submission_guard(&self, conversation: Uuid) -> std::sync::Arc<dyn Fn() -> bool + Send + Sync> {
+        let state = self.state.clone();
+        let grant = {
+            let state = state.lock();
+            state.reference_epochs.get(&conversation).copied().unwrap_or_else(|| browser_grant(&state))
+        };
+        std::sync::Arc::new(move || {
+            let state = state.lock();
+            if !state.conversations.contains_key(&conversation) || browser_grant(&state) != grant { return false; }
+            let reader = state.browser_validity.get(&conversation).cloned();
+            drop(state);
+            reader.is_none_or(|reader| reader.is_current())
+        })
+    }
     pub(crate) fn with_backend(backend: std::sync::Arc<openless_core::OpenLessBackend>) -> Self {
         Self {
             backend: Some(backend),
@@ -70,8 +122,9 @@ impl DesktopContext {
         self.state.lock().read_permissions
     }
 
-    pub(crate) fn set_read_permissions(&self, permissions: ReadPermissions) {
+    pub(crate) fn set_read_permissions(&self, mut permissions: ReadPermissions) {
         let mut state = self.state.lock();
+        if !permissions.browser_tab || !state.authorization.app_metadata { permissions.browser_selection = false; }
         if state.read_permissions != permissions {
             state.read_grant_epoch += 1;
             state.browser_grant_epoch += 1;
@@ -104,10 +157,17 @@ impl DesktopContext {
         &self, conversation_id: Uuid, grant: SceneAuthorization,
         reader: std::sync::Arc<dyn BrowserReader>,
     ) {
+        let has_quote = grant.selected_text && grant.app_metadata && grant.browser_metadata
+            && reader.selected_text().is_some();
         let mut state = self.state.lock();
         if grant.app_metadata && grant.browser_metadata && browser_grant(&state) == grant
             && state.conversations.contains_key(&conversation_id)
         {
+            state.browser_validity.insert(conversation_id, reader.clone());
+            if has_quote {
+                state.reference_turns.insert(conversation_id, None);
+                state.reference_epochs.insert(conversation_id, grant);
+            }
             state.browser_sources.insert(
                 conversation_id,
                 BrowserSource {
@@ -172,6 +232,7 @@ impl DesktopContext {
             }
         }
         state.authorization = authorization;
+        if !authorization.app_metadata { state.read_permissions.browser_selection = false; }
     }
 
     pub(crate) fn record_external_app(
@@ -224,7 +285,12 @@ impl DesktopContext {
         let mut state = self.state.lock();
         state.conversations.remove(&conversation_id);
         state.browser_sources.remove(&conversation_id);
+        state.browser_validity.remove(&conversation_id);
         state.browser_turns.remove(&conversation_id);
+        state.manual_references.remove(&conversation_id);
+        state.manual_owners.remove(&conversation_id);
+        state.reference_turns.remove(&conversation_id);
+        state.reference_epochs.remove(&conversation_id);
     }
 
     /// Call only from the external native invocation path, synchronously
@@ -293,7 +359,7 @@ fn browser_grant(state: &ContextState) -> SceneAuthorization {
     SceneAuthorization {
         app_metadata: state.authorization.app_metadata,
         browser_metadata: state.read_permissions.browser_tab,
-        selected_text: false,
+        selected_text: state.read_permissions.browser_selection,
         epoch: state.browser_grant_epoch,
     }
 }
@@ -306,6 +372,9 @@ impl ContextProvider for DesktopContext {
             return;
         }
         state.browser_turns.insert(key.conversation_id, key);
+        if let Some(turn) = state.reference_turns.get_mut(&key.conversation_id) {
+            if turn.is_none() { *turn = Some(key); }
+        }
         if let Some(source) = state.browser_sources.get_mut(&key.conversation_id) {
             if source.turn.is_none() {
                 source.turn = Some(key);
@@ -327,6 +396,18 @@ impl ContextProvider for DesktopContext {
 }
 
 impl AssistantContextProvider for DesktopContext {
+    fn turn_reference(&self, key: AskTurnKey, cancellation: AskCancellation)
+        -> futures_util::future::BoxFuture<'_, Result<Option<AssistantContextResult>, BackendError>> {
+        Box::pin(async move {
+            let wanted = {
+                let state = self.state.lock();
+                state.manual_references.contains_key(&key.conversation_id)
+                    || (state.read_permissions.browser_selection && state.browser_sources.contains_key(&key.conversation_id))
+            };
+            if wanted { self.read(key, AssistantContextQuery::BrowserTab, cancellation).await.map(Some) }
+            else { Ok(None) }
+        })
+    }
     fn read(
         &self,
         key: AskTurnKey,
@@ -341,6 +422,18 @@ impl AssistantContextProvider for DesktopContext {
                 ));
             }
             if let AssistantContextQuery::BrowserTab = query {
+                {
+                    let mut state = self.state.lock();
+                    if state.reference_turns.get(&key.conversation_id) == Some(&Some(key))
+                        && state.reference_epochs.get(&key.conversation_id) == Some(&browser_grant(&state)) {
+                        if let Some(text) = state.manual_references.remove(&key.conversation_id) {
+                            return Ok(AssistantContextResult::Available {
+                                data: serde_json::json!({"referenceType":"untrustedUserProvidedReference", "handling":openless_core::browser_scene::BROWSER_REFERENCE_RULE, "text":text}),
+                                source: "userProvided".into(), as_of: Local::now().to_rfc3339(),
+                            });
+                        }
+                    }
+                }
                 let (source, grant) = {
                     let mut state = self.state.lock();
                     if !state.conversations.contains_key(&key.conversation_id) {
@@ -365,8 +458,9 @@ impl AssistantContextProvider for DesktopContext {
                 let state = self.state.clone();
                 let upstream = cancellation.clone();
                 let reading = cancellation.clone().requiring(move || {
+                    if upstream.is_cancelled() { return false; }
                     let state = state.lock();
-                    !upstream.is_cancelled() && browser_grant(&state) == grant
+                    browser_grant(&state) == grant
                         && state.browser_turns.get(&key.conversation_id) == Some(&key)
                         && state.conversations.contains_key(&key.conversation_id)
                 });
@@ -375,8 +469,9 @@ impl AssistantContextProvider for DesktopContext {
                     _ = cancellation.cancelled() => return Err(BackendError::new(BackendErrorCode::Cancelled, "askCancelled")),
                     result = source.reader.read(key, grant, reading) => result,
                 };
+                let cancelled = cancellation.is_cancelled();
                 let state = self.state.lock();
-                if cancellation.is_cancelled() {
+                if cancelled {
                     return Err(BackendError::new(
                         BackendErrorCode::Cancelled,
                         "askCancelled",
@@ -408,17 +503,15 @@ impl AssistantContextProvider for DesktopContext {
                     state.read_grant_epoch
                 };
                 let rows = self.recent_voice(query, limit)?;
+                let cancelled = cancellation.is_cancelled();
                 let state = self.state.lock();
                 if state.read_grant_epoch != epoch
                     || !state.conversations.contains_key(&key.conversation_id)
                 {
                     return Ok(AssistantContextResult::Denied);
                 }
-                if cancellation.is_cancelled() {
-                    return Err(BackendError::new(
-                        BackendErrorCode::Cancelled,
-                        "askCancelled",
-                    ));
+                if cancelled {
+                    return Err(BackendError::new(BackendErrorCode::Cancelled, "askCancelled"));
                 }
                 return Ok(AssistantContextResult::Available {
                     data: serde_json::json!({"entries":rows}),
@@ -689,6 +782,9 @@ mod native {
 }
 
 impl openless_core::ask::ContextProvider for DesktopContext {
+    fn has_turn_reference(&self, turn: AskTurnKey) -> bool {
+        self.state.lock().reference_turns.get(&turn.conversation_id) == Some(&Some(turn))
+    }
     fn begin_turn(&self, turn: AskTurnKey) {
         // StandaloneQaService owns admission and the real key. Both provider
         // contracts must reach the same grant/turn state, never a no-op shim.
@@ -721,8 +817,9 @@ impl openless_core::ask::ContextProvider for DesktopContext {
                 state.read_grant_epoch
             };
             let rows = self.recent_voice(&selection, 4)?;
+            let cancelled = cancel.is_cancelled();
             let state = self.state.lock();
-            if cancel.is_cancelled() {
+            if cancelled {
                 return Err(BackendError::new(
                     BackendErrorCode::Cancelled,
                     "askCancelled",

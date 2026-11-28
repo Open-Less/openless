@@ -10,6 +10,8 @@ use openless_core::{
 /// The opaque reader sends work to the existing native target owner. No native
 /// pointer, process id or alternative target capture crosses this boundary.
 pub(crate) trait BrowserReader: Send + Sync {
+    fn is_current(&self) -> bool { true }
+    fn selected_text(&self) -> Option<String> { None }
     fn read(
         &self,
         key: AskTurnKey,

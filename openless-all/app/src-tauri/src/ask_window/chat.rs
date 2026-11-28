@@ -108,7 +108,7 @@ impl AskHost {
         let keep_history = self.backend.get_preferences().qa_save_history;
         self.keep_history.store(keep_history, Ordering::Release);
         self.clear_session();
-        let id = if keep_history {
+        let id = if keep_history && !self.context.read_permissions().browser_selection {
             self.service.open()
         } else {
             self.service.open_transient()
@@ -126,6 +126,15 @@ impl AskHost {
         self.targets.clear_capture();
         if let Some(id) = current {
             self.context.close_conversation(id);
+        }
+    }
+
+    fn invalidate_reference(&self, window: &WebviewWindow) {
+        if self.service.current_is_transient() {
+            let id = self.current();
+            self.clear_session();
+            let _ = window.app_handle().emit_to(LABEL, "ask-reference-invalidated",
+                json!({"conversationId":id,"reason":"askReferenceUnavailable"}));
         }
     }
 
@@ -226,7 +235,8 @@ impl AskHost {
         };
         let app_grant = self.context.app_metadata_grant();
         let access = self.context_access();
-        let locked = match generation {
+        let reference_mode = self.current().is_some_and(|id| self.context.has_reference_scope(id));
+        let locked = match generation.filter(|_| !reference_mode) {
             Some(scope) => self.targets.capture_at_send(scope, access).await,
             None => target::CapturedTarget::unavailable(),
         };
@@ -595,6 +605,8 @@ pub(crate) fn restricted_command_allowed(label: &str, command: &str) -> bool {
                 | "ask_new_conversation"
                 | "ask_end_conversation"
                 | "ask_submit"
+                | "ask_set_turn_reference"
+                | "ask_revoke_turn_reference"
                 | "ask_add_attachment"
                 | "ask_add_dropped_image"
                 | "ask_remove_attachment"
@@ -666,10 +678,43 @@ pub fn ask_end_conversation(
 pub fn ask_snapshot(window: WebviewWindow, host: AskState<'_>, conversation_id: Uuid) -> IpcResult {
     authorize(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
-    host.service
+    let mut snapshot = host.service
         .snapshot(conversation_id)
         .map(wire::snapshot)
-        .map_err(wire::error)
+        .map_err(wire::error)?;
+    let valid = host.context.submission_guard(conversation_id)();
+    if !valid && host.service.current_is_transient() {
+        host.invalidate_reference(&window);
+        return Err(wire::error(BackendError::new(BackendErrorCode::Cancelled, "askReferenceUnavailable")));
+    }
+    snapshot["turnReference"] = host.context.reference_snapshot(conversation_id).unwrap_or(Value::Null);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn ask_set_turn_reference(window: WebviewWindow, host: AskState<'_>, conversation_id: Uuid, text: String) -> IpcResult {
+    authorize(&window)?;
+    if text.trim().is_empty() { return Err(wire::error(BackendError::new(BackendErrorCode::InvalidArgument, "askReferenceEmpty"))); }
+    if !openless_core::browser_scene::valid_reference_text(&text) { return Err(wire::error(BackendError::new(BackendErrorCode::InvalidArgument, "askReferenceLimit"))); }
+    let _guard = host.attachment_gate.lock();
+    host.require_current(conversation_id).map_err(wire::error)?;
+    host.clear_session();
+    let id = host.service.open_transient();
+    host.initialize_scope(id);
+    host.context.set_manual_reference(id, text.clone());
+    if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() { desktop.set_conversation(Some(id.to_string())); }
+    Ok(json!({"conversationId":id,"source":"userProvided","characters":text.chars().count(),"temporary":true}))
+}
+
+#[tauri::command]
+pub fn ask_revoke_turn_reference(window: WebviewWindow, host: AskState<'_>, conversation_id: Uuid) -> IpcResult {
+    authorize(&window)?;
+    let _guard = host.attachment_gate.lock();
+    if host.current() == Some(conversation_id) && host.service.current_is_transient() {
+        host.clear_session();
+        if let Some(desktop) = window.try_state::<Arc<super::Desktop>>() { desktop.set_conversation(None); }
+    }
+    Ok(Value::Null)
 }
 
 #[tauri::command]
@@ -681,6 +726,10 @@ pub fn ask_events(
 ) -> IpcResult {
     authorize(&window)?;
     host.require_current(conversation_id).map_err(wire::error)?;
+    if !host.context.submission_guard(conversation_id)() && host.service.current_is_transient() {
+        host.invalidate_reference(&window);
+        return Err(wire::error(BackendError::new(BackendErrorCode::Cancelled, "askReferenceUnavailable")));
+    }
     let replay = host
         .service
         .events(conversation_id, after_sequence)
@@ -705,6 +754,9 @@ pub async fn ask_submit(
         // changes and permission revocation. Never hold this gate across await.
         let _guard = host.attachment_gate.lock();
         host.require_current(conversation_id).map_err(wire::error)?;
+        if !host.context.reference_submission_allowed(conversation_id) {
+            return Err(wire::error(BackendError::new(BackendErrorCode::InvalidState, "askReferenceNewConversationRequired")));
+        }
         if !host.accepts_submission(conversation_id, active_desktop.as_deref()) {
             return Err(wire::error(BackendError::new(
                 BackendErrorCode::Cancelled,
@@ -713,10 +765,11 @@ pub async fn ask_submit(
         }
         let transient = host.service.current_is_transient();
         let backend = host.backend.clone();
+        let reference_guard = host.context.submission_guard(conversation_id);
         let cancellation = host
             .fence
             .issue()
-            .requiring(move || transient || backend.get_preferences().qa_save_history);
+            .requiring(move || (transient || backend.get_preferences().qa_save_history) && reference_guard());
         let generation = desktop
             .as_ref()
             .and_then(|desktop| desktop.external_target_generation());
@@ -1077,6 +1130,11 @@ pub fn ask_set_context_permission(
     };
     if !allowed {
         super::session::revoke_app_context(&host.context, &host.service, &host.fence);
+        host.invalidate_reference(&window);
+        if let Some(path) = &host.read_permissions_path {
+            let bytes = serde_json::to_vec(&host.context.read_permissions()).map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
+            crate::persistence::atomic_write(path, &bytes).map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
+        }
     }
     let stored = host.context_preference.as_ref().is_some_and(|path| {
         crate::persistence::atomic_write(path, if allowed { b"true" } else { b"false" }).is_ok()
@@ -1106,7 +1164,7 @@ pub fn ask_get_read_permissions(window: WebviewWindow, host: AskState<'_>) -> Ip
 pub fn ask_set_read_permissions(
     window: WebviewWindow,
     host: AskState<'_>,
-    permissions: super::context::ReadPermissions,
+    mut permissions: super::context::ReadPermissions,
 ) -> IpcResult {
     if window.label() != "main" {
         return Err(
@@ -1115,18 +1173,22 @@ pub fn ask_set_read_permissions(
     }
     let _guard = host.attachment_gate.lock();
     let previous = host.context.read_permissions();
+    if !permissions.browser_tab || !host.context.app_metadata_allowed() { permissions.browser_selection = false; }
     if previous == permissions {
         return Ok(json!(previous));
     }
     let revoking = (previous.browser_tab && !permissions.browser_tab)
+        || (previous.browser_selection && !permissions.browser_selection)
         || (previous.voice_history && !permissions.voice_history);
     if revoking {
         host.context
             .set_read_permissions(super::context::ReadPermissions {
                 browser_tab: previous.browser_tab && permissions.browser_tab,
+                browser_selection: previous.browser_selection && permissions.browser_selection,
                 voice_history: previous.voice_history && permissions.voice_history,
             });
         host.service.cancel_active_turns();
+        host.invalidate_reference(&window);
     }
     let bytes = serde_json::to_vec(&permissions)
         .map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
@@ -1136,7 +1198,7 @@ pub fn ask_set_read_permissions(
     crate::persistence::atomic_write(path, &bytes)
         .map_err(|_| json!({"code":"persistence","message":"Could not save Ask permissions."}))?;
     host.context.set_read_permissions(permissions);
-    Ok(json!(permissions))
+    Ok(json!(host.context.read_permissions()))
 }
 
 fn settings_reply(result: Result<AskEntrySettings, String>) -> IpcResult {

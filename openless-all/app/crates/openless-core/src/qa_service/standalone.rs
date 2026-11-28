@@ -139,6 +139,8 @@ pub struct AskMissingFact {
 }
 
 pub trait ContextProvider: Send + Sync {
+    /// Explicit ephemeral reference mode answers in chat, without native writes.
+    fn has_turn_reference(&self, _turn: AskTurnKey) -> bool { false }
     /// Called once after a new turn is admitted and registered, before model
     /// work starts and outside the Core state lock. Rejected attempts and
     /// idempotent replays do not bind private invocation references. Older

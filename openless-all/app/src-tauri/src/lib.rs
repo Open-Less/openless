@@ -385,6 +385,8 @@ macro_rules! app_invoke_handler_desktop {
             ask_window::chat::ask_snapshot,
             ask_window::chat::ask_events,
             ask_window::chat::ask_submit,
+            ask_window::chat::ask_set_turn_reference,
+            ask_window::chat::ask_revoke_turn_reference,
             ask_window::chat::ask_cancel,
             ask_window::chat::ask_add_attachment,
             ask_window::chat::ask_add_dropped_image,

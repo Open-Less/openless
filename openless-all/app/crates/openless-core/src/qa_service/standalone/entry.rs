@@ -230,6 +230,9 @@ impl StandaloneQaService {
         preparation: &AskPreparation,
         cancellation: &AskCancellation,
     ) -> Result<Resolved, BackendError> {
+        if self.0.deps.context.has_turn_reference(key) {
+            return Ok(Resolved { route: AskRoute::Answer, missing_selection: false, continuation: None });
+        }
         let require_tool = preparation.intent_mode == AskIntentMode::MainModelTool;
         let separate = if preparation.intent_mode == AskIntentMode::SeparateModel {
             Some(tokio::select! {

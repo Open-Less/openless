@@ -99,6 +99,8 @@ type Eligible = Arc<dyn Fn() -> bool + Send + Sync>;
 
 enum Request {
     #[cfg(target_os = "macos")]
+    BrowserInspect { ticket: Arc<()>, reply: mpsc::Sender<Option<Option<String>>> },
+    #[cfg(target_os = "macos")]
     BrowserBind {
         scope: u64,
         authorization: CaptureAuthorization,
@@ -331,7 +333,25 @@ struct BrowserReader {
 }
 
 #[cfg(target_os = "macos")]
+thread_local! { static IN_BROWSER_OWNER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+#[cfg(target_os = "macos")]
+impl BrowserReader {
+    fn inspect(&self) -> Option<Option<String>> {
+        let (reply, result) = mpsc::channel();
+        self.tracker.send(Request::BrowserInspect { ticket: self.ticket.clone(), reply })
+            .then(|| result.recv_timeout(CAPTURE_TIMEOUT).ok()).flatten().flatten()
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl super::browser_context::BrowserReader for BrowserReader {
+    fn is_current(&self) -> bool {
+        // Owner callbacks already perform the native checks; never queue a
+        // synchronous request back to that same owner from cancellation checks.
+        IN_BROWSER_OWNER.with(|owner| owner.get()) || self.inspect().is_some()
+    }
+    fn selected_text(&self) -> Option<String> { self.inspect().flatten() }
     fn read(
         &self, key: openless_core::ask::AskTurnKey,
         grant: openless_core::browser_scene::SceneAuthorization,
@@ -357,6 +377,7 @@ impl super::browser_context::BrowserReader for BrowserReader {
 
 #[cfg(target_os = "macos")]
 struct BrowserLease {
+    consumed: bool,
     ticket: Weak<()>,
     identity: native::Identity,
     snapshot: crate::browser_scene::macos::Enrichment,
@@ -367,6 +388,8 @@ struct BrowserLease {
 }
 
 fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64) {
+    #[cfg(target_os = "macos")]
+    IN_BROWSER_OWNER.with(|owner| owner.set(true));
     let epoch = Arc::new(AtomicU64::new(0));
     let Some(mut platform) = native::Platform::new(epoch.clone()) else {
         return;
@@ -397,6 +420,18 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                     || lease.at.elapsed() > TARGET_FRESHNESS
                     || !lease.authorization.is_current()
             }) { browser = None; }
+            if let Some(Request::BrowserInspect { ticket, reply }) = request {
+                let mut result = browser.as_ref().filter(|lease| lease.ticket.as_ptr() == Arc::as_ptr(&ticket))
+                    .filter(|lease| platform.browser_is_current(&lease.identity, &lease.snapshot,
+                        lease.authorization.grant(), &|| lease.authorization.is_current()))
+                    .map(|lease| lease.snapshot.selected_text.clone());
+                platform.poll();
+                if browser.as_ref().is_none_or(|lease| platform.read_revision() != lease.identity.read_revision()
+                    || !lease.authorization.is_current()) { result = None; }
+                if result.is_none() { browser = None; }
+                let _ = reply.send(result);
+                continue;
+            }
             if let Some(Request::BrowserBind { scope: requested, authorization, reply }) = request {
                 let grant = authorization.grant();
                 if !reply.is_closed() && authorization.is_current()
@@ -415,6 +450,7 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                         }) {
                             let ticket = Arc::new(());
                             browser = Some(BrowserLease {
+                                consumed: false,
                                 ticket: Arc::downgrade(&ticket), identity: original.identity.clone(),
                                 snapshot, _watch: watch, scope: requested, authorization, at: original.at,
                             });
@@ -427,8 +463,8 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
             if let Some(Request::BrowserRead { ticket, key, grant, cancellation, reply }) = request {
                 use openless_core::browser_scene::AuthorizedBrowserReference;
                 let mut result = openless_core::assistant_api::AssistantContextResult::Unavailable { reason: "browserReferenceExpired".into() };
-                let matches = browser.as_ref().is_some_and(|lease| lease.ticket.as_ptr() == Arc::as_ptr(&ticket));
-                if let Some(lease) = if matches { browser.take() } else { None } {
+                let matches = browser.as_ref().is_some_and(|lease| !lease.consumed && lease.ticket.as_ptr() == Arc::as_ptr(&ticket));
+                if let Some(mut lease) = if matches { browser.take() } else { None } {
                     let current = || active.load(Ordering::Acquire) && !reply.is_closed()
                         && !cancellation.is_cancelled() && lease.scope == scope.load(Ordering::Acquire)
                         && lease.at.elapsed() <= TARGET_FRESHNESS && lease.authorization.is_current();
@@ -441,7 +477,7 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                             .zip(lease.snapshot.location.as_deref())
                         {
                             if let Some(mut reference) = AuthorizedBrowserReference::new(
-                                key, grant, &lease.identity, app.name, location, lease.snapshot.input_kind, None,
+                                key, grant, &lease.identity, app.name, location, lease.snapshot.input_kind, lease.snapshot.selected_text.clone(),
                             ) {
                                 platform.poll();
                                 result = super::browser_context::consume(&mut reference, key, grant, |identity| {
@@ -456,6 +492,8 @@ fn run(receiver: mpsc::Receiver<Request>, active: &AtomicBool, scope: &AtomicU64
                             }
                         }
                     }
+                    lease.consumed = true;
+                    browser = Some(lease);
                 }
                 let _ = reply.send(result);
                 continue;

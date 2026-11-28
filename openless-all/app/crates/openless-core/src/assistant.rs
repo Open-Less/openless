@@ -41,7 +41,7 @@ impl PersonalAssistant {
 
     async fn execute(
         &self,
-        request: AssistantRequest,
+        mut request: AssistantRequest,
         cancellation: AskCancellation,
         events: AssistantEventSink,
     ) -> Result<AssistantResponse, BackendError> {
@@ -55,6 +55,16 @@ impl PersonalAssistant {
         };
         check_cancelled(&cancellation)?;
         let key = request.key;
+        if let Some(reference) = self.deps.context.turn_reference(key, cancellation.clone()).await? {
+            check_cancelled(&cancellation)?;
+            request.messages.push(crate::assistant_api::AssistantMessage {
+                role: crate::assistant_api::AssistantRole::User,
+                text: String::new(),
+                references: vec![crate::assistant_api::AssistantReference::TurnReference {
+                    data: serde_json::to_value(reference).map_err(|_| error(BackendErrorCode::InvalidState, "askReferenceUnavailable"))?,
+                }],
+            });
+        }
         let mut plan = budget::Plan::new(request, model.capabilities(), model.supports_tools())?;
         let mut answer = String::new();
         // A finite loop prevents a faulty provider from issuing tools indefinitely. This is

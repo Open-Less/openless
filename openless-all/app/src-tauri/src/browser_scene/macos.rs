@@ -29,6 +29,8 @@ use std::{
 #[link(name = "ApplicationServices", kind = "framework")]
 #[allow(clashing_extern_declarations)]
 extern "C" {
+    fn AXValueGetTypeID() -> usize;
+    fn AXValueGetValue(value: *const c_void, kind: i32, out: *mut c_void) -> u8;
     fn AXIsProcessTrusted() -> bool;
     fn AXUIElementGetTypeID() -> usize;
     fn AXUIElementGetPid(element: *mut c_void, pid: *mut i32) -> i32;
@@ -132,6 +134,23 @@ fn text(element: *mut c_void, name: &str) -> Option<String> {
         .map(|value| value.to_string())
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct SelectedRange { location: isize, length: isize }
+
+fn explicit_selection(element: *mut c_void) -> Option<String> {
+    let role = text(element, "AXRole")?;
+    if !matches!(role.as_str(), "AXStaticText" | "AXWebArea" | "AXTextField" | "AXTextArea" | "AXComboBox")
+        || text(element, "AXSubrole").as_deref() == Some("AXSecureTextField") { return None; }
+    let value = attr(element, "AXSelectedTextRange")?;
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) != AXValueGetTypeID() } { return None; }
+    let mut range = SelectedRange::default();
+    if unsafe { AXValueGetValue(value.as_CFTypeRef().cast(), 4, ptr::from_mut(&mut range).cast()) } == 0
+        || range.location < 0 || range.length <= 0 || range.length > 8000 { return None; }
+    let text = text(element, "AXSelectedText")?;
+    (text.encode_utf16().count() == range.length as usize).then_some(text)
+}
+
 fn owned_element(element: *mut c_void, expected_pid: i32) -> bool {
     if element.is_null() || unsafe { CFGetTypeID(element.cast()) != AXUIElementGetTypeID() } {
         return false;
@@ -154,6 +173,8 @@ fn raw_location(page: &CFType) -> Option<String> {
 
 /// No Debug or serialization: native handles and raw URL fingerprints stay local.
 pub(crate) struct Enrichment {
+    pub(crate) selected_text: Option<String>,
+    selected_owner: Option<CFType>,
     pub(crate) input_kind: BrowserInputKind,
     pub(crate) location: Option<String>,
     page: Option<CFType>,
@@ -181,12 +202,17 @@ impl Enrichment {
                         <[u8; 32]>::from(Sha256::digest(raw.as_bytes())) == digest
                     })
                 })
+            && self.selected_text.as_ref().is_none_or(|selected| {
+                self.selected_owner.as_ref().is_some_and(|owner|
+                    explicit_selection(owner.as_CFTypeRef().cast_mut()).as_ref() == Some(selected))
+            })
     }
     /// This is additional page validation, not a substitute for target/focus
     /// validation. Same URL in a different tab is rejected by the host binding
     /// and AXWebArea identity; same tab navigating to a new URL is rejected here.
     pub(crate) fn page_is_current(&self, other: &Self) -> bool {
         self.input_kind == other.input_kind
+            && self.selected_text == other.selected_text
             && self.page == other.page
             && self.raw_location_digest == other.raw_location_digest
             && self.tab_group == other.tab_group
@@ -337,7 +363,10 @@ pub(crate) unsafe fn enrich(
             if page.is_some() {
                 return None;
             }
-            page = Some(current_owner.as_ref()?.clone());
+            page = Some(match current_owner.as_ref() {
+                Some(owner) => owner.clone(),
+                None => unsafe { CFType::wrap_under_get_rule(input.cast()) },
+            });
         }
         in_toolbar |= current_role == "AXToolbar";
         let parent = attr(current, "AXParent")?;
@@ -352,11 +381,11 @@ pub(crate) unsafe fn enrich(
     }
     // Labels are data read only after the entire original ancestry is verified.
     // Never read a window title, full webpage text, AXValue or sibling controls.
-    let labels: Vec<_> = ["AXTitle", "AXDescription", "AXPlaceholderValue"]
+    let labels: Vec<_> = if editable { ["AXTitle", "AXDescription", "AXPlaceholderValue"]
         .into_iter()
         .filter_map(|name| text(input, name))
         .filter(|label| !label.is_empty())
-        .collect();
+        .collect() } else { Vec::new() };
     let label = labels
         .iter()
         .find(|label| {
@@ -410,7 +439,16 @@ pub(crate) unsafe fn enrich(
     if !verify() {
         return None;
     }
+    // Only the original focused control's explicit public selection. No page
+    // traversal, AXValue, text markers, clipboard, or background tab fallback.
+    let selected_text = if include_location && page.is_some() && !in_toolbar {
+        openless_core::browser_scene::read_selected_text(grant, &verify, || explicit_selection(input))
+    } else { None };
+    if !verify() { return None; }
+    if input_kind == BrowserInputKind::WebSelection && selected_text.is_none() { return None; }
     Some(Enrichment {
+        selected_owner: selected_text.as_ref().map(|_| unsafe { CFType::wrap_under_get_rule(input.cast()) }),
+        selected_text,
         input_kind,
         location,
         page,
