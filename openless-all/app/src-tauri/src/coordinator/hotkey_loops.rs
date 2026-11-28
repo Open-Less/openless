@@ -6,12 +6,94 @@
 //! parent `coordinator` module can call them through `use hotkey_loops::*;`.
 
 use super::*;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[path = "skip_auto_style_monitor.rs"]
+mod skip_auto_style_monitor;
 use crate::issue1266_debug::{
     Event as DebugEvent, Facts as DebugFacts, Kind as DebugKind, Operation as DebugOperation,
     Outcome as DebugOutcome, Probe as DebugProbe,
 };
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(super) fn skip_auto_style_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) { return; }
+        let registration = crate::issue1266_debug::lock_host(
+            &inner.settings_host_gate, DebugKind::TranslationHotkey);
+        if inner.backend.ensure_runtime_ready().is_ok() {
+            match try_update_skip_auto_style_hotkey_binding(&inner) {
+                Ok(()) => return,
+                Err(error) => log::warn!("[hotkey] style registration failed: {error}"),
+            }
+        }
+        drop(registration);
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(super) fn try_update_skip_auto_style_hotkey_binding(inner: &Arc<Inner>) -> Result<(), String> {
+    let binding = hotkey_runtime_target(inner).skip_auto_style;
+    if let Some(monitor) = inner.hotkey.lock().as_ref() {
+        configure_shift_translation(inner, monitor);
+    }
+    let (send, receive) = mpsc::sync_channel(1);
+    let main = Arc::clone(inner);
+    inner.host.run_on_main_thread(move || {
+        let _ = send.send(update_skip_auto_style_hotkey_on_main(&main, binding));
+    })?;
+    receive.recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "style hotkey registration timed out".to_string())?
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(super) fn update_skip_auto_style_hotkey_on_main(
+    inner: &Arc<Inner>,
+    binding: crate::types::ShortcutBinding,
+) -> Result<(), String> {
+    skip_auto_style_monitor::replace(&inner.skip_auto_style_hotkey, binding, |binding| {
+        let (tx, rx) = mpsc::channel();
+        let monitor = ComboHotkeyMonitor::start(binding.clone(), tx)
+            .map_err(|error| error.to_string())?;
+        let bridge = Arc::clone(inner);
+        std::thread::Builder::new().name("openless-style-hotkey-bridge".into())
+            .spawn(move || skip_auto_style_hotkey_bridge_loop(bridge, rx, binding))
+            .map_err(|error| error.to_string())?;
+        Ok(monitor)
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn skip_auto_style_hotkey_bridge_loop(
+    inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>,
+    binding: crate::types::ShortcutBinding,
+) {
+    // The press records ownership; a release after a new capture cannot toggle it.
+    let mut owner = None;
+    while let Ok(event) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst)
+            || hotkey_runtime_target(&inner).skip_auto_style != binding {
+            owner = None; continue;
+        }
+        match event {
+            ComboHotkeyEvent::Pressed { .. } => {
+                let snapshot = inner.backend.snapshot();
+                owner = matches!(snapshot.dictation.phase,
+                    openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording)
+                    .then_some((snapshot.dictation.session_id, snapshot.preferences_revision));
+            },
+            ComboHotkeyEvent::Released { .. } => {
+                if let Some((Some(id), revision)) = owner.take() {
+                    if inner.backend.snapshot().preferences_revision == revision {
+                        handle_skip_auto_style_hotkey(&inner, id);
+                    }
+                }
+            },
+        }
+    }
+}
 
 /// Dedicated consumer thread for Esc cancellation. Not merged into
 /// `hotkey_bridge_loop` because the bridge serializes Pressed/Released with
@@ -126,8 +208,12 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
+                #[cfg(not(mobile))]
+                configure_shift_translation(&inner, &monitor);
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
+                #[cfg(not(mobile))]
+                crate::ask_window::hotkey::set_binding(&target.dictation, target.dictation_mode);
                 if let Some(monitor) = inner.hotkey.lock().as_ref() {
                     let (qa_trigger, selection_polish_trigger, translation_trigger) =
                         modifier_shortcut_triggers(&inner);
@@ -171,149 +257,6 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 }
                 drop(registration);
                 std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-// ─────────────────────────── QA hotkey supervisor ───────────────────────────
-
-fn take_qa_hotkey_on_main_thread(inner: &Arc<Inner>) {
-    let main = Arc::clone(inner);
-    if let Err(error) = inner.host.run_on_main_thread(move || {
-        main.qa_hotkey.lock().take();
-    }) {
-        log::warn!("[qa] cannot dispatch hotkey removal: {error}");
-    }
-}
-
-pub(super) fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    let mut attempts: u32 = 0;
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let registration =
-            crate::issue1266_debug::lock_host(&inner.settings_host_gate, DebugKind::QaHotkey);
-        if inner.backend.ensure_runtime_ready().is_err() {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        // QA disabled: sleep until the runtime target changes; changes arrive
-        // via the explicit settings effect.
-        let binding = match hotkey_runtime_target(&inner).qa {
-            Some(b) => b,
-            None => {
-                take_qa_hotkey_on_main_thread(&inner);
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                continue;
-            }
-        };
-        if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
-            take_qa_hotkey_on_main_thread(&inner);
-            if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, selection_polish_trigger, translation_trigger) =
-                    modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(
-                    qa_trigger,
-                    selection_polish_trigger,
-                    translation_trigger,
-                );
-            }
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        if inner.qa_hotkey.lock().is_some() {
-            // Already registered -> do not reinstall; recheck after 5s (binding
-            // changes go through the manual update path).
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        // On macOS the global-hotkey crate uses Carbon RegisterEventHotKey and
-        // requires the manager to be constructed on the main thread; otherwise
-        // register() looks Ok but events are never dispatched (the step missed
-        // by the first version of issue #118 / PR #119, leaving hotkey presses
-        // completely dead). Run QaHotkeyMonitor::start on the main thread via
-        // run_on_main_thread and receive the result back on the channel.
-        let (tx, rx) = mpsc::channel::<QaHotkeyEvent>();
-        let (init_tx, init_rx) = mpsc::sync_channel::<Result<QaHotkeyMonitor, QaHotkeyError>>(0);
-        let binding_for_main = binding.clone();
-        if inner
-            .host
-            .run_on_main_thread(move || {
-                let result = QaHotkeyMonitor::start(binding_for_main, tx);
-                let _ = init_tx.send(result);
-            })
-            .is_err()
-        {
-            drop(registration);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            continue;
-        }
-
-        // run_on_main_thread is fire-and-forget; wait for the main thread to
-        // send the result back, capped at 5s so a busy main thread cannot block
-        // the supervisor forever.
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                drop(init_rx);
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] QA hotkey 第 {attempts} 次注册超时（主线程未回执）；3s 后重试"
-                    );
-                }
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-        };
-
-        match init_result {
-            Ok(monitor) => {
-                *inner.qa_hotkey.lock() = Some(monitor);
-                log::info!(
-                    "[coord] QA hotkey listener installed on main thread (after {} attempt(s))",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-qa-hotkey-bridge".into())
-                    .spawn(move || qa_hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                attempts = 0;
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!("[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
-                }
-                drop(registration);
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-pub(super) fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotkeyEvent>) {
-    while let Ok(evt) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-            continue;
-        }
-        let inner_cloned = Arc::clone(&inner);
-        match evt {
-            QaHotkeyEvent::Pressed => {
-                inner
-                    .host
-                    .spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
             }
         }
     }
@@ -472,10 +415,21 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
                             Some(openless_core::InsertOutcome::CopiedFallback) => {
                                 "已复制结果，请手动粘贴"
                             }
+                            Some(openless_core::InsertOutcome::PasteSent) => {
+                                "已发送粘贴，尚未确认输入；原文保留在历史记录"
+                            }
                             _ => "已替换",
                         },
                         _ => return,
                     };
+                    let locale = inner.backend.services().remote_input.status()
+                        .map(|status| status.locale)
+                        .unwrap_or_else(|_| inner.backend.config().locale.clone());
+                    let message = crate::selection::original_recovery_message(
+                        &locale,
+                        snapshot.source_text.as_deref().unwrap_or_default(),
+                        snapshot.insert_outcome == Some(openless_core::InsertOutcome::Inserted),
+                    ).unwrap_or(message);
                     let epoch = emit_selection_polish_capsule(&inner, CapsuleState::Done, message);
                     schedule_selection_polish_capsule_idle(
                         &inner,
@@ -493,18 +447,36 @@ fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
             }
             Err(error) => {
                 log::warn!("[selection-polish] hotkey workflow failed: {error}");
+                let locale = inner.backend.services().remote_input.status()
+                    .map(|status| status.locale)
+                    .unwrap_or_else(|_| inner.backend.config().locale.clone());
                 let message = match error.message.as_str() {
+                    "selectionPolishWriteUnconfirmed" => crate::selection::uncertain_write_message(&locale),
                     "selectionPolishNoSelection" | "selected text must not be empty" => {
                         "未选中内容"
                     }
                     "selectionPolishSelectionTooLong" => {
-                        "选区超过 4000 字，未替换，以免删掉中间没有读到的原文"
+                        "无法完整读取选区，未替换"
                     }
                     "selectionPolishTargetUnavailable" => "目标输入框不可用，请重新选择",
                     "selectionPolishTargetChanged" | "selectionPolishSelectionChanged" => {
                         "选区已变化，未替换"
                     }
-                    _ => "润色失败，请重试",
+                    _ if error.message == "selectionInputTooLarge"
+                        || error.message.contains("llmResponseIncomplete")
+                        || error.message.contains("context_length")
+                        || error.message.contains("maximum context")
+                        || error.message.contains("413") =>
+                    {
+                        crate::selection::capacity_failure_message(&locale)
+                    }
+                    "selectionOriginalCopyFailed" | "selectionOriginalUnavailable" => {
+                        "无法保护原文，已停止，未替换"
+                    }
+                    _ if error.code == openless_core::BackendErrorCode::Persistence => {
+                        "无法保存原文，已停止，未替换"
+                    }
+                    _ => "润色失败，未替换；原文已保存在 App 的历史记录",
                 };
                 let state = if matches!(
                     error.code,
@@ -690,6 +662,8 @@ pub(super) fn less_computer_modifier_bridge_loop(
             // esc_cancel_bridge_loop / combo_abort_bridge_loop (see those
             // functions).
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
+            #[cfg(not(mobile))]
+            HotkeyEvent::TranslationShiftTapped(_) | HotkeyEvent::SkipAutoStyleTapped(_) => {}
             #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed
             | HotkeyEvent::SelectionPolishShortcutReleased => {}
@@ -2014,6 +1988,42 @@ pub(super) fn handle_style_pack_hotkey_pressed(inner: &Arc<Inner>, pack_id: &str
     }
 }
 
+#[cfg(not(mobile))]
+pub(super) fn configure_shift_translation(inner: &Arc<Inner>, monitor: &HotkeyMonitor) {
+    let weak = Arc::downgrade(inner);
+    let style_weak = Arc::downgrade(inner);
+    monitor.set_skip_auto_style_source(Arc::new(move || {
+        let inner = style_weak.upgrade()?;
+        let target = hotkey_runtime_target(&inner);
+        let trigger = crate::shortcut_binding::legacy_modifier_trigger(&target.skip_auto_style)?;
+        let snapshot = inner.backend.snapshot();
+        if !matches!(snapshot.dictation.phase, openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording) { return None; }
+        Some((crate::hotkey::ShiftTranslationContext {
+            session_id: snapshot.dictation.session_id?,
+            preferences_revision: snapshot.preferences_revision,
+            tap_count: 1, held_recording_key: None,
+        }, trigger))
+    }));
+    monitor.set_shift_translation_source(Arc::new(move || {
+        let inner = weak.upgrade()?;
+        let target = hotkey_runtime_target(&inner);
+        if !is_builtin_translation_shift(&target.translation)
+            || matches!(crate::shortcut_binding::legacy_modifier_trigger(&target.dictation),
+                Some(crate::types::HotkeyTrigger::LeftShift | crate::types::HotkeyTrigger::RightShift))
+        { return None; }
+        let snapshot = inner.backend.snapshot();
+        if !matches!(snapshot.dictation.phase,
+            openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording)
+        { return None; }
+        Some(crate::hotkey::ShiftTranslationContext {
+            session_id: snapshot.dictation.session_id?,
+            preferences_revision: snapshot.preferences_revision,
+            tap_count: inner.backend.get_preferences().translation_shift_tap_count(),
+            held_recording_key: None,
+        })
+    }));
+}
+
 pub(super) fn is_builtin_translation_shift(binding: &crate::types::ShortcutBinding) -> bool {
     binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift")
 }
@@ -2026,10 +2036,6 @@ pub(super) fn modifier_shortcut_triggers(
     Option<crate::types::HotkeyTrigger>,
 ) {
     let target = hotkey_runtime_target(inner);
-    let qa_trigger = target
-        .qa
-        .as_ref()
-        .and_then(crate::shortcut_binding::legacy_modifier_trigger);
     let translation_trigger = if is_builtin_translation_shift(&target.translation) {
         None
     } else {
@@ -2039,7 +2045,7 @@ pub(super) fn modifier_shortcut_triggers(
         .selection_polish
         .as_ref()
         .and_then(crate::shortcut_binding::legacy_modifier_trigger);
-    (qa_trigger, selection_polish_trigger, translation_trigger)
+    (None, selection_polish_trigger, translation_trigger)
 }
 
 /// Decides "will translation actually happen" here, not on the read side:
@@ -2217,22 +2223,32 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // esc_cancel_bridge_loop / combo_abort_bridge_loop so they are not
             // stuck in the queue behind the synchronous Released → end_session
             // / Pressed → begin_session flows above (see those functions).
+            #[cfg(not(mobile))]
+            HotkeyEvent::SkipAutoStyleTapped(context) => {
+                if inner.backend.snapshot().preferences_revision == context.preferences_revision {
+                    handle_skip_auto_style_hotkey(&inner, context.session_id);
+                }
+            }
+            #[cfg(not(mobile))]
+            HotkeyEvent::TranslationShiftTapped(context) => {
+                if inner.backend.snapshot().preferences_revision == context.preferences_revision
+                    && is_builtin_translation_shift(&hotkey_runtime_target(&inner).translation)
+                {
+                    let result = inner.backend.toggle_dictation_translation_for_session(context.session_id);
+                    log::info!("[hotkey] standalone Shift session={} result={:?}", context.session_id, result.as_ref().map_err(|error| error.code));
+                }
+            }
             HotkeyEvent::TranslationModifierPressed => {
                 let translation_hotkey = hotkey_runtime_target(&inner_cloned).translation;
-                if is_builtin_translation_shift(&translation_hotkey)
-                    || crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey)
-                        .is_some()
+                if !is_builtin_translation_shift(&translation_hotkey)
+                    && crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey).is_some()
                 {
                     inner.host.block_on(async {
                         arm_translation_if_effective(&inner_cloned).await;
                     });
                 }
             }
-            HotkeyEvent::QaShortcutPressed => {
-                inner.host.block_on(async {
-                    handle_qa_hotkey_pressed(&inner_cloned).await;
-                });
-            }
+            HotkeyEvent::QaShortcutPressed => {}
             #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed => {
                 handle_selection_workspace_hotkey_pressed(&inner_cloned);
@@ -2267,15 +2283,6 @@ pub(super) fn reset_shortcut_held_state(inner: &Arc<Inner>) {
         monitor.reset_held_state();
     }
     let target = hotkey_runtime_target(inner);
-    if let Some(binding) = target.qa.as_ref() {
-        if crate::shortcut_binding::legacy_modifier_trigger(binding).is_none() {
-            if let Some(monitor) = inner.qa_hotkey.lock().as_ref() {
-                if let Err(e) = monitor.update_binding(binding.clone()) {
-                    log::warn!("[coord] reset QA hotkey latch failed: {e}");
-                }
-            }
-        }
-    }
     if !is_builtin_translation_shift(&target.translation)
         && crate::shortcut_binding::legacy_modifier_trigger(&target.translation).is_none()
     {
@@ -2490,7 +2497,6 @@ pub(crate) mod less_computer_test_support {
             less_computer_voice: Mutex::new(None),
             settings_host_gate: Mutex::new(()),
             hotkey_resume_started: AtomicBool::new(false),
-            overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
             vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
@@ -2504,6 +2510,7 @@ pub(crate) mod less_computer_test_support {
             side_aware_combo: Mutex::new(None),
             mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
+            skip_auto_style_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
             quick_note_hotkey: Mutex::new(None),
@@ -2518,7 +2525,6 @@ pub(crate) mod less_computer_test_support {
             voice_edit_host: Arc::new(
                 Mutex::new(voice_edit_session::VoiceEditHostState::default()),
             ),
-            qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
             last_capsule_state: Mutex::new(None),
@@ -2830,6 +2836,9 @@ pub(crate) mod windows_less_computer_tests {
             inserted_chars: None,
             warming: true,
             translation: true,
+            skip_auto_style: false,
+            style_pack_id: None,
+            style_pack_name: None,
             operating: true,
             selection_polish: false,
             qa: false,

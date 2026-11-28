@@ -86,7 +86,7 @@ impl RecordingArchive for Archive {
         self.0.load(Ordering::SeqCst) == 0
     }
     fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
-        Box::pin(async { Ok(vec![0, 1]) })
+        Box::pin(async { Ok([0u8, 1].repeat(1_600)) })
     }
     fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -121,7 +121,7 @@ impl AudioRecorder for Recorder {
         _: Arc<dyn RecordingProgressSink>,
     ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
         self.starts.fetch_add(1, Ordering::SeqCst);
-        consumer.consume_pcm_chunk(&[1, 0]);
+        consumer.consume_pcm_chunk(&[1u8, 0].repeat(1_600));
         let recording = Recording {
             stopped: self.stopped.clone(),
             gate: self.stop_gate.clone(),
@@ -318,6 +318,15 @@ fn backend(
     let mut dependencies = BackendDependencies::unsupported();
     dependencies.host_actions = Arc::new(Host);
     dependencies.qa_runtime = Some(qa);
+    dependencies.selection_polisher =
+        Some(Arc::new(testing::FixtureTextPolisher::successful("unused")));
+    dependencies.selection_runtime = Some(Arc::new(testing::FixtureSelectionRuntime::successful(
+        SelectionCapture {
+            text: String::new(),
+            source_app: None,
+        },
+        InsertOutcome::Inserted,
+    )));
     dependencies.dictation_engine = Arc::new(PipelineDictationEngine::new(
         recorder,
         asr,
@@ -353,7 +362,7 @@ async fn qa_and_selection_voice_never_request_disk_archives() {
         "less",
     ] {
         let plans = Arc::new(Mutex::new(Vec::new()));
-        let recorder = testing::FixtureAudioRecorder::new(vec![vec![1; 320]], Vec::new());
+        let recorder = testing::FixtureAudioRecorder::new(vec![vec![1; 3_200]], Vec::new());
         let (backend, path) = backend(
             Arc::new(ArchivePolicyRecorder {
                 inner: recorder.clone(),
@@ -493,7 +502,7 @@ async fn stable_mode_is_shared_by_dictation_qa_selection_and_less_computer() {
         let starts = Arc::new(AtomicUsize::new(0));
         let (backend, path) = backend(
             Arc::new(testing::FixtureAudioRecorder::new(
-                vec![vec![1; 320]],
+                vec![vec![1; 3_200]],
                 Vec::new(),
             )),
             Arc::new(CountingAsr {
@@ -1257,12 +1266,17 @@ async fn non_inserting_dictation_keeps_gate_while_native_stop_is_in_flight() {
         async move { backend.stop_dictation_session(id).await }
     });
     stopped.acquire().await.unwrap().forget();
-    backend.cancel_dictation(Some(id)).await.unwrap();
+    let cancelling = tokio::spawn({
+        let backend = backend.clone();
+        async move { backend.cancel_dictation(Some(id)).await }
+    });
+    tokio::task::yield_now().await;
     let next = SessionId::new();
     let while_stopping = backend.begin_less_computer_capture(next);
     finishing.abort();
     let _ = finishing.await;
     stop_gate.add_permits(1);
+    cancelling.await.unwrap().unwrap();
     assert_eq!(while_stopping.unwrap_err().code, BackendErrorCode::Busy);
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -1539,7 +1553,7 @@ async fn less_voice_finish_errors_publish_one_safe_error_but_cancellation_does_n
             Arc::new(StopFailure)
         } else {
             Arc::new(testing::FixtureAudioRecorder::new(
-                vec![vec![1, 0]],
+                vec![[1u8, 0].repeat(1_600)],
                 Vec::new(),
             ))
         };

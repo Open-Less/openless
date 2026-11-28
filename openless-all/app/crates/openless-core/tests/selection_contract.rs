@@ -24,6 +24,9 @@ fn write_preferences(backend: &OpenLessBackend, preferences: UserPreferences) {
 #[derive(Clone)]
 struct RecordingSelectionRuntime {
     capture: SelectionCapture,
+    protected: Arc<Mutex<Vec<String>>>,
+    protection_error: Option<BackendError>,
+    history_path: Arc<Mutex<Option<std::path::PathBuf>>>,
     applied: Arc<Mutex<Vec<(SessionId, String, String)>>>,
     apply_outcome: InsertOutcome,
     apply_error: Arc<Mutex<Option<BackendError>>>,
@@ -36,6 +39,9 @@ struct RecordingSelectionRuntime {
 impl RecordingSelectionRuntime {
     fn new(source_text: &str) -> Self {
         Self {
+            protected: Arc::new(Mutex::new(Vec::new())),
+            protection_error: None,
+            history_path: Arc::new(Mutex::new(None)),
             capture: SelectionCapture {
                 text: source_text.to_string(),
                 source_app: Some("Fixture Editor".to_string()),
@@ -78,6 +84,27 @@ impl RecordingSelectionRuntime {
 }
 
 impl SelectionRuntimeAdapter for RecordingSelectionRuntime {
+    fn protect_original(
+        &self,
+        _: SessionId,
+        text: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        let protected = self.protected.clone();
+        let error = self.protection_error.clone();
+        let path = self.history_path.lock().unwrap().clone().unwrap();
+        Box::pin(async move {
+            let history = openless_core::HistoryStore::at_path(path).list()?;
+            assert!(
+                history.iter().any(|row| row.raw_transcript == text),
+                "the full original must already be durable before clipboard protection"
+            );
+            if let Some(error) = error {
+                return Err(error);
+            }
+            protected.lock().unwrap().push(text);
+            Ok(Some(1))
+        })
+    }
     fn capture(
         &self,
         _session_id: SessionId,
@@ -293,7 +320,11 @@ async fn completed_selection_history_survives_a_concurrent_new_capture() {
     let second = second.unwrap();
     drop(receive);
     let history = backend.list_history().unwrap();
-    assert_eq!(history.len(), 1);
+    assert_eq!(history.len(), 2);
+    let history = history
+        .into_iter()
+        .filter(|row| row.id == first.to_string())
+        .collect::<Vec<_>>();
     assert_eq!(history[0].id, first.to_string());
     assert_eq!(history[0].raw_transcript, "source A");
     assert_eq!(history[0].final_text, "output A");
@@ -339,6 +370,7 @@ fn backend_with_selection_parts_and_host(
         "openless-selection-contract-{}",
         uuid::Uuid::new_v4().simple()
     ));
+    *runtime.history_path.lock().unwrap() = Some(data_dir.join("history.json"));
     let mut dependencies = BackendDependencies::unsupported();
     dependencies.selection_runtime = Some(Arc::new(runtime));
     dependencies.selection_polisher = Some(polisher);
@@ -937,80 +969,347 @@ async fn completed_selection_applies_corrections_before_insert_history_and_activ
 }
 
 #[tokio::test]
-async fn oversized_selection_polish_refuses_before_replacing_the_document() {
-    let oversized = "字".repeat(openless_core::prompts::MAX_XML_ENVELOPE_CHARS + 1);
-    let runtime = RecordingSelectionRuntime::new("unused capture");
+async fn every_selection_length_preserves_original_and_reaches_the_model() {
+    for length in [32, 4001, 16001, 48000] {
+        let original = format!(
+            " \t{} UNIQUE_MIDDLE {}\n ",
+            "字".repeat(length / 2),
+            "尾".repeat(length / 2)
+        );
+        let runtime = RecordingSelectionRuntime::new(&original);
+        let polisher = CountingTextPolisher::default();
+        let (backend, data_dir) = backend_with_selection_parts(
+            runtime.clone(),
+            Arc::new(polisher.clone()),
+            Arc::new(UnsupportedCredentialStore),
+        );
+        backend.start().await.unwrap();
+        let id = backend
+            .services()
+            .selection
+            .begin_polish(SelectionPolishRequest {
+                selected_text: None,
+                mode: PolishMode::Formal,
+                instruction: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(polisher.call_count(), 1);
+        assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
+        assert_eq!(runtime.applied()[0].1, original);
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, id.to_string());
+        assert_eq!(history[0].raw_transcript, original);
+        backend.shutdown().await.unwrap();
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn original_protection_failure_never_calls_the_model_or_replaces_the_selection() {
+    let mut runtime = RecordingSelectionRuntime::new(" \noriginal\t ");
+    runtime.protection_error = Some(BackendError::new(
+        BackendErrorCode::Platform,
+        "selectionOriginalCopyFailed",
+    ));
     let polisher = CountingTextPolisher::default();
     let (backend, data_dir) = backend_with_selection_parts(
         runtime.clone(),
         Arc::new(polisher.clone()),
         Arc::new(UnsupportedCredentialStore),
     );
-    backend.start().await.expect("backend should start");
-    let mut preferences = backend.get_preferences();
-    preferences.selection_polish_output_mode = SelectionPolishOutputMode::DirectReplace;
-    write_preferences(&backend, preferences);
-
+    backend.start().await.unwrap();
     let error = backend
         .services()
         .selection
         .begin_polish(SelectionPolishRequest {
-            selected_text: Some(oversized.clone()),
+            selected_text: None,
             mode: PolishMode::Formal,
             instruction: None,
         })
         .await
-        .expect_err("an oversized selection must not be replaced");
-
-    assert_eq!(error.code, BackendErrorCode::InvalidArgument);
-    assert!(error
-        .message
-        .contains(&openless_core::prompts::MAX_XML_ENVELOPE_CHARS.to_string()));
+        .unwrap_err();
+    assert_eq!(error.message, "selectionOriginalCopyFailed");
     assert_eq!(polisher.call_count(), 0);
-    assert!(
-        runtime.applied().is_empty(),
-        "the original selection must stay untouched"
-    );
+    assert!(runtime.applied().is_empty());
     assert_eq!(
-        backend.services().selection.snapshot().await.unwrap().phase,
-        SelectionPhase::Failed
+        backend.list_history().unwrap()[0].raw_transcript,
+        " \noriginal\t "
     );
+    backend.shutdown().await.unwrap();
+    std::fs::remove_dir_all(data_dir).unwrap();
+}
 
-    let cap = openless_core::prompts::MAX_XML_ENVELOPE_CHARS;
-    for length in [cap - 1, cap] {
-        backend
-            .services()
-            .selection
-            .begin_polish(SelectionPolishRequest {
-                selected_text: Some("字".repeat(length)),
-                mode: PolishMode::Formal,
-                instruction: None,
-            })
-            .await
-            .expect("a selection within the envelope cap still polishes");
-    }
-    assert_eq!(polisher.call_count(), 2);
-    assert_eq!(runtime.applied().len(), 2);
-
-    let mut preferences = backend.get_preferences();
-    preferences.selection_polish_style_pack_id =
-        openless_core::BUILTIN_STYLE_PACK_RAW_ID.to_string();
-    write_preferences(&backend, preferences);
-    backend
+#[tokio::test]
+async fn original_persistence_failure_never_copies_calls_the_model_or_writes() {
+    let runtime = RecordingSelectionRuntime::new(" original \n");
+    let polisher = CountingTextPolisher::default();
+    let (backend, directory) = backend_with_selection_parts(
+        runtime.clone(),
+        Arc::new(polisher.clone()),
+        Arc::new(UnsupportedCredentialStore),
+    );
+    backend.start().await.unwrap();
+    std::fs::create_dir(directory.join("history.json")).unwrap();
+    assert!(backend
         .services()
         .selection
         .begin_polish(SelectionPolishRequest {
-            selected_text: Some(oversized.clone()),
-            mode: PolishMode::Raw,
-            instruction: None,
+            selected_text: None,
+            mode: PolishMode::Formal,
+            instruction: None
         })
         .await
-        .expect("oversized raw text must pass through without a model");
-    assert_eq!(polisher.call_count(), 2);
-    assert_eq!(runtime.applied()[2].2, oversized);
+        .is_err());
+    assert_eq!(polisher.call_count(), 0);
+    assert!(runtime.protected.lock().unwrap().is_empty());
+    assert!(runtime.applied().is_empty());
+    backend.shutdown().await.unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
 
-    backend.shutdown().await.expect("backend should stop");
-    let _ = std::fs::remove_dir_all(data_dir);
+#[tokio::test]
+async fn normal_selection_entry_serializes_full_input_and_rejects_incomplete_streams() {
+    const USER_EXAMPLE: &str = include_str!("fixtures/intent-input-comparison.txt");
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    for (length, response, status, succeeds, translation) in [
+        (0, "", "200 OK", true, false),
+        (1, "", "200 OK", true, false),
+        (40, "data: {\"choices\":[{\"delta\":{\"content\":\"complete result\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "200 OK", true, false),
+        (4001, "data: {\"choices\":[{\"delta\":{\"content\":\"complete result\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "200 OK", true, false),
+        (18001, "data: {\"choices\":[{\"delta\":{\"content\":\"complete result\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "200 OK", true, false),
+        (18001, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n", "200 OK", false, false),
+        (18001, "data: {\"choices\":[{\"delta\":{\"content\":\"interrupted\"}}]}\n\n", "200 OK", false, false),
+        (18001, "{\"error\":\"context_length_exceeded\"}", "400 Bad Request", false, false),
+        (18001, "", "200 OK", true, true),
+    ] {
+        let original = if length <= 1 { USER_EXAMPLE.to_owned() } else {
+            format!(" \t{} UNIQUE_MIDDLE_全文 {}\n ", "字".repeat(length / 2), "尾".repeat(length / 2))
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let complete_result = format!(" \t{} RESULT_MIDDLE {}\n ", "成".repeat(9000), "果".repeat(9000));
+        let response = if succeeds {
+            let content = if translation {
+                format!("[[OPENLESS_POLISHED_SOURCE]]\nsource\n[[OPENLESS_TRANSLATION]]\n{complete_result}")
+            } else { complete_result.clone() };
+            format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"content":content},"finish_reason":"stop"}]}))
+        } else if translation {
+            format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"content":"[[OPENLESS_POLISHED_SOURCE]]\nsource\n[[OPENLESS_TRANSLATION]]\ncomplete result"},"finish_reason":"stop"}]}))
+        } else { response.to_owned() };
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" { break; }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") { length = value.trim().parse().unwrap(); }
+                }
+            }
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).await.unwrap();
+            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        });
+        let credentials: Arc<dyn CredentialStore> = Arc::new(InMemoryCredentialStore::default());
+        for (account, value) in [("ark.api_key", "fixture-key"), ("ark.endpoint", endpoint.as_str())] {
+            credentials.write(CredentialKey::new(CredentialNamespace::Llm, Some("ark".into()), account).unwrap(), SecretValue::new(value)).await.unwrap();
+        }
+        let runtime = RecordingSelectionRuntime::new(&original);
+        let polisher = Arc::new(openless_core::SharedCloudTextPolisher::new(credentials.clone()));
+        let (backend, directory) = backend_with_selection_parts(runtime.clone(), polisher, credentials);
+        let mut preferences = backend.get_preferences();
+        preferences.active_llm_provider = "ark".into();
+        let selected_id = if length == 1 {
+            let mut alias = backend.get_style_pack(openless_core::BUILTIN_INTENT_ID).unwrap();
+            alias.id = "fixture.selection-official-alias".into();
+            alias.kind = openless_core::StylePackKind::Imported;
+            backend.create_style_pack(alias).unwrap().id
+        } else { openless_core::BUILTIN_INTENT_ID.into() };
+        if !translation { preferences.selection_polish_style_pack_id = selected_id.clone(); }
+        preferences.multimodal_pipeline_enabled = false;
+        preferences.selection_polish_output_mode = SelectionPolishOutputMode::DirectReplace;
+        write_preferences(&backend, preferences);
+        backend.start().await.unwrap();
+        let result = if translation {
+            backend.services().selection_voice.edit_preview(openless_core::SelectionVoiceEditRequest { owner_session_id: SessionId::new(), capture: SelectionCapture { text: original.clone(), source_app: Some("Fixture Editor".into()) }, instruction: "翻译成英文".into() }).await.map(|_| ())
+        } else {
+            backend.services().selection.begin_polish(SelectionPolishRequest { selected_text: None, mode: PolishMode::Formal, instruction: None }).await.map(|_| ())
+        };
+        assert_eq!(result.is_ok(), succeeds, "{result:?}");
+        if status == "400 Bad Request" {
+            assert_eq!(result.as_ref().unwrap_err().message, "selectionInputTooLarge");
+        }
+        let request = server.await.unwrap();
+        if !translation {
+            let system = request["messages"][0]["content"].as_str().unwrap();
+            let pack = backend.get_style_pack(&selected_id).unwrap();
+            assert!(system.contains(&openless_core::prompt_compose::compose_system_prompt(&pack.selection_prompt, &[])));
+            assert!(!system.contains("本版排版约定（覆盖旧版五层及空层规则）"));
+            assert!(pack.selection_prompt.ends_with(openless_core::DICTATION_REVISION_RULES));
+            assert_eq!(pack.version, "1.4.0");
+            assert_eq!(pack.prompt, pack.selection_prompt);
+            let body = openless_core::prompt_compose::compose_system_prompt(&pack.prompt, &[]);
+            assert_eq!(system.matches(body.as_str()).count(), 1);
+            assert!(system.contains("内部确认最终意思"));
+            assert!(!system.contains("输出会原样替换该选区"));
+            assert_eq!(system.matches(openless_core::DICTATION_REVISION_RULES).count(), 1);
+        }
+        assert_eq!(request["messages"][1]["content"], openless_core::prompts::selection_user_prompt(&original));
+        assert!(request["messages"][1]["content"].as_str().unwrap().contains(
+            if length <= 1 { USER_EXAMPLE } else { "UNIQUE_MIDDLE_全文" }));
+        assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].raw_transcript, original);
+        if !translation {
+            assert_eq!(history[0].style_pack_id.as_deref(),
+                succeeds.then_some(selected_id.as_str()));
+        }
+        assert_eq!(runtime.applied().len(), usize::from(succeeds && !translation));
+        if succeeds { assert_eq!(history[0].final_text, if translation { complete_result.trim() } else { &complete_result }); }
+        else { assert!(history[0].final_text.is_empty()); }
+        backend.shutdown().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn uncertain_native_write_preserves_both_texts_and_cannot_return_to_retryable_preview() {
+    let runtime = RecordingSelectionRuntime::new(" \toriginal\n ").with_apply_error(
+        BackendError::new(BackendErrorCode::OutcomeUnknown, "selectionPolishWriteUnconfirmed"),
+    );
+    let (backend, directory) = backend_with_selection(runtime);
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+    write_preferences(&backend, preferences);
+    backend.start().await.unwrap();
+    let id = backend.services().selection.begin_polish(SelectionPolishRequest {
+        selected_text: None, mode: PolishMode::Formal, instruction: None,
+    }).await.unwrap();
+    let error = backend.services().selection.confirm(id, None).await.unwrap_err();
+    assert_eq!(error.code, BackendErrorCode::OutcomeUnknown);
+    assert_eq!(backend.services().selection.snapshot().await.unwrap().phase, SelectionPhase::Failed);
+    let history = backend.list_history().unwrap();
+    assert_eq!(history[0].raw_transcript, " \toriginal\n ");
+    assert_eq!(history[0].final_text, "polished preview");
+    assert_eq!(history[0].error_code.as_deref(), Some("selectionPolishWriteUnconfirmed"));
+    assert!(backend.services().selection.confirm(id, None).await.is_err());
+    backend.shutdown().await.unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn cancelling_a_preview_preserves_one_original_and_the_existing_result() {
+    let original = format!(" \t{} CANCEL_MIDDLE {}\n ", "字".repeat(9000), "尾".repeat(9000));
+    let runtime = RecordingSelectionRuntime::new(&original);
+    let (backend, directory) = backend_with_selection(runtime.clone());
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+    write_preferences(&backend, preferences);
+    backend.start().await.unwrap();
+    let id = backend.services().selection.begin_polish(SelectionPolishRequest {
+        selected_text: None, mode: PolishMode::Formal, instruction: None,
+    }).await.unwrap();
+    backend.services().selection.cancel(Some(id)).await.unwrap();
+    backend.services().selection.cancel(Some(id)).await.unwrap();
+    let history = backend.list_history().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].raw_transcript, original);
+    assert_eq!(history[0].final_text, "polished preview");
+    assert_eq!(history[0].error_code.as_deref(), Some("selectionCancelled"));
+    assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
+    assert!(runtime.applied().is_empty());
+    backend.shutdown().await.unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn multimodal_selection_sends_the_complete_text_and_rejects_capacity_failures() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    for rejected in [false, true] {
+        let original = format!(" \t{} OMNI_MIDDLE_完整选区 {}\n ", "字".repeat(12000), "尾".repeat(12000));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" { break; }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+            }
+            let mut bytes = vec![0; length];
+            socket.read_exact(&mut bytes).await.unwrap();
+            let (status, response) = if rejected {
+                ("400 Bad Request", serde_json::json!({"error":{"code":"context_length_exceeded"}}))
+            } else {
+                ("200 OK", serde_json::json!({"choices":[{"message":{"content":"complete omni result"},"finish_reason":"stop"}]}))
+            };
+            let response = response.to_string();
+            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        });
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let runtime = RecordingSelectionRuntime::new(&original);
+        let (backend, directory) = backend_with_selection_parts(
+            runtime.clone(),
+            Arc::new(CountingTextPolisher::default()),
+            credentials,
+        );
+        let channel = "dashscope-omni".to_string();
+        backend.set_active_provider(ProviderSlot::Omni, channel.clone()).await.unwrap();
+        for (account, value) in [
+            ("omni.api_key", "fixture-key"),
+            ("omni.endpoint", endpoint.as_str()),
+            ("omni.model", "fixture-text-model"),
+        ] {
+            backend.set_credential(
+                CredentialKey::new(CredentialNamespace::Omni, Some(channel.clone()), account).unwrap(),
+                SecretValue::new(value),
+            ).await.unwrap();
+        }
+        let mut preferences = backend.get_preferences();
+        preferences.multimodal_pipeline_enabled = true;
+        preferences.pipeline_mode = openless_core::shared_types::PipelineMode::Multimodal;
+        preferences.selection_polish_output_mode = SelectionPolishOutputMode::DirectReplace;
+        write_preferences(&backend, preferences);
+        backend.start().await.unwrap();
+        let result = backend.services().selection.begin_polish(SelectionPolishRequest {
+            selected_text: None, mode: PolishMode::Formal, instruction: None,
+        }).await;
+        let request = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await.unwrap().unwrap();
+        assert_eq!(request["messages"][1]["content"], openless_core::prompts::selection_user_prompt(&original));
+        assert_eq!(runtime.protected.lock().unwrap().as_slice(), std::slice::from_ref(&original));
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].raw_transcript, original);
+        if rejected {
+            assert_eq!(result.unwrap_err().message, "selectionInputTooLarge");
+            assert_eq!(history[0].error_code.as_deref(), Some("selectionInputTooLarge"));
+            assert!(history[0].final_text.is_empty());
+            assert!(runtime.applied().is_empty());
+        } else {
+            result.unwrap();
+            assert_eq!(history[0].final_text, "complete omni result");
+            assert_eq!(runtime.applied().len(), 1);
+        }
+        backend.shutdown().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -1254,6 +1553,11 @@ async fn cancellation_discards_late_provider_output_and_preserves_busy_ownership
     assert_eq!(late_error.code, BackendErrorCode::Cancelled);
     assert!(runtime.applied().is_empty());
     assert_eq!(polisher.cancel_count(), 1);
+    let history = backend.list_history().expect("cancelled original stays recoverable");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].raw_transcript, "late source");
+    assert!(history[0].final_text.is_empty());
+    assert_eq!(history[0].error_code.as_deref(), Some("selectionCancelled"));
     assert_eq!(
         backend
             .services()
@@ -1306,10 +1610,9 @@ async fn provider_failure_releases_the_platform_target_and_ends_failed() {
     );
     assert_eq!(runtime.cancel_count(), 1);
     assert!(runtime.applied().is_empty());
-    assert!(backend
-        .list_history()
-        .expect("history should be readable")
-        .is_empty());
+    let history = backend.list_history().expect("history should be readable");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].raw_transcript, "failure source");
 
     backend.shutdown().await.expect("backend should stop");
     let _ = std::fs::remove_dir_all(data_dir);

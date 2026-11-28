@@ -337,17 +337,92 @@ pub struct SelectionCapture {
     pub source_app: Option<String>,
 }
 
+/// Core-issued authority for one capture request. Revocation survives a delayed
+/// host call: an old request owns its own marker, not a bounded tombstone entry
+/// or the host's current generation. It carries no native target or user text.
+#[derive(Debug, Clone)]
+pub struct SelectionCaptureAuthorization {
+    session_id: SessionId,
+    revoked: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SelectionCaptureAuthorization {
+    pub(crate) fn new(session_id: SessionId) -> Self {
+        Self {
+            session_id,
+            revoked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn allows(&self, session_id: SessionId) -> bool {
+        self.session_id == session_id
+            && !self.revoked.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Only Core revokes this marker, before publishing a terminal state or a
+    /// successor. No host code, callbacks, I/O or host locks run at this boundary.
+    pub(crate) fn revoke(&self) {
+        self.revoked.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Platform seam for capturing and replacing the current selection.
 ///
 /// The core owns the session and preview state. Implementations may retain an
 /// opaque platform target internally, keyed by `SessionId`, but must never
 /// expose native handles through this Interface.
 pub trait SelectionRuntimeAdapter: Send + Sync {
+    /// Hosts with shared target registration must check this authority *inside*
+    /// their reservation lock, before invalidating another session or mutating
+    /// the registry. Do not call back into Core from that critical section.
+    /// The default preserves supplied-text/legacy hosts; it checks cancellation
+    /// around capture but does not claim to fence a host's shared registry.
+    fn capture_authorized(
+        &self,
+        session_id: SessionId,
+        supplied_text: Option<String>,
+        authorization: SelectionCaptureAuthorization,
+    ) -> BoxFuture<'static, Result<SelectionCapture, BackendError>> {
+        if !authorization.allows(session_id) {
+            return Box::pin(async {
+                Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture revoked"))
+            });
+        }
+        let capture = self.capture(session_id, supplied_text);
+        Box::pin(async move {
+            if !authorization.allows(session_id) {
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture revoked"));
+            }
+            let result = capture.await;
+            if !authorization.allows(session_id) {
+                return Err(BackendError::new(BackendErrorCode::Cancelled, "selection capture revoked"));
+            }
+            result
+        })
+    }
+
     fn capture(
         &self,
         session_id: SessionId,
         supplied_text: Option<String>,
     ) -> BoxFuture<'static, Result<SelectionCapture, BackendError>>;
+    /// Copy the already-persisted complete original before any model or write.
+    /// Failure must abort the operation. Returns an opaque clipboard ownership
+    /// revision when the host has one. Supplied-text-only preview hosts may
+    /// return None without clipboard access, but must never replace an external
+    /// selection; their original remains in the same history record.
+    fn protect_original(
+        &self,
+        _session_id: SessionId,
+        _text: String,
+    ) -> BoxFuture<'static, Result<Option<u64>, BackendError>> {
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "selectionOriginalCopyFailed",
+            ))
+        })
+    }
     fn apply(
         &self,
         session_id: SessionId,
@@ -678,6 +753,9 @@ pub struct SelectionVoiceApplyTicket {
     pub session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_session_id: Option<SessionId>,
+    /// Opaque host clipboard ownership revision, never a text digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_clipboard_revision: Option<u64>,
     pub source_text: String,
     pub replacement_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -872,6 +950,9 @@ pub struct QaActivity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QaSnapshot {
+    /// Independent of the turn phase: a waiting composer is open but idle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub panel_open: bool,
     pub phase: QaPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<QaActivity>,
@@ -899,6 +980,7 @@ pub struct QaSnapshot {
 impl Default for QaSnapshot {
     fn default() -> Self {
         Self {
+            panel_open: false,
             phase: QaPhase::Idle,
             activity: None,
             session_id: None,
@@ -1038,6 +1120,10 @@ pub trait QaRuntimeAdapter: Send + Sync {
 }
 
 pub trait QaApi: Send + Sync {
+    fn ask_history_sink(&self) -> Option<Arc<crate::ask::AskHistorySink>> {
+        None
+    }
+
     /// Bind restore admission before the service is exposed to runtime callers.
     /// Legacy custom services remain source compatible, but conservatively do
     /// not report restore-safe idleness until they implement both methods.

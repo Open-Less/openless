@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DictationSession } from '../../api/contracts';
+import type { ActivityDay, DictationSession } from '../../api/contracts';
 import type { ProviderKind } from '../../api/providers';
 import type { OverviewSettingsSection } from '../../lib/overviewSetup';
 import { historyStore, useActivityStats, useHistoryRecords } from '../../data/history';
@@ -29,6 +29,7 @@ interface OverviewProps {
 }
 
 const emptyHistory: DictationSession[] = [];
+const emptyActivity: ActivityDay[] = [];
 
 export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   const { t } = useTranslation();
@@ -84,7 +85,15 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
   }, [isMac, modalActive, refreshAll]);
 
   return (
-    <div className="ol-overview-dashboard" data-mobile={mobile || undefined}>
+    <div
+      className="ol-overview-dashboard"
+      data-mobile={mobile || undefined}
+      data-ol-overview-pending={
+        (history.data === null && history.error === null) ||
+        (activity.data === null && activity.error === null) ||
+        undefined
+      }
+    >
       <PageHeader
         compact
         title={t('overview.title')}
@@ -125,9 +134,15 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           onRetry={() => void historyStore.refreshRecords()}
         />
       </section>
-      {!runtime.isMobile && prefs?.showOverviewActivityHeatmap !== false && activity.data && (
-        <ActivityHeatmap activity={activity.data} mobile={mobile} />
-      )}
+      {!runtime.isMobile &&
+        prefs?.showOverviewActivityHeatmap !== false &&
+        (activity.data || !activity.error) && (
+          <ActivityHeatmap
+            activity={activity.data ?? emptyActivity}
+            pending={activity.data === null}
+            mobile={mobile}
+          />
+        )}
     </div>
   );
 }

@@ -124,3 +124,87 @@ test('tabular transcript digits use shaped advances and never overlap', async ({
   for (let i = 0; i < bounds.length - 1; i++)
     expect(bounds[i + 1].left - bounds[i].right).toBeGreaterThan(0.5);
 });
+
+test('Beta WebView traces sampled caption acceptance and callbacks across a long stream and successor', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${fixture}?os=mac&full&transcript&label=capsule&captionTrace`);
+  await page.waitForFunction(() => {
+    const bridge = (window as any).fixture;
+    return bridge.hasListener('backend:event') && bridge.captionTraceReads === 1;
+  });
+  const receipts = () => page.evaluate(() => (window as any).fixture.captionTraceReports);
+  const caption = page.locator('.ol-live-transcript-sr');
+  await page.clock.install();
+  await page.evaluate(() => {
+    (window as any).fixture.emitTo('capsule', 'capsule:state', {
+      state: 'recording',
+      sessionId: 'recording-a',
+    });
+  });
+  const expected = [];
+  for (const [first, last] of [[1, 215], [216, 430], [431, 650]]) {
+    if (first !== 1) await page.clock.fastForward(43_000);
+    await page.evaluate(({ first, last }) => {
+      const bridge = (window as any).fixture;
+      for (let sequence = first; sequence <= last; sequence++) {
+        bridge.emit('backend:event', {
+          sequence,
+          sessionId: 'recording-a',
+          kind: {
+            type: 'transcript_delta',
+            payload: { text: `${sequence * 200}ms ${'x'.repeat(sequence)}`, offset: 0, isFinal: false },
+          },
+        });
+      }
+    }, { first, last });
+    await expect(caption).toHaveText(`${last * 200}ms ${'x'.repeat(last)}`);
+    expected.push(
+      { sessionId: 'recording-a', sequence: first, stage: 'accepted' },
+      { sessionId: 'recording-a', sequence: last, stage: 'render_callback' },
+    );
+    await expect.poll(receipts).toEqual(expected);
+  }
+
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emitTo('capsule', 'capsule:state', { state: 'transcribing', sessionId: 'recording-a' });
+    bridge.emitTo('capsule', 'capsule:state', { state: 'error', sessionId: 'recording-a' });
+  });
+  await expect(caption).toHaveCount(0);
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emitTo('capsule', 'capsule:state', { state: 'recording', sessionId: 'recording-b' });
+    for (const [sessionId, sequence, text] of [
+      ['recording-b', 651, 'new session'],
+      ['recording-a', 652, 'late old delta'],
+    ]) {
+      bridge.emit('backend:event', { sessionId, sequence, kind: {
+        type: 'transcript_delta', payload: { text, offset: 0, isFinal: false },
+      } });
+    }
+  });
+  await expect(caption).toHaveText('new session');
+  await expect.poll(receipts).toEqual([
+    ...expected,
+    { sessionId: 'recording-b', sequence: 651, stage: 'accepted' },
+    { sessionId: 'recording-a', sequence: 652, stage: 'rejected' },
+    { sessionId: 'recording-b', sequence: 651, stage: 'render_callback' },
+  ]);
+});
+
+test('Beta WebView renders captions with tracing disabled by default', async ({ page }) => {
+  await page.goto(`${fixture}?os=mac&full&transcript&label=capsule`);
+  await page.waitForFunction(() => {
+    const bridge = (window as any).fixture;
+    return bridge.hasListener('backend:event') && bridge.captionTraceReads === 1;
+  });
+  await page.evaluate(() => {
+    const bridge = (window as any).fixture;
+    bridge.emitTo('capsule', 'capsule:state', { state: 'recording', sessionId: 'recording-a' });
+    bridge.emit('backend:event', { sessionId: 'recording-a', sequence: 1, kind: {
+      type: 'transcript_delta', payload: { text: 'fixture caption', offset: 0, isFinal: false },
+    } });
+  });
+  await expect(page.locator('.ol-live-transcript-sr')).toHaveText('fixture caption');
+  expect(await page.evaluate(() => (window as any).fixture.captionTraceReports)).toEqual([]);
+});

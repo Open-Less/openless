@@ -93,7 +93,16 @@ export function setTranslationHotkey(binding: ShortcutBinding | null): Promise<v
   });
 }
 
-// binding = null disables (clears the global key), matching set_qa_hotkey (issue #576).
+export function setSkipAutoStyleHotkey(binding: ShortcutBinding | null): Promise<void> {
+  return invokeOrMock('set_skip_auto_style_hotkey', { binding }, () => {
+    mockSetSettings({
+      ...mockSettings,
+      skipAutoStyleHotkey: binding ?? { primary: '', modifiers: [] },
+    });
+  });
+}
+
+// binding = null disables (clears the global key).
 export function setSwitchStyleHotkey(binding: ShortcutBinding | null): Promise<void> {
   return invokeOrMock('set_switch_style_hotkey', { binding }, () => undefined);
 }

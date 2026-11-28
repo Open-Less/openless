@@ -6,4 +6,4 @@ export {
   hideAndroidOverlay,
   getAndroidAccessibilityStatus,
   requestAndroidAccessibilityPermission,
-} from '../../../android/frontend/lib/androidIpc';
+} from '../../../../android/frontend/lib/androidIpc';

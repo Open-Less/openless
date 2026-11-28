@@ -11,7 +11,10 @@ import {
 } from '../../api/history';
 import { historyStore } from '../../data/history';
 import { useHotkeySettings } from '../../data/preferences';
-import { canRetranscribeHistoryEntry } from '../../lib/history-retranscribe';
+import {
+  canRetranscribeHistoryEntry,
+  retranscriptionErrorKey,
+} from '../../lib/history-retranscribe';
 import { getRuntimeOS } from '../../runtime/environment';
 import { audioBytes, recordingFileName } from './audio';
 import { errorMessage, historyTitle, isUserCancelled } from './presentation';
@@ -51,7 +54,7 @@ export function useHistoryEntryActions(
   const handleAudioMissing = useCallback(() => setAudioMissing(true), []);
   const reportAudioError = (
     error: unknown,
-    translation: 'history.retranscribeFailed' | 'history.exportFailed',
+    translation: 'history.exportFailed',
   ) => {
     const message = errorMessage(error);
     if (isUserCancelled(message)) return;
@@ -173,7 +176,17 @@ export function useHistoryEntryActions(
       const result = await retranscribeRecording(item.id);
       if (!result.updatedEntry) setRetranscriptionResult({ sessionId: item.id, text: result.text });
     } catch (error) {
-      reportAudioError(error, 'history.retranscribeFailed');
+      if (active.current) {
+        const message = errorMessage(error);
+        const reasonKey = retranscriptionErrorKey(message);
+        if (reasonKey === 'history.retranscribeErrors.Missing') setAudioMissing(true);
+        if (!isUserCancelled(message)) {
+          notify({
+            state: 'failed',
+            message: t('history.retranscribeFailed', { err: t(reasonKey) }),
+          });
+        }
+      }
     } finally {
       transcribing.current = false;
       setRetranscribing(false);

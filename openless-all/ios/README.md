@@ -1,43 +1,39 @@
-# OpenLess iOS
+# OpenLess iOS Build Guide
 
 [English](README.md) | [简体中文](README.zh.md)
 
-Native iPhone app, keyboard extension, and recording widget. The app uses SwiftUI and UIKit; the keyboard combines UIKit controls with KeyboardKit. The main app owns audio capture, speech recognition, and the shared Rust Core.
+This directory contains the native Swift iPhone app, Chinese/English keyboard extension, recording widget, and `CoreHost` Rust bridge. For general end-user installation and IPA download notes, see <https://openless.top/en/docs/installation/>.
 
-## Version and platform support
+## Platform & Version Baseline
 
-`Config/Version.xcconfig` is the single version source for all three bundles. This integration is **0.1.0 (16)** and preserves the Build 15 keyboard behavior. Update `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` there, then regenerate the project with XcodeGen. Product validation rejects mismatched app/extension versions.
+- **Deployment targets**: iOS **16.0+** for the main app and keyboard extension; iOS **18.0+** for `RecordingWidget` (Live Activity / recording controls).
+- **Architecture & language**: `arm64`, Swift 6.0 (strict concurrency), C++17 (for `RimeBridge`).
+- **Versioning**: iOS maintains independent versioning in `Config/Version.xcconfig` (included by `Config/Base.xcconfig`).
+- **Default identifiers**: Bundle ID `app.openless.ios`, App Group `group.app.openless.ios` (all three targets must share the same App Group when customized).
 
-| Component | Minimum iOS | Responsibility |
-| --- | --- | --- |
-| `OpenLess` | 16 | Settings, speech, processing, history, vocabulary, and styles |
-| `OpenLessKeyboard` | 16 | Typing, candidates, recording gestures, and insertion |
-| `OpenLessRecordingWidget` | 18 | Recording controls and Live Activity integration |
+## Input Modes & Runtime Architecture
 
-The iOS version is independent of the desktop release version. Device builds currently target arm64 iPhone; simulator builds target Apple silicon.
-
-## Input modes
-
-Choose **Voice focused** or **Single keyboard** in Settings. The selection, keyboard height, Chinese/English language, and selected processing style persist across keyboard sessions.
-
-| Mode | Typing and voice behavior |
-| --- | --- |
-| Voice focused | Dedicated voice panel plus Chinese/English typing; long-press space can move the cursor or start recording |
-| Single keyboard | Chinese/English typing with `123`, language switch, wide space, and the host's Return action; hold space to record |
-
-Both modes retain the voice toolbar, processing styles, translation, and system keyboard switching. Held recording offers cancel, translation, and send actions. Single-keyboard mode uses one configured translation output language; recording freezes that selection for the current request. Basic typing works without Full Access. Shared preferences and cross-process voice control require Full Access and matching App Group entitlements.
-
-Chinese composition uses librime with a bounded rime-ice dictionary. Candidates expand into a grid; users can select Chinese candidates or explicitly confirm the typed Latin letters. English uses an offline frequency/context dictionary, `UITextChecker`, and the supplementary `UILexicon`. These are the input engines used by this extension, rather than the system keyboard's complete prediction model. Supplementary entries stay in memory. Key sounds use `UIDevice.playInputClick()`; haptic and sound preferences remain configurable.
-
-Normal speech recognition uses bundled SenseVoice Small int8. Developer settings can select Apple Speech or configure Core ASR/LLM/Omni providers. Recognition language is separate from typing language. Translation and polishing depend on the configured processing provider. Preparing voice access does not start recording.
+- **Keyboard layouts**: Choose in OpenLess Settings between a voice-focused layout or a unified typing keyboard with hold-space dictation, inline translation, and send/cancel gestures.
+- **Engines**: Chinese/English typing uses `RimeBridge` (Objective-C++), on-device local speech uses `Packages/LocalSpeech` (SenseVoice), and cloud ASR / LLM / Multimodal / DeepSeek-suite pipelines run through `CoreHost` (static Rust library `libOpenLessCore`).
+- **Security & privacy boundaries**:
+  - Service credentials stay in the main app's iOS Keychain.
+  - The shared App Group mailbox (`Packages/OpenLessShared`) exchanges bounded commands and results only—never raw audio.
+  - Typing data and Rime user learning stay inside the keyboard container; result insertion checks document identity to prevent stale replay.
+  - Idle state keeps neither the microphone nor an audio render loop active. Runtime-checked PiP/host-return helpers gracefully fall back when unavailable; this source build does not imply App Store review approval.
 
 ## Build from source
 
-Requirements: an Apple silicon Mac, Xcode 27 with its command-line tools selected, Python 3, CMake, Git, and Rustup. Bootstrap installs Rust 1.99.0 and the two iOS targets, and pins native dependencies and XcodeGen. Downloaded speech artifacts and prediction sources are checksum-verified.
+### Prerequisites
 
-Desktop sources under `openless-all/app/` follow `beta` unchanged. `scripts/prepare-core.py` copies the checked-in Core into the ignored `CoreHost/.build/core-source/` directory and applies `CoreHost/Patches/ios-input-contracts.patch` there. The iOS Rust workspace builds and tests that copy. The patch adds the mobile input contracts without changing the Core used by desktop, Android, or Linux. Bootstrap, tests, native builds, and license collection prepare the copy automatically; incompatible upstream changes fail patch validation.
+- macOS with Xcode (configured for iOS 16+ SDKs) and Command Line Tools
+- Rust toolchain with iOS targets (`aarch64-apple-ios`, `aarch64-apple-ios-sim`)
+- Python 3, CMake / C++ toolchain for building Rime dependencies, and XcodeGen (auto-resolved via `scripts/resolve-xcodegen.sh` or `OPENLESS_XCODEGEN_BIN`)
 
-```sh
+### Full Device Build & Unsigned IPA Packaging
+
+`project.yml` is the source of truth for `OpenLess.xcodeproj`. Edit `project.yml` before regenerating the project. Core build scripts copy and patch `openless-core` in isolation so shared desktop/mobile sources are never modified in place.
+
+```bash
 cd openless-all/ios
 ./scripts/bootstrap.sh
 ./scripts/bootstrap-local-speech.sh
@@ -47,53 +43,67 @@ python3 scripts/collect-rust-licenses.py
 python3 scripts/validate-project.py
 ./scripts/build.sh device Release unsigned
 python3 scripts/package-ipa.py DerivedData/Build/Products/Release-iphoneos/OpenLess.app \
-  "$HOME/Downloads/OpenLess-0.1.0-16-unsigned.ipa"
+  "$HOME/Downloads/OpenLess-unsigned.ipa"
 ```
 
-The unsigned IPA is for personal signing. Packaging validates the actual app, keyboard, widget, deployment floors, resource checksums, archive contents, and executable permissions. An existing output is never overwritten.
+- `package-ipa.py` validates the app, keyboard extension, widget, deployment floors, resource checksums, archive layout, and executable permissions, and never overwrites an existing IPA path.
+- Unsigned IPAs are intended for personal signing (e.g., via Xcode or your own developer signing flow).
 
-For the simulator, use `./scripts/build.sh simulator Debug`. `OPENLESS_DERIVED_DATA` selects a build directory and `OPENLESS_XCODEGEN_BIN` selects an installed XcodeGen. `project.yml` generates the checked-in Xcode project; edit the specification before regenerating it.
+### Simulator Build
 
-For Xcode device signing, copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig`, set your team, bundle ID, and App Group, then run `./scripts/build.sh device Personal signed`. All three bundles must use the same App Group. Local signing configuration stays outside Git.
+```bash
+cd openless-all/ios
+./scripts/build.sh simulator Debug
+```
 
-## Enable the keyboard
+Override derived data output with `OPENLESS_DERIVED_DATA` and XcodeGen binary with `OPENLESS_XCODEGEN_BIN`.
 
-1. Install the signed app and open OpenLess to enable voice access.
-2. In iOS Settings, choose General → Keyboard → Keyboards → Add New Keyboard → OpenLess.
-3. Enable Full Access for shared settings and voice control.
-4. Choose the keyboard experience in OpenLess Settings and try it in the app's keyboard editor.
+### Personal Device Signing in Xcode
 
-The main app activates voice when needed and returns to the requesting host when the runtime supports it. Active PiP can keep the session available between recordings. The isolated PiP/host-return compatibility adapters use runtime-checked private selectors and fall back when unavailable; this source build is not an App Store approval claim. Idle state does not keep the microphone or an audio render loop running.
+1. Copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (ignored by Git).
+2. Set your Apple Development Team, unique `OL_BUNDLE_ID`, and matching `OL_APP_GROUP` shared across the app, keyboard extension, and widget.
+3. Build a signed device package:
+
+```bash
+cd openless-all/ios
+./scripts/build.sh device Personal signed
+```
+
+## Enable the Keyboard on iPhone
+
+1. Install the signed app and launch **OpenLess** once to grant microphone access and configure your speech/LLM pipeline (<https://openless.top/en/docs/setup/>).
+2. Open iOS **Settings → General → Keyboard → Keyboards → Add New Keyboard → OpenLess**.
+3. Tap **OpenLess** in the keyboard list and turn on **Allow Full Access** (required for shared settings and voice control via the App Group).
+4. Pick your preferred keyboard mode in OpenLess Settings and verify dictation in the built-in test field.
 
 ## Verification
 
-```sh
+```bash
+cd openless-all/ios
 ./scripts/test.sh unit
 python3 scripts/test-interface-resources.py
 python3 scripts/validate-project.py
 IOS_SIMULATOR_ID=<dedicated-simulator-id> ./scripts/test.sh ui
 ```
 
-Unit checks cover shared contracts, preferences, delivery, the mobile Core and Rust Host, real Rime composition, predictions, and audio conversion. UI tests exercise the installed extension and host app; use a dedicated simulator because they configure keyboard settings. `test.sh all` combines both suites. The GitHub iOS workflow verifies that shared sources remain unchanged, runs mobile Swift/Rust/resource tests, builds the native dependencies and unsigned iPhone app, and validates the IPA. Runtime microphone, routing, and PiP behavior still require device testing.
+- `unit` verifies shared contracts, preferences, delivery guarantees, mobile Core/Rust host, Rime composition, predictions, and audio conversion.
+- `ui` exercises the installed keyboard extension and host app on a dedicated simulator (use a dedicated simulator because it modifies keyboard settings). `./scripts/test.sh all` runs both.
+- Hardware microphone routing, live audio capture, and PiP behavior require physical device testing.
 
-## Source layout
+## Source Layout
 
 | Directory | Contents |
 | --- | --- |
-| `App/` | Native app, settings, speech, audio, and Core integration |
-| `Keyboard/` | Typing layout, candidates, voice gestures, and host insertion |
-| `RecordingWidget/` | Recording controls and Live Activity views |
-| `PlatformShared/` | Shared native controls and container access |
-| `Packages/OpenLessShared/` | Versioned mailbox, preferences, gestures, and delivery contracts |
-| `Packages/LocalSpeech/` | SenseVoice runtime adapter used by the app |
-| `CoreHost/` | iOS Rust workspace, C ABI, and isolated Core source patch |
-| `RimeBridge/` | Objective-C++ composition and vocabulary bridge |
-| `Resources/` | Brand assets, localization, input schemas, privacy manifest, and licenses |
-| `AppTests/`, `UITests/`, `Tests/` | Native, extension, and runtime fixtures |
-| `scripts/` | Dependency bootstrap, builds, packaging, and validation |
+| `App/` | Native SwiftUI host app, settings, speech pipeline, audio capture, and Core bridge |
+| `Keyboard/` | Typing layout, candidate bar, hold-space voice gestures, and text insertion |
+| `RecordingWidget/` | iOS 18+ recording controls and Live Activity views |
+| `PlatformShared/` | Shared native controls and App Group container helpers |
+| `Packages/OpenLessShared/` | Versioned mailbox, preferences, gesture, and delivery contracts |
+| `Packages/LocalSpeech/` | On-device SenseVoice speech runtime adapter |
+| `CoreHost/` | iOS Rust workspace, C ABI bridge, and isolated Core patch |
+| `RimeBridge/` | Objective-C++ Rime composition and vocabulary bridge |
+| `Resources/` | Brand assets, `en.lproj` / `zh-Hans.lproj` localization, input schemas, privacy manifest, and `Licenses/` |
+| `AppTests/`, `UITests/`, `Tests/` | Native unit, extension UI, and runtime test fixtures |
+| `scripts/` | Dependency bootstrap, Rime/Core builds, IPA packaging, and validation scripts |
 
-Credentials stay in the main app's Keychain. The App Group carries bounded commands and results, not raw audio. Typing data and Rime learning stay in the keyboard container; supplementary system words are not persisted. Result insertion validates the current document and records delivery to prevent stale replay.
-
-Dependency sources are pinned in `bootstrap.sh`, `bootstrap-local-speech.sh`, and `build-predictions.py`. Preserve `Resources/Licenses/` when distributing the app. `collect-rust-licenses.py` refreshes attribution from the locked runtime dependency graph.
-
-Generated frameworks, models, compiled dictionaries, logs, screenshots, signing configuration, and IPA archives are excluded from Git. Source assets, fixtures, lockfiles, and dependency notices are part of the project.
+Dependency revisions are pinned in `scripts/bootstrap.sh`, `scripts/bootstrap-local-speech.sh`, and `scripts/build-predictions.py`. Preserve `Resources/Licenses/` when redistributing; refresh Rust dependency attributions with `python3 scripts/collect-rust-licenses.py`.

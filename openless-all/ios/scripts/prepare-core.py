@@ -68,8 +68,10 @@ def main():
             for sibling in (APP / "crates").iterdir():
                 if sibling.name != "openless-core" and sibling.is_dir():
                     (staging / "crates" / sibling.name).symlink_to(sibling, target_is_directory=True)
-            for name in ["assets", "contract", "src"]:
+            # Core integration tests also compile the production target-range helper.
+            for name in ["assets", "contract", "src", "src-tauri"]:
                 (staging / name).symlink_to(APP / name, target_is_directory=True)
+            (staging / "linux-egui").symlink_to(IOS.parent / "linux/egui", target_is_directory=True)
             environment = os.environ.copy()
             for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]:
                 environment.pop(name, None)

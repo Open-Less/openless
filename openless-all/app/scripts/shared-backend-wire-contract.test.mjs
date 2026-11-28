@@ -4,8 +4,6 @@ import { readFile } from 'node:fs/promises';
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const [
   types,
-  qaPanel,
-  qaApi,
   inputApi,
   remoteIpc,
   remoteStatusController,
@@ -37,6 +35,7 @@ const [
   channelList,
   providerLabels,
   historyCommand,
+  historyRetranscription,
   credentialCommands,
   credentialPersistence,
   hostDocumentMacos,
@@ -48,8 +47,6 @@ const [
   mobileSelection,
 ] = await Promise.all([
   read('src/lib/types.ts'),
-  read('src/features/qa/QaPanel.tsx'),
-  read('src/api/qa.ts'),
   read('src/api/input.ts'),
   read('src/lib/ipc/remote-server.ts'),
   read('src/features/remote-input/useRemoteInputStatus.ts'),
@@ -74,17 +71,18 @@ const [
   read('src-tauri/src/commands/dictionary.rs'),
   read('src-tauri/src/commands/style_packs.rs'),
   read('src-tauri/src/android/native_bridge.rs'),
-  read('android/kotlin/OpenLessNative.kt'),
-  read('android/kotlin/OpenLessOverlayService.kt'),
+  read('../android/kotlin/OpenLessNative.kt'),
+  read('../android/kotlin/OpenLessOverlayService.kt'),
   read('src/app/App.tsx'),
   read('src/features/providers/ProvidersSection.tsx'),
   read('src/features/providers/ChannelList.tsx'),
   read('src/features/providers/labels.ts'),
   read('src-tauri/src/commands/history.rs'),
+  read('src-tauri/src/commands/history_retranscription.rs'),
   read('src-tauri/src/commands/credentials.rs'),
   read('src-tauri/src/persistence/credentials.rs'),
   read('src-tauri/src/host_document/macos.rs'),
-  read('linux-egui/src/fcitx5.rs'),
+  read('../linux/egui/src/fcitx5.rs'),
   Promise.all([
     read('src/features/local-asr/index.tsx'),
     read('src/features/local-asr/useLocalModelTrial.ts'),
@@ -97,7 +95,6 @@ const [
 
 for (const kind of ['awaiting_approval', 'cancelled', 'error']) {
   assert.match(types, new RegExp(`\\| '${kind}'`), `QaStateKind must retain ${kind}`);
-  assert.match(qaPanel, new RegExp(`case '${kind}':`), `QaPanel must handle ${kind}`);
 }
 for (const field of [
   'sessionId',
@@ -112,13 +109,6 @@ for (const field of [
 ]) {
   assert.match(types, new RegExp(`\\b${field}\\?`), `QaStatePayload is missing ${field}`);
 }
-assert.match(
-  qaApi,
-  /listenTauriEvent<QaStatePayload>\('qa:state'/,
-  'QA API must type the state event',
-);
-assert.match(qaPanel, /listenQaStateChanges\(/, 'QA must subscribe through its domain API');
-
 const remoteStatus = remoteIpc.match(/export interface RemoteInputStatus \{([\s\S]*?)\n\}/)?.[1];
 assert.ok(remoteStatus, 'RemoteInputStatus interface must exist');
 const remoteFields = [...remoteStatus.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]);
@@ -465,9 +455,11 @@ assert.match(
 );
 
 const invokeHandlers = await read('src-tauri/src/lib.rs');
-const accessibilityVocabulary = await read('android/kotlin/OpenLessAccessibilityService.kt');
-const vocabularyReceiver = await read('android/kotlin/OpenLessVocabularyReceiver.kt');
-const androidManifestGenerator = await read('scripts/merge-android-overlay-manifest.mjs');
+const accessibilityVocabulary = await read('../android/kotlin/OpenLessAccessibilityService.kt');
+const vocabularyReceiver = await read('../android/kotlin/OpenLessVocabularyReceiver.kt');
+const androidManifestGenerator = await read(
+  '../android/scripts/merge-android-overlay-manifest.mjs',
+);
 assert.doesNotMatch(
   accessibilityVocabulary,
   /OpenLessNative\.native(?:Vocabulary|ObserveVocabulary|PendingVocabulary|ResolveVocabulary)/,
@@ -594,11 +586,26 @@ assert.doesNotMatch(
 );
 assert.match(
   historyCommand,
+  /#\[path = "history_retranscription\.rs"\]\s*mod retranscription;/,
+  'the history command must load its production retranscription implementation',
+);
+assert.match(
+  historyCommand,
+  /pub async fn retranscribe_recording\([^]*?let path = existing_recording_path\(&session_id\)\?;\s*let _lease = crate::persistence::acquire_recording_archive_lease\(&path\);\s*retranscription::retranscribe_recording_with_path\(&core, session_id, \|_\| Ok\(path\)\)\.await/,
+  'the registered history command must resolve and lease the recording before forwarding Core and its path',
+);
+assert.match(
+  historyRetranscription,
+  /pub\(super\) async fn retranscribe_recording_with_path\(\s*core: &openless_core::OpenLessBackend,/,
+  'the extracted implementation must receive the same shared Core backend',
+);
+assert.match(
+  historyRetranscription,
   /core\.apply_history_retranscription\(/,
   'history retranscription mutation and attribution must be owned by Core',
 );
 assert.doesNotMatch(
-  historyCommand,
+  `${historyCommand}\n${historyRetranscription}`,
   /entry\.(?:raw_transcript|final_text|asr_provider|asr_model|llm_provider|llm_model|polish_ms)\s*=/,
   'the Tauri history command must not mutate retranscription records',
 );
@@ -735,7 +742,7 @@ assert.match(
   'the exported JNI symbol and receiver signature must match the Kotlin Voice Edit declaration',
 );
 const androidJni = await read('src-tauri/src/android/jni.rs');
-const warmupActivity = await read('android/kotlin/OpenLessBackendWarmupActivity.kt');
+const warmupActivity = await read('../android/kotlin/OpenLessBackendWarmupActivity.kt');
 assert.match(
   androidJni,
   /"com\.openless\.app\.OpenLessBackendWarmupActivity",\s*"backgroundForVoiceEdit",\s*"\(Landroid\/content\/Context;\)Z"/,
@@ -755,6 +762,54 @@ assert.match(
   mobileSelection,
   /capture_selection_insertion_target[^]*?reactivate_selection_insertion_target[^]*?true/,
   'mobile dictation insertion must provide a no-op target restore without enabling Selection Polish',
+);
+
+const styleIpc = await read('src/lib/ipc/dictation.ts');
+const hotkeyIpc = await read('src/lib/ipc/hotkeys.ts');
+const sharedTypes = await read('crates/openless-core/src/shared_types.rs');
+const styleContext = await read('crates/openless-core/src/dictation_context.rs');
+const styleCommand = await read('src-tauri/src/commands/dictation.rs');
+const mockSettings = await read('src/lib/ipc/mock-data.ts');
+for (const field of ['skipAutoStyleHotkey', 'skipAutoStylePickerEnabled']) {
+  assert.ok(types.includes(field), `frontend preferences must declare ${field}`);
+  assert.ok(mockSettings.includes(field), `mock settings must include ${field}`);
+}
+for (const command of [
+  'get_dictation_style_target',
+  'update_dictation_style',
+  'get_capsule_style_menu_request',
+  'set_capsule_style_menu',
+]) {
+  assert.ok(styleIpc.includes(`'${command}'`));
+  assert.ok(styleCommand.includes(`fn ${command}`));
+  assert.ok(invokeHandlers.includes(`commands::${command}`));
+}
+assert.match(hotkeyIpc, /'set_skip_auto_style_hotkey',\s*\{ binding \}/);
+assert.match(
+  coreApi,
+  /pub fn update_dictation_style\([^]*?session_id: SessionId,[^]*?selection: DictationStyleSelection/,
+);
+assert.match(coreApi, /pub fn toggle_dictation_style_for_session/);
+assert.match(coreApi, /style_choices\.available = available_styles/);
+assert.match(styleContext, /pub enum DictationStyleSelection/);
+for (const mode of ['automatic', 'skipAuto', 'stylePack'])
+  assert.ok(types.includes(`mode: "${mode}"`) || types.includes(`mode: '${mode}'`));
+for (const field of ['skip_auto_style', 'style_pack_id', 'style_pack_name']) {
+  assert.ok(sharedTypes.includes(`pub ${field}:`), `capsule must expose ${field}`);
+}
+assert.match(coordinatorHotkeys, /set_skip_auto_style_source/);
+const restoreHotkeys = await read('src-tauri/src/coordinator/restore_runtime.rs');
+assert.match(restoreHotkeys, /inner\.skip_auto_style_hotkey\.lock\(\)\.take\(\)/);
+assert.match(
+  restoreHotkeys,
+  /update_skip_auto_style_hotkey_on_main\(inner, target\.skip_auto_style\.clone\(\)\)/,
+  'absolute restore and journal rollback must install the target style binding',
+);
+assert.match(coordinatorHotkeys, /handle_skip_auto_style_hotkey\(&inner, context\.session_id\)/);
+assert.match(styleCommand, /set_capsule_picker_menu_impl\(window, coord, session_id, open, true, request_id, menu_id\)/);
+assert.match(
+  styleCommand,
+  /set_capsule_picker_menu_impl\(window, coord, session_id, open, false, None, None\)/,
 );
 
 console.log('shared-backend-wire-contract.test.mjs passed');

@@ -18,7 +18,7 @@ use crate::domains::{
     SelectionVoicePhase, SelectionVoicePreview, SelectionVoicePreviewUpdate, SelectionVoiceRoute,
     SelectionVoiceSnapshot, VoiceEditPlanRequest, VoiceEditPlanResult,
 };
-use crate::edit_plan::{apply_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan};
+use crate::edit_plan::{apply_selection_edit_plan, parse_edit_plan_with_priority, EditOperation, EditPlan};
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{BackendEventKind, BackendEventPublisher};
 use crate::ports::{TextPolisher, TextStreamChunk, TextStreamSink};
@@ -46,6 +46,7 @@ struct StoredPreview {
 
 #[derive(Default)]
 struct SelectionVoiceState {
+    original_clipboard_revision: Option<u64>,
     phase: SelectionVoicePhase,
     session_id: Option<SessionId>,
     selection: Option<SelectionCapture>,
@@ -153,6 +154,7 @@ pub(crate) struct SelectionVoiceService {
 }
 
 struct SelectionVoiceWorkflow {
+    runtime: Option<Arc<dyn crate::domains::SelectionRuntimeAdapter>>,
     preferences: Arc<PreferencesStore>,
     correction_rules: Arc<CorrectionRuleStore>,
     credential_store: Arc<dyn CredentialStore>,
@@ -188,6 +190,7 @@ impl SelectionVoiceService {
         style_packs: Arc<StylePackStore>,
         polisher: Option<Arc<dyn TextPolisher>>,
         voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
+        runtime: Option<Arc<dyn crate::domains::SelectionRuntimeAdapter>>,
     ) -> Self {
         Self {
             state: Arc::new(RwLock::new(SelectionVoiceState::default())),
@@ -204,6 +207,7 @@ impl SelectionVoiceService {
                 events,
             }),
             workflow: Arc::new(SelectionVoiceWorkflow {
+                runtime,
                 preferences,
                 correction_rules,
                 credential_store,
@@ -277,6 +281,22 @@ impl SelectionVoiceService {
             ));
         }
         let session_id = SessionId::new();
+        let original_saved = !capture.text.is_empty();
+        if original_saved {
+            let prefs = self.persistence.preferences.get();
+            let record = crate::selection_service::original_record(
+                session_id,
+                &capture,
+                PolishMode::Light,
+                HistorySource::SelectionVoiceEdit,
+                self.persistence.clock.now_utc().to_rfc3339(),
+            );
+            self.persistence.history.upsert_with_retention(
+                record,
+                prefs.history_retention_days,
+                prefs.history_max_entries,
+            )?;
+        }
         // QA has already captured its input and owns any voice lease itself.
         // A pure edit starts in Processing without inventing a second recorder;
         // actual Selection Voice capture still reserves audio until Preview.
@@ -295,11 +315,33 @@ impl SelectionVoiceService {
         };
         let snapshot = state.snapshot();
         drop(state);
+        if original_saved { self.persistence.publish_history_changed(); }
         self.events.publish(
             Some(session_id),
             BackendEventKind::SelectionVoiceStateChanged(snapshot),
         );
         Ok(session_id)
+    }
+
+    async fn protect_original(
+        &self,
+        session_id: SessionId,
+        text: String,
+    ) -> Result<(), BackendError> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let runtime = self.workflow.runtime.as_ref().ok_or_else(|| {
+            BackendError::new(BackendErrorCode::Unsupported, "selectionOriginalCopyFailed")
+        })?;
+        let revision = runtime.protect_original(session_id, text).await?;
+        let mut state = self
+            .state
+            .write()
+            .expect("selection voice state lock poisoned");
+        state.ensure_session(session_id)?;
+        state.original_clipboard_revision = revision;
+        Ok(())
     }
 
     /// Generate plain draft text for Compose intent and surface ReadyToApply.
@@ -429,6 +471,7 @@ impl SelectionVoiceWorkflow {
         };
         context.polish.translation_active = translation_only;
         context.polish.edit_plan_input = edit_plan_input;
+        context.polish.selection_input = edit_plan_input || translation_only;
         context.polish.translation_target_language = translation_target.unwrap_or_default().into();
         context.polish.hotwords.clear();
         context.polish.cursor_context = None;
@@ -531,15 +574,6 @@ impl SelectionVoiceWorkflow {
         draft: &str,
         instruction: &str,
     ) -> Result<EditPlan, BackendError> {
-        // Edit plans and translation rewrites are applied to the full draft, but
-        // the prompt envelope only shows the first MAX_XML_ENVELOPE_CHARS. A
-        // FullRewrite of that prefix would erase the rest in DirectReplace.
-        if crate::prompts::exceeds_xml_envelope_cap(draft) {
-            return Err(BackendError::new(
-                BackendErrorCode::InvalidArgument,
-                crate::prompts::truncated_selection_replacement_message(),
-            ));
-        }
         let preferences = self.preferences.get();
         if selection_voice_instruction_looks_like_translation(instruction) {
             let target = infer_selection_voice_translation_target(instruction, &preferences);
@@ -552,7 +586,7 @@ impl SelectionVoiceWorkflow {
 
         let safe_field_context =
             crate::prompts::sanitize_for_xml_envelope(field_context, "field_context");
-        let safe_draft = crate::prompts::sanitize_for_xml_envelope(draft, "draft");
+        let safe_draft = crate::prompts::escape_xml_envelope(draft, "draft");
         let safe_instruction =
             crate::prompts::sanitize_for_xml_envelope(instruction, "instruction");
         let input = format!(
@@ -665,13 +699,18 @@ impl SelectionVoiceWorkflow {
         let plan = self
             .generate_edit_plan(session_id, draft, instruction)
             .await?;
-        let preview = apply_edit_plan(draft, &plan)
+        let preview = apply_selection_edit_plan(draft, &plan)
             .map_err(|error| BackendError::new(BackendErrorCode::Provider, error.to_string()))?;
         Ok((preview, plan.summary))
     }
 }
 
 impl SelectionVoicePersistence {
+    fn publish_history_changed(&self) {
+        let revision = self.history_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        self.events.publish(None, BackendEventKind::HistoryChanged(HistoryChange { revision }));
+    }
+
     fn corrected_text(&self, text: String) -> String {
         match self.correction_rules.list() {
             Ok(rules) => apply_correction_rules(&text, &rules),
@@ -751,7 +790,7 @@ impl SelectionVoicePersistence {
         };
         let activity_app = session.app_name.clone();
         let mut changed = false;
-        match self.history.append_with_retention(
+        match self.history.upsert_with_retention(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
@@ -954,7 +993,15 @@ impl SelectionVoiceApi for SelectionVoiceService {
         capture: SelectionCapture,
     ) -> BoxFuture<'static, Result<SessionId, BackendError>> {
         let service = self.clone();
-        Box::pin(async move { service.begin_session(capture, SelectionVoicePhase::Recording) })
+        Box::pin(async move {
+            let text = capture.text.clone();
+            let id = service.begin_session(capture, SelectionVoicePhase::Recording)?;
+            if let Err(error) = service.protect_original(id, text).await {
+                let _ = service.cancel(Some(id)).await;
+                return Err(error);
+            }
+            Ok(id)
+        })
     }
 
     fn mark_processing(
@@ -1357,6 +1404,15 @@ impl SelectionVoiceApi for SelectionVoiceService {
                 None => service
                     .begin_session(request.capture.clone(), SelectionVoicePhase::Processing)?,
             };
+            if created_session {
+                if let Err(error) = service
+                    .protect_original(session_id, request.capture.text.clone())
+                    .await
+                {
+                    let _ = service.cancel(Some(session_id)).await;
+                    return Err(error);
+                }
+            }
             let generated = service
                 .workflow
                 .generate_preview(session_id, &request.capture.text, &instruction)
@@ -1433,7 +1489,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
                     &polished,
                 )
                 .await?;
-            let preview = apply_edit_plan(&request.draft, &plan).map_err(|error| {
+            let preview = apply_selection_edit_plan(&request.draft, &plan).map_err(|error| {
                 BackendError::new(BackendErrorCode::Provider, error.to_string())
             })?;
             if preview.trim().is_empty() {
@@ -1454,6 +1510,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
         &self,
         update: SelectionVoicePreviewUpdate,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let persistence = Arc::clone(&self.persistence);
         let state = Arc::clone(&self.state);
         let events = self.events.clone();
         let voice_sessions = Arc::clone(&self.voice_sessions);
@@ -1469,6 +1526,23 @@ impl SelectionVoiceApi for SelectionVoiceService {
             if state.phase != SelectionVoicePhase::Processing {
                 return Err(invalid_state("selection voice is not processing"));
             }
+            if let Some(capture) = state
+                .selection
+                .as_ref()
+                .filter(|capture| !capture.text.is_empty())
+            {
+                crate::selection_service::require_original_record(
+                    &persistence.history,
+                    update.session_id,
+                    &capture.text,
+                )?;
+                crate::selection_service::update_original_record(
+                    &persistence.history,
+                    update.session_id,
+                    Some(&update.text),
+                    "selectionPreview",
+                )?;
+            }
             state.preview = Some(StoredPreview {
                 owner_session_id: update.owner_session_id,
                 text: update.text,
@@ -1482,6 +1556,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
             voice_sessions.release(update.session_id);
             let snapshot = state.snapshot();
             drop(state);
+            persistence.publish_history_changed();
             events.publish(
                 Some(update.session_id),
                 BackendEventKind::SelectionVoiceStateChanged(snapshot),
@@ -1599,11 +1674,25 @@ impl SelectionVoiceApi for SelectionVoiceService {
             .selection
             .as_ref()
             .ok_or_else(|| invalid_state("selection voice capture is unavailable"))?;
+        if !selection.text.is_empty() {
+            crate::selection_service::require_original_record(
+                &self.persistence.history,
+                session_id,
+                &selection.text,
+            )?;
+            crate::selection_service::update_original_record(
+                &self.persistence.history,
+                session_id,
+                Some(&replacement_text),
+                "selectionPreview",
+            )?;
+        }
         let ticket = SelectionVoiceApplyTicket {
             ticket_id: SessionId::new(),
             session_id,
             owner_session_id,
             source_text: selection.text.clone(),
+            original_clipboard_revision: state.original_clipboard_revision,
             replacement_text,
             summary,
             source_app: selection.source_app.clone(),
@@ -1620,6 +1709,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
         state.phase = SelectionVoicePhase::Applying;
         let snapshot = state.snapshot();
         drop(state);
+        self.persistence.publish_history_changed();
         self.events.publish(
             Some(session_id),
             BackendEventKind::SelectionVoiceStateChanged(snapshot),
@@ -1718,6 +1808,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
         &self,
         session_id: Option<SessionId>,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let persistence = Arc::clone(&self.persistence);
         let state = Arc::clone(&self.state);
         let events = self.events.clone();
         let polisher = self.workflow.polisher.clone();
@@ -1744,6 +1835,12 @@ impl SelectionVoiceApi for SelectionVoiceService {
                     state.recording_control.take(),
                 )
             };
+            let _ = crate::selection_service::update_original_record(
+                &persistence.history,
+                active_session,
+                None,
+                "selectionCancelled",
+            );
             events.publish(
                 Some(active_session),
                 BackendEventKind::SelectionVoiceStateChanged(snapshot),

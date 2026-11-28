@@ -21,7 +21,6 @@ use crate::persistence::{
 };
 use crate::qa_adapter::TauriQaHostContext;
 
-use crate::qa_hotkey::{QaHotkeyError, QaHotkeyEvent, QaHotkeyMonitor};
 use crate::types::{
     CapsulePayload, CapsuleState, CapsuleStyle, HotkeyCapability, HotkeyStatus, HotkeyStatusState,
 };
@@ -30,8 +29,9 @@ mod capsule_focus;
 #[path = "coordinator/dictation_core.rs"]
 mod dictation;
 mod hotkey_loops;
+#[cfg(not(mobile))]
+mod style_menu;
 mod native_dictation_key;
-mod qa;
 mod restore_runtime;
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub(crate) mod selection_voice_session;
@@ -45,6 +45,8 @@ pub(crate) use capsule_focus::{
     restore_focus_target_if_possible,
 };
 use hotkey_loops::*;
+#[cfg(not(mobile))]
+use style_menu::*;
 use native_dictation_key::try_install_mouse_dictation;
 
 // Instance-local Less Computer replay source used by the compatibility command.
@@ -64,7 +66,6 @@ pub(super) fn qa_event_target() -> &'static str {
 #[cfg(any(debug_assertions, test))]
 use dictation::{handle_pressed, handle_released};
 use dictation::{handle_pressed_edge, handle_released_edge, handle_trigger_combined};
-use qa::handle_qa_hotkey_pressed;
 
 /// Window size of the vocabulary suggestion card (logical points).
 ///
@@ -491,11 +492,26 @@ fn shared_backend_from_stores(
         style_packs: style_packs.core(),
     };
     #[cfg(not(mobile))]
-    let usage_recorder = match openless_core::usage_ledger::UsageLedger::open(config.data_dir.join("service-usage.json"))
-        .and_then(|ledger| openless_core::usage_ledger::UsageRecorder::start(Arc::new(ledger)))
-    {
-        Ok(recorder) => Some(Arc::new(recorder)),
-        Err(error) => { log::warn!("service usage unavailable: {error}"); None }
+    let usage_recorder = {
+        let usage_app = Arc::clone(&app);
+        let notify_usage_changed = move || {
+            crate::tauri_coordinator_host::notify_service_usage_changed(&usage_app);
+        };
+        match openless_core::usage_ledger::UsageLedger::open(
+            config.data_dir.join("service-usage.json"),
+        )
+        .and_then(|ledger| {
+            openless_core::usage_ledger::UsageRecorder::start_with_change_listener(
+                Arc::new(ledger),
+                notify_usage_changed,
+            )
+        }) {
+            Ok(recorder) => Some(Arc::new(recorder)),
+            Err(error) => {
+                log::warn!("service usage unavailable: {error}");
+                None
+            }
+        }
     };
     #[cfg(mobile)]
     let usage_recorder = None;
@@ -578,7 +594,6 @@ struct Inner {
     /// explicit runtime target out of order.
     settings_host_gate: Mutex<()>,
     hotkey_resume_started: AtomicBool,
-    overlay_qa_handoff: tokio::sync::Mutex<()>,
     inserter: TextInserter,
     /// Whether the suggestion card is currently occupying the capsule window.
     ///
@@ -605,6 +620,7 @@ struct Inner {
     /// Mouse4/Mouse5 听写监听（WH_MOUSE_LL）；与 combo / side-aware 互斥。
     mouse_dictation: Mutex<Option<crate::mouse_dictation::MouseDictationMonitor>>,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    skip_auto_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     quick_note_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -630,7 +646,6 @@ struct Inner {
     /// Selection voice QA (issue #118): global shortcut listener parallel to
     /// the dictation hotkey (global-hotkey crate). `None` means the feature is
     /// off or installation has not succeeded yet.
-    qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
     coding_agent_modifier_hotkey: Mutex<Option<HotkeyMonitor>>,
     coding_agent_combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     /// State from the most recent emit_capsule, for introspection/tests only
@@ -780,7 +795,6 @@ impl Coordinator {
                 hotkey_runtime_target: Mutex::new(hotkey_runtime_target),
                 settings_host_gate: Mutex::new(()),
                 hotkey_resume_started: AtomicBool::new(false),
-                overlay_qa_handoff: tokio::sync::Mutex::new(()),
                 inserter: TextInserter::new(),
                 vocab_card_visible: AtomicBool::new(false),
             vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
@@ -794,6 +808,7 @@ impl Coordinator {
                 side_aware_combo: Mutex::new(None),
                 mouse_dictation: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
+                skip_auto_style_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
                 quick_note_hotkey: Mutex::new(None),
@@ -809,7 +824,6 @@ impl Coordinator {
                 voice_edit_host: Arc::new(Mutex::new(
                     voice_edit_session::VoiceEditHostState::default(),
                 )),
-                qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
                 coding_agent_combo_hotkey: Mutex::new(None),
                 last_capsule_state: Mutex::new(None),
@@ -822,6 +836,8 @@ impl Coordinator {
             });
             #[cfg(all(not(mobile), target_os = "windows"))]
             bind_qa_selection_voice_target(&qa_context, &inner.selection_voice_host);
+            #[cfg(not(mobile))]
+            configure_style_menu(&inner);
             Self { inner }
         }
     }
@@ -922,7 +938,6 @@ impl Coordinator {
             hotkey_runtime_target: Mutex::new(hotkey_runtime_target),
             settings_host_gate: Mutex::new(()),
             hotkey_resume_started: AtomicBool::new(false),
-            overlay_qa_handoff: tokio::sync::Mutex::new(()),
             inserter: TextInserter::new(),
             vocab_card_visible: AtomicBool::new(false),
             vocab_card_epoch: crate::vocab_card_placement::PresentationEpoch::default(),
@@ -936,6 +951,7 @@ impl Coordinator {
             side_aware_combo: Mutex::new(None),
             mouse_dictation: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
+                skip_auto_style_hotkey: Mutex::new(None),
             switch_style_hotkey: Mutex::new(None),
             open_app_hotkey: Mutex::new(None),
             quick_note_hotkey: Mutex::new(None),
@@ -949,7 +965,6 @@ impl Coordinator {
             voice_edit_host: Arc::new(
                 Mutex::new(voice_edit_session::VoiceEditHostState::default()),
             ),
-            qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
             last_capsule_state: Mutex::new(None),
@@ -961,6 +976,7 @@ impl Coordinator {
             shutdown: AtomicBool::new(false),
         });
         bind_qa_selection_voice_target(&qa_context, &selection_voice_host);
+        configure_style_menu(&inner);
         Self { inner }
     }
 
@@ -979,7 +995,12 @@ impl Coordinator {
     }
     pub(crate) async fn finalize_voice_edit_from_overlay(&self) -> Result<(), String> {
         voice_edit_session::from_overlay(&self.inner).await?;
-        self.inner.host.show_voice_edit();
+        // The recording is already owned by the session. A panel show failure
+        // must not be reported as a failed capture, or Android offers a retry
+        // that the consumed recording can no longer satisfy.
+        if let Err(error) = self.inner.host.show_voice_edit() {
+            log::warn!("[voice-edit] overlay panel show failed: {error}");
+        }
         Ok(())
     }
     pub(crate) async fn finish_voice_edit_dictation(
@@ -1032,6 +1053,10 @@ impl Coordinator {
     }
 
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
+        #[cfg(not(mobile))]
+        if self.inner.host.ask_owns_capsule() {
+            return;
+        }
         let captured_revision = self.inner.host.capsule_revision();
         let _ = self.present_core_capsule_at_revision(payload, None, captured_revision);
     }
@@ -1062,8 +1087,7 @@ impl Coordinator {
                 || self.inner.selection_polish_capsule_active.load(Ordering::SeqCst)
                 || self.inner.vocab_card_visible.load(Ordering::SeqCst)
                 || self.inner.qa_context.is_panel_visible()
-                || self.inner.backend.less_computer_active_session().is_some()
-                || crate::recording_companion::claimed();
+                || self.inner.backend.less_computer_active_session().is_some();
             if !crate::capsule_feedback::can_present_feedback(
                 *self.inner.last_capsule_state.lock(),
                 self.inner.backend.snapshot().dictation.phase,
@@ -1114,8 +1138,26 @@ impl Coordinator {
         payload: CapsulePayload,
         expected_epoch: Option<u64>,
     ) -> Option<u64> {
+        #[cfg(not(mobile))]
+        if self.inner.host.ask_owns_capsule() {
+            return None;
+        }
         let captured_revision = self.inner.host.capsule_revision();
         self.present_core_capsule_at_revision(payload, expected_epoch, captured_revision)
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn present_ask_capsule(&self, payload: CapsulePayload) {
+        let Some(id) = &payload.session_id else { return };
+        let revision = self.inner.host.claim_ask_capsule(id);
+        let _ = self.present_core_capsule_at_revision(payload, None, revision);
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) async fn dispatch_ask_passthrough(&self, edge: openless_core::DictationHotkeyEdge) {
+        if let Err(error) = dictation::dispatch(&self.inner, edge).await {
+            log::warn!("[ask] ordinary shortcut dispatch failed: {error}");
+        }
     }
 
     fn present_core_capsule_at_revision(
@@ -1278,11 +1320,16 @@ impl Coordinator {
                 if inner.backend.ensure_runtime_ready().is_ok() {
                     let coord = Coordinator { inner };
                     coord.start_hotkey_listener();
-                    coord.start_qa_hotkey_listener();
                     #[cfg(not(mobile))]
                     coord.start_selection_polish_hotkey_listener();
                     coord.start_combo_hotkey_listener();
                     coord.start_translation_hotkey_listener();
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    {
+                        let style_inner = Arc::clone(&coord.inner);
+                        std::thread::Builder::new().name("openless-style-hotkey-supervisor".into())
+                            .spawn(move || skip_auto_style_hotkey_supervisor_loop(style_inner)).ok();
+                    }
                     coord.start_switch_style_hotkey_listener();
                     coord.start_open_app_hotkey_listener();
                     coord.start_quick_note_hotkey_listener();
@@ -1320,40 +1367,12 @@ impl Coordinator {
         self.inner.hotkey.lock().take();
     }
 
-    /// Starts the QA hotkey supervisor (issue #118), parallel to
-    /// `start_hotkey_listener`: a daemon thread retries registration every 3s
-    /// on failure (the user may have changed the combo).
-    pub fn start_qa_hotkey_listener(&self) {
-        qa::install_recording_companion(&self.inner);
-    }
-
     pub fn stop_coding_agent_hotkey_listener(&self) {
         take_coding_agent_hotkeys_on_main_thread(&self.inner);
     }
 
     pub(crate) fn update_coding_agent_hotkey_binding(&self) -> Result<(), String> {
         update_coding_agent_hotkey_binding_now(&self.inner)
-    }
-
-    pub fn stop_qa_hotkey_listener(&self) {
-        // QaHotkeyMonitor::drop bottoms out in Carbon RemoveEventHotKey on
-        // macOS, which requires the main thread. The RunEvent::Exit callback is
-        // not guaranteed to run on the AppKit main thread; a drop that lands on
-        // a tokio worker triggers macOS dispatch_assert_queue_fail SIGTRAP.
-        // Wrap it in run_on_main_thread so the drop happens on the main
-        // thread; when the AppHandle is already None, drop directly (worst case
-        // is a crash at exit time anyway). See issue #169.
-        let inner = Arc::clone(&self.inner);
-        if self
-            .inner
-            .host
-            .run_on_main_thread(move || {
-                inner.qa_hotkey.lock().take();
-            })
-            .is_err()
-        {
-            self.inner.qa_hotkey.lock().take();
-        }
     }
 
     #[cfg(not(mobile))]
@@ -1406,6 +1425,15 @@ impl Coordinator {
 
     pub fn stop_translation_hotkey_listener(&self) {
         take_translation_hotkey_on_main_thread(&self.inner);
+    }
+
+    pub fn stop_skip_auto_style_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        if self.inner.host.run_on_main_thread(move || {
+            inner.skip_auto_style_hotkey.lock().take();
+        }).is_err() {
+            self.inner.skip_auto_style_hotkey.lock().take();
+        }
     }
 
     pub fn start_switch_style_hotkey_listener(&self) {
@@ -1474,88 +1502,6 @@ impl Coordinator {
     /// 用户在设置里改了 QA 组合键时调用。先持久化（由 prefs.set 完成），
     /// 然后通知活着的 monitor 重新注册；monitor 不存在时 supervisor 会自然
     /// 在下一次循环里读到新的 prefs。
-    pub(crate) fn update_qa_hotkey_binding(&self) {
-        let target = hotkey_runtime_target(&self.inner);
-        let Some(binding) = target.qa else {
-            // The user disabled the feature -> drop the monitor directly. The
-            // drop must happen on the main thread, or Carbon unregister fails
-            // / is UB.
-            let inner_clone = Arc::clone(&self.inner);
-            if self
-                .inner
-                .host
-                .run_on_main_thread(move || {
-                    inner_clone.qa_hotkey.lock().take();
-                })
-                .is_err()
-            {
-                self.inner.qa_hotkey.lock().take();
-            }
-            log::info!("[coord] QA hotkey 已关闭");
-            self.update_modifier_shortcut_bindings();
-            return;
-        };
-        if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
-            let inner_clone = Arc::clone(&self.inner);
-            if self
-                .inner
-                .host
-                .run_on_main_thread(move || {
-                    inner_clone.qa_hotkey.lock().take();
-                })
-                .is_err()
-            {
-                self.inner.qa_hotkey.lock().take();
-            }
-            self.update_modifier_shortcut_bindings();
-            log::info!("[coord] QA hotkey uses modifier-only listener");
-            return;
-        }
-        self.update_modifier_shortcut_bindings();
-        // The global-hotkey crate's manager.register/unregister must run on
-        // the main thread; off-thread, Carbon registration appears to succeed
-        // but events are never dispatched.
-        let inner_clone = Arc::clone(&self.inner);
-        let binding_for_main = binding.clone();
-        if self
-            .inner
-            .host
-            .run_on_main_thread(move || {
-                // Path 1: a monitor already exists -> swap the binding on the
-                // main thread.
-                if let Some(monitor) = inner_clone.qa_hotkey.lock().as_ref() {
-                    if let Err(e) = monitor.update_binding(binding_for_main.clone()) {
-                        log::warn!("[coord] update QA hotkey binding 失败: {e}");
-                    }
-                    return;
-                }
-                // Path 2: not installed yet -> reinstall on the main thread
-                // (the supervisor also retries, but this way the hotkey takes
-                // effect as soon as the set_qa_hotkey command returns).
-                let (tx, rx) = mpsc::channel::<QaHotkeyEvent>();
-                match QaHotkeyMonitor::start(binding_for_main, tx) {
-                    Ok(monitor) => {
-                        *inner_clone.qa_hotkey.lock() = Some(monitor);
-                        log::info!(
-                            "[coord] QA hotkey listener installed on main thread (via update)"
-                        );
-                        let bridge_inner = Arc::clone(&inner_clone);
-                        std::thread::Builder::new()
-                            .name("openless-qa-hotkey-bridge".into())
-                            .spawn(move || qa_hotkey_bridge_loop(bridge_inner, rx))
-                            .ok();
-                    }
-                    Err(e) => {
-                        log::warn!("[coord] update QA hotkey binding 失败: {e}");
-                    }
-                }
-            })
-            .is_err()
-        {
-            log::warn!("[coord] update QA hotkey binding: AppHandle 未 bind，跳过");
-        }
-    }
-
     pub(crate) fn update_translation_hotkey_binding(&self) {
         if let Err(e) = self.try_update_translation_hotkey_binding() {
             log::warn!("[coord] update translation hotkey binding 失败: {e}");
@@ -1642,19 +1588,6 @@ impl Coordinator {
         }
     }
 
-    /// Label of the current QA shortcut for the frontend Settings (e.g.
-    /// "Cmd+Shift+;"). Returns an empty string when `qa_hotkey == None`; the UI
-    /// shows "not enabled" for it.
-    pub fn qa_hotkey_label(&self) -> String {
-        self.inner
-            .backend
-            .get_preferences()
-            .qa_hotkey
-            .as_ref()
-            .map(|b| b.display_label())
-            .unwrap_or_default()
-    }
-
     /// After saving, syncs style, window size, and click region without
     /// waiting for the next recording state event.
     pub fn sync_capsule_style_from_preferences(&self) {
@@ -1705,6 +1638,8 @@ impl Coordinator {
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
+                #[cfg(not(mobile))]
+                configure_shift_translation(&self.inner, &monitor);
                 let adapter = monitor.kind();
                 let inner_clone = Arc::clone(&self.inner);
                 std::thread::Builder::new()
@@ -1759,10 +1694,10 @@ impl Coordinator {
         let previous = &change.previous;
         let next = &change.next;
         *self.inner.hotkey_runtime_target.lock() = next.clone();
-        if previous.dictation != next.dictation || previous.qa_companion_key != next.qa_companion_key {
-            crate::recording_companion::configure(next.dictation.clone(), next.qa_companion_key.clone());
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if previous.skip_auto_style != next.skip_auto_style {
+            try_update_skip_auto_style_hotkey_binding(&self.inner)?;
         }
-
         if previous.translation != next.translation {
             self.try_update_translation_hotkey_binding()?;
         }
@@ -1776,9 +1711,6 @@ impl Coordinator {
         if previous.dictation != next.dictation || previous.dictation_mode != next.dictation_mode {
             self.try_update_native_dictation_binding()?;
             self.update_modifier_shortcut_bindings();
-        }
-        if previous.qa != next.qa {
-            self.update_qa_hotkey_binding();
         }
         if previous.switch_style != next.switch_style {
             self.update_switch_style_hotkey_binding();
@@ -1913,85 +1845,9 @@ impl Coordinator {
         switch_to_previous_style(&self.inner);
     }
 
-    pub async fn open_qa_from_overlay(&self) -> Result<(), String> {
-        log::info!("[coord] overlay QA open requested");
-        self.inner
-            .backend
-            .services()
-            .qa
-            .start_question()
-            .await
-            .map_err(|error| error.message)
-    }
-
-    pub async fn finalize_qa_from_overlay(&self) -> Result<(), String> {
-        let Ok(_handoff) = self.inner.overlay_qa_handoff.try_lock() else {
-            return Ok(());
-        };
-        let backend = &self.inner.backend;
-        let snapshot = backend.snapshot().dictation;
-        if let Some(session_id) = snapshot.session_id {
-            if !matches!(
-                snapshot.phase,
-                openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
-            ) {
-                return Err("当前语音仍在处理中，请稍后再试".into());
-            }
-            // Capture the source before either transcription or the QA panel
-            // can change focus. Only owned text/app metadata crosses threads.
-            let capture = tauri::async_runtime::spawn_blocking(|| {
-                let (capture, _) = crate::selection::resolve_selection_workspace_capture();
-                capture.map(|value| (value.text, value.source_app))
-            })
-            .await
-            .map_err(|error| format!("capture QA selection: {error}"))?;
-            let result = backend
-                .stop_dictation_for_qa(session_id)
-                .await
-                .map_err(|error| error.message)?;
-            let (selection_text, selection_source_app) = match capture {
-                Some((text, app)) => (Some(text), app),
-                None => (None, None),
-            };
-            return backend
-                .services()
-                .qa
-                .submit_captured_text(openless_core::QaInput {
-                    text: result.raw_text,
-                    selection_text,
-                    selection_source_app,
-                })
-                .await
-                .map_err(|error| error.message);
-        }
-        let qa = backend
-            .services()
-            .qa
-            .snapshot()
-            .await
-            .map_err(|error| error.message)?;
-        if let (openless_core::QaPhase::Recording, Some(session_id)) = (qa.phase, qa.session_id) {
-            backend
-                .services()
-                .qa
-                .stop_recording(session_id)
-                .await
-                .map_err(|error| error.message)
-        } else {
-            self.open_qa_from_overlay().await
-        }
-    }
-
-    /// QA toggle for the CLI entry point: reuses the modifier-only QA hotkey
-    /// edge handler. Same semantics as `handle_qa_hotkey_pressed` — Idle →
-    /// open the panel / Recording → finalize / Processing → ignore. A fallback
-    /// entry point when the desktop shortcut forwards to CLI.
-    pub async fn cli_toggle_qa_panel(&self) {
-        handle_qa_hotkey_pressed(&self.inner).await;
-    }
-
     pub fn set_shortcut_recording_active(&self, active: bool) {
-        crate::recording_companion::suspend(active);
+        #[cfg(not(mobile))]
+        crate::ask_window::hotkey::set_suspended(active);
         self.inner
             .shortcut_recording_active
             .store(active, Ordering::SeqCst);
@@ -2067,7 +1923,8 @@ mod core_capsule_tests {
 }
 
 #[cfg(not(mobile))]
-fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: u64, delay_ms: u64) {
+fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, epoch: Option<u64>, delay_ms: u64) {
+    let Some(epoch) = epoch else { return };
     let inner = Arc::clone(inner);
     let spawner = inner.host.clone();
     spawner.spawn(async move {

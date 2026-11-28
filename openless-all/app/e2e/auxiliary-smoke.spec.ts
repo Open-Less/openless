@@ -6,7 +6,6 @@ test('auxiliary window entries load without blank-page exceptions or startup vid
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   for (const kind of [
-    'qa',
     'selection-voice-intent',
     'voice-edit',
     'less-computer',
@@ -19,7 +18,7 @@ test('auxiliary window entries load without blank-page exceptions or startup vid
     await expect(page.locator('.ol-first-frame')).toHaveCount(0);
     await expect(page.locator('video')).toHaveCount(0);
     // Active business surfaces render content; retired agent URLs remain inert.
-    if (['qa', 'voice-edit'].includes(kind)) {
+    if (['voice-edit'].includes(kind)) {
       expect(await page.locator('#root').textContent()).not.toBe('');
     }
     if (['less-computer', 'less-computer-glow'].includes(kind)) {

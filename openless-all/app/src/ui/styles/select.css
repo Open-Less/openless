@@ -4,7 +4,7 @@
   justify-content: space-between;
   gap: 8px;
   height: 32px;
-  min-width: 160px;
+  min-width: min(160px, 100%);
   max-width: 100%;
   padding: 0 10px;
   border: 0.5px solid transparent;
@@ -140,26 +140,11 @@ html[data-ol-input='pointer'] .ol-select-trigger:focus-visible {
   border: 0;
   background: transparent;
 }
-.ol-select-search {
+.ol-field.ol-select-search {
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  width: auto;
+  height: 34px;
   margin: 1px 1px 4px;
-  padding: 0 9px;
-  min-height: 34px;
-  border: 0.5px solid var(--ol-line-strong);
-  border-radius: var(--ol-control-radius);
-  background: var(--ol-select-trigger-bg);
-}
-.ol-select-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
 }
 .ol-select-empty {
   padding: 18px 10px;

@@ -29,7 +29,8 @@ test('voice edit creation leaves the synchronous IPC handler and retains main-on
     command,
     /#\[cfg\(target_os = "windows"\)\]\s*#\[tauri::command\]\s*pub async fn voice_edit_window_open\(/,
   );
-  assert.match(body, /show_voice_edit\(\);[\s\S]*Ok\(\(\)\)/);
+  assert.match(body, /spawn_blocking\(move \|\| host\.show_voice_edit\(\)\)/);
+  assert.match(body, /\.await\s*\.map_err\([\s\S]*\)\?/);
   assert.doesNotMatch(
     body,
     /start_voice_edit_session\(/,
@@ -48,7 +49,7 @@ test('non-Windows keeps its synchronous command and main-only presentation contr
   const body = command.slice(start, end);
   assert.match(body, /window\.label\(\) != "main"/);
   assert.ok(body.indexOf('return Err(') < body.indexOf('show_voice_edit()'));
-  assert.match(body, /show_voice_edit\(\);\s*Ok\(\(\)\)/);
+  assert.match(body, /coord\.tauri_host\(\)\.show_voice_edit\(\)\s*\}/);
   assert.doesNotMatch(body, /start_voice_edit_session\(|commit_voice_edit/);
 });
 

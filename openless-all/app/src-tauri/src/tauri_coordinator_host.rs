@@ -55,7 +55,7 @@ fn capsule_transcript_rail_position(
     translation_active: bool,
     transcript_visible: bool,
 ) -> Option<CapsuleTranscriptRailPosition> {
-    if !transcript_visible && (!translation_active || style == CapsuleStyle::Siri) {
+    if !transcript_visible && (!translation_active || matches!(style, CapsuleStyle::Siri | CapsuleStyle::Classic)) {
         return None;
     }
     match style {
@@ -75,17 +75,10 @@ fn capsule_transcript_rail_position(
             const BODY_BOTTOM_INSET: f64 = 16.0;
             const BODY_HEIGHT: f64 = 32.0;
             const RAIL_HEIGHT: f64 = 52.0;
-            const RAIL_GAP: f64 = 8.0;
-            const BADGE_HEIGHT: f64 = 28.0;
-            const BADGE_GAP: f64 = 8.0;
+            const RAIL_GAP: f64 = 24.0;
             let body_top = HOST_HEIGHT - BODY_BOTTOM_INSET - BODY_HEIGHT;
             let gap = RAIL_GAP;
-            let height = if transcript_visible { RAIL_HEIGHT } else { 0.0 }
-                + if translation_active {
-                    BADGE_HEIGHT + if transcript_visible { BADGE_GAP } else { 0.0 }
-                } else {
-                    0.0
-                };
+            let height = RAIL_HEIGHT;
             let top_offset = body_top - RAIL_GAP - height;
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
@@ -180,14 +173,21 @@ fn capsule_control_hit_rect(
         ),
         CapsuleStyle::Siri => unreachable!(),
     };
-    let _ = transcript_visible;
-    let scale =
-        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     // Windows clips the native input region as well as CSS. Include the language
-    // picker only while translation is active; the transcript remains click-through.
+    // picker (at the top above any transcript rail) only while translation is
+    // active; the transcript itself remains in the click-through rail HWND.
     let picker_visible = style == CapsuleStyle::Classic && translation_active;
     let interactive_width = if picker_visible { 260.0 } else { logical_body_width };
-    let interactive_height = logical_body_height + if picker_visible { 36.0 } else { 0.0 };
+    let interactive_height = if picker_visible {
+        logical_body_height
+            + 24.0
+            + 28.0
+            + if transcript_visible { 52.0 + 8.0 } else { 0.0 }
+    } else {
+        logical_body_height
+    };
+    let scale =
+        (window_width as f64 / logical_host_width).min(window_height as f64 / logical_host_height);
     let body_width = (interactive_width * scale).round() as i32;
     let body_height = (interactive_height * scale).round() as i32;
     let bottom_inset = (logical_bottom_inset * scale).round() as i32;
@@ -410,7 +410,7 @@ pub(crate) fn show_capsule_window_for_recording<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
+pub(crate) fn set_capsule_window_topmost_no_activate<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     show: bool,
 ) -> bool {
@@ -748,6 +748,7 @@ struct CapsuleMenuFrame {
     session_id: openless_core::SessionId,
     position: tauri::PhysicalPosition<i32>,
     size: tauri::PhysicalSize<u32>,
+    style_menu_id: Option<String>,
 }
 
 fn capsule_menu_geometry(y: i32, height: u32, work_top: i32, scale: f64) -> (i32, u32) {
@@ -1115,16 +1116,26 @@ impl TauriCapsuleWindow {
     }
 
     fn restore_translation_menu(&self, owner: Option<(&str, openless_core::SessionId)>) -> Result<bool, String> {
+        self.restore_picker_menu(owner.map(|(label, session)| (label, session, None)))
+    }
+
+    fn restore_picker_menu(&self, owner: Option<(&str, openless_core::SessionId, Option<&str>)>) -> Result<bool, String> {
         let frame = {
             let mut slot = self.state.translation_menu.lock();
-            if let Some((label, session_id)) = owner {
-                if !slot.as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id) { return Ok(false); }
+            if let Some((label, session_id, style_menu_id)) = owner {
+                if !slot.as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id
+                    && frame.style_menu_id.as_deref() == style_menu_id) { return Ok(false); }
             }
             slot.take()
         };
         let Some(frame) = frame else { return Ok(false); };
         #[cfg(not(mobile))]
-        crate::hotkey::set_capsule_menu_open(false);
+        {
+            crate::hotkey::set_capsule_menu_open(false);
+            if let Some(menu_id) = &frame.style_menu_id {
+                crate::capsule_style_menu::close(&frame.label, frame.session_id, menu_id);
+            }
+        }
         self.invalidate_layout();
         if let Some(window) = self.app.get_webview_window(&frame.label) {
             window.set_size(frame.size).map_err(|error| error.to_string())?;
@@ -1146,19 +1157,31 @@ impl TauriCapsuleWindow {
             }
             return Ok(());
         }
+        self.reserve_picker_geometry(label, session_id, None)
+    }
+
+    fn reserve_picker_geometry(&self, label: String, session_id: openless_core::SessionId, style_menu_id: Option<String>) -> Result<(), String> {
         if self.state.qa_voice_active.load(Ordering::SeqCst) { return Err("qa_owns_voice_surface".into()); }
-        if self.state.translation_menu.lock().as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id) { return Ok(()); }
+        if self.state.translation_menu.lock().as_ref().is_some_and(|frame| frame.label == label && frame.session_id == session_id
+            && frame.style_menu_id == style_menu_id) { return Ok(()); }
         self.restore_translation_menu(None)?;
         let window = self.app.get_webview_window(&label).ok_or("capsule_window_unavailable")?;
+        if style_menu_id.is_some() && !window.is_visible().map_err(|e| e.to_string())? {
+            return Err("capsule_window_hidden".into());
+        }
         let position = window.outer_position().map_err(|error| error.to_string())?;
         let size = window.inner_size().map_err(|error| error.to_string())?;
         let scale = window.scale_factor().map_err(|error| error.to_string())?;
         let work_top = window.current_monitor().map_err(|error| error.to_string())?
             .map(|monitor| monitor.work_area().position.y).unwrap_or(position.y - (320.0 * scale) as i32);
         let (top, height) = capsule_menu_geometry(position.y, size.height, work_top, scale);
-        *self.state.translation_menu.lock() = Some(CapsuleMenuFrame {label, session_id, position, size});
         #[cfg(not(mobile))]
-        crate::hotkey::set_capsule_menu_open(true);
+        let translation_menu = style_menu_id.is_none();
+        *self.state.translation_menu.lock() = Some(CapsuleMenuFrame {label, session_id, position, size, style_menu_id});
+        #[cfg(not(mobile))]
+        // The legacy Esc bypass belongs to translation only. Style uses its
+        // committed owner router, including recording/global-key precedence.
+        crate::hotkey::set_capsule_menu_open(translation_menu);
         self.stop_layout_watch();
         self.hide_transcript_overlay();
         let result = (|| -> tauri::Result<()> {
@@ -1178,8 +1201,56 @@ impl TauriCapsuleWindow {
         Ok(())
     }
 
+    #[cfg(not(mobile))]
+    pub(crate) fn set_style_menu_open(
+        &self, label: String, session_id: openless_core::SessionId, open: bool,
+        request_id: Option<String>, menu_id: Option<String>,
+    ) -> Result<Option<crate::capsule_style_menu::Owner>, String> {
+        use crate::capsule_style_menu as menu;
+        if !open {
+            let menu_id = menu_id.ok_or("capsule_style_menu_owner_required")?;
+            self.restore_style_menu_owner(&menu::ClosedEvent { session_id, menu_id, window_label: label })?;
+            return Ok(None);
+        }
+        let owner = menu::reservation(&label, session_id, request_id.as_deref())?;
+        let already_open = menu::owner_current(&owner);
+        self.reserve_picker_geometry(label, session_id, Some(owner.menu_id.clone()))?;
+        if let Err(error) = menu::commit(owner.clone(), request_id.as_deref()) {
+            let _ = self.restore_style_menu_owner(&menu::ClosedEvent { session_id,
+                menu_id: owner.menu_id.clone(), window_label: owner.window_label.clone() });
+            return Err(error);
+        }
+        if already_open { return Ok(Some(owner)); }
+        let owner_for_watch = owner.clone();
+        let host = self.app.state::<Arc<crate::coordinator::Coordinator>>().tauri_host();
+        tauri::async_runtime::spawn(async move {
+            // No AppHandle/window crosses this timer's thread; validation and
+            // geometry restoration are queued to the native main thread.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+                if !menu::owner_current(&owner_for_watch) { break; }
+                if !host.queue_style_menu_event(menu::Event::Validate(owner_for_watch.clone())) { break; }
+            }
+        });
+        Ok(Some(owner))
+    }
+
+    #[cfg(not(mobile))]
+    fn restore_style_menu_owner(&self, owner: &crate::capsule_style_menu::ClosedEvent) -> Result<(), String> {
+        if self.restore_picker_menu(Some((&owner.window_label, owner.session_id, Some(&owner.menu_id))))?
+            && self.state.capsule_visible.load(Ordering::SeqCst) {
+            self.start_layout_watch();
+            self.refresh_style();
+            self.sync_capsule_mirrors();
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_size(&self, width: f64, height: f64) -> tauri::Result<()> {
         // Cards temporarily borrow this window; their geometry belongs to the card until released.
+        let _ = self.restore_translation_menu(None);
+        #[cfg(not(mobile))]
+        crate::capsule_style_menu::invalidate();
         self.stop_layout_watch();
         if let Some(window) = self.window() {
             window.set_size(tauri::LogicalSize::new(width, height))?;
@@ -1500,6 +1571,8 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn hide(&self) -> tauri::Result<()> {
+        #[cfg(not(mobile))]
+        crate::capsule_style_menu::invalidate();
         let _ = self.restore_translation_menu(None);
         self.state.capsule_visible.store(false, Ordering::SeqCst);
         self.stop_layout_watch();
@@ -2114,7 +2187,13 @@ impl TauriCapsuleWindow {
         style: CapsuleStyle,
         reassert_spaces: bool,
     ) {
-        if payload.state != CapsuleState::Recording || !payload.translation {
+        let style_menu = self.state.translation_menu.lock().as_ref()
+            .is_some_and(|frame| frame.style_menu_id.is_some());
+        let style_session_current = self.state.translation_menu.lock().as_ref().is_some_and(|frame|
+            payload.session_id.as_deref() == Some(frame.session_id.to_string().as_str()));
+        if if style_menu {
+            payload.state != CapsuleState::Recording || payload.selection_polish || !style_session_current
+        } else { payload.state != CapsuleState::Recording || !payload.translation } {
             let _ = self.restore_translation_menu(None);
         }
         self.state.cache_style(style);
@@ -2213,6 +2292,14 @@ impl TauriCapsuleWindow {
     }
 }
 
+#[cfg(not(mobile))]
+pub(crate) fn notify_service_usage_changed(app: &crate::core_adapters::AppHandleSlot) {
+    let app = app.lock().clone();
+    if let Some(app) = app {
+        let _ = app.emit_to("main", "service-usage:changed", ());
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TauriCoordinatorHost {
     app: crate::core_adapters::AppHandleSlot,
@@ -2223,6 +2310,85 @@ pub(crate) struct TauriCoordinatorHost {
 }
 
 impl TauriCoordinatorHost {
+    #[cfg(not(mobile))]
+    pub(crate) fn style_menu_surface_available(&self, session: openless_core::SessionId) -> bool {
+        !crate::desktop_resources::active()
+            && self.capsule.capsule_visible.load(Ordering::SeqCst)
+            && !self.capsule.qa_voice_active.load(Ordering::SeqCst)
+            && !self.capsule.fallback_card_visible.load(Ordering::SeqCst)
+            && self.capsule.hit_test_mode.load(Ordering::SeqCst) != HIT_TEST_MODE_CARD
+            && self.capsule.snapshot.lock().payload.as_ref().is_some_and(|payload|
+                payload.state == CapsuleState::Recording && !payload.qa && !payload.selection_polish
+                    && payload.session_id.as_deref() == Some(session.to_string().as_str()))
+    }
+
+    /// Accept into the native main-thread queue before the hook claims a down.
+    /// Windows borrows its AppHandle off-main instead of cloning native Rc state.
+    #[cfg(not(mobile))]
+    pub(crate) fn queue_style_menu_event(&self, event: crate::capsule_style_menu::Event) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
+                self.deliver_style_menu_event(event);
+                return true;
+            }
+            let host = self.clone();
+            self.app.lock().as_ref().is_some_and(|app|
+                app.run_on_main_thread(move || host.deliver_style_menu_event(event)).is_ok())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let Some(app) = self.app() else { return false; };
+            let host = self.clone();
+            app.run_on_main_thread(move || host.deliver_style_menu_event(event)).is_ok()
+        }
+    }
+
+    #[cfg(not(mobile))]
+    fn deliver_style_menu_event(&self, event: crate::capsule_style_menu::Event) {
+        use crate::capsule_style_menu::{self as menu, Event};
+        let Some(app) = self.app() else { return; };
+        match event {
+            Event::Request(request) => {
+                if menu::pending("capsule").as_ref() == Some(&request) {
+                    let _ = app.emit_to("capsule", "capsule:style-menu-request", request);
+                }
+            }
+            Event::Closed(owner) => {
+                if let Some(capsule) = self.capsule_window() {
+                    if let Err(error) = capsule.restore_style_menu_owner(&owner) {
+                        log::warn!("[capsule] style menu geometry release failed: {error}");
+                    }
+                }
+                let _ = app.emit_to(owner.window_label.as_str(), "capsule:style-menu-closed", &owner);
+            }
+            Event::Key(key) => {
+                if !menu::is_owner(&key) { return; }
+                let frame_matches = self.capsule.translation_menu.lock().as_ref().is_some_and(|frame|
+                    frame.label == key.window_label && frame.session_id == key.session_id
+                        && frame.style_menu_id.as_deref() == Some(key.menu_id.as_str()));
+                if !frame_matches || !app.get_webview_window(&key.window_label)
+                    .is_some_and(|window| window.is_visible().unwrap_or(false)) {
+                    menu::window_lost(&key.window_label);
+                    return;
+                }
+                if app.emit_to(key.window_label.as_str(), "capsule:style-menu-key", &key).is_err() {
+                    menu::window_lost(&key.window_label);
+                }
+            }
+            Event::Validate(owner) => {
+                if !menu::owner_current(&owner) { return; }
+                let frame_matches = self.capsule.translation_menu.lock().as_ref().is_some_and(|frame|
+                    frame.label == owner.window_label && frame.session_id == owner.session_id
+                        && frame.style_menu_id.as_deref() == Some(owner.menu_id.as_str()));
+                if !frame_matches || !app.get_webview_window(&owner.window_label)
+                    .is_some_and(|window| window.is_visible().unwrap_or(false)) {
+                    menu::window_lost(&owner.window_label);
+                }
+            }
+        }
+    }
+
     pub(crate) fn new(
         app: crate::core_adapters::AppHandleSlot,
         qa_context: Arc<crate::qa_adapter::TauriQaHostContext>,
@@ -2382,6 +2548,8 @@ impl TauriCoordinatorHost {
     }
 
     pub(crate) fn set_qa_voice_active(&self, active: bool) {
+        #[cfg(not(mobile))]
+        if active { crate::capsule_style_menu::invalidate(); }
         self.capsule.qa_voice_active.store(active, Ordering::SeqCst);
     }
 
@@ -2432,8 +2600,24 @@ impl TauriCoordinatorHost {
             .commit_capsule_payload(payload, captured_revision)
     }
 
+    pub(crate) fn expire_terminal_capsule(&self) -> Option<CapsulePayload> {
+        self.capsule.snapshot.lock().expire_terminal_capsule()
+    }
+
     /// Update replay state without waiting for the native window callback.
     pub(crate) fn record_backend_event(&self, event: &BackendEvent) {
+        #[cfg(not(mobile))]
+        crate::capsule_style_menu::refresh();
+        #[cfg(not(mobile))]
+        if self.ask_owns_capsule() {
+            return;
+        }
+        #[cfg(not(mobile))]
+        if let openless_core::BackendEventKind::DictationJobsChanged(jobs) = &event.kind {
+            if let Some(native) = self.native.lock().as_ref() {
+                native.update_processing_jobs(jobs);
+            }
+        }
         self.capsule.snapshot.lock().record_backend_event(event);
         #[cfg(not(mobile))]
         if crate::desktop_resources::active()
@@ -2451,6 +2635,19 @@ impl TauriCoordinatorHost {
                 native.update_transcript(&session_id, text);
             }
         }
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn claim_ask_capsule(&self, session_id: &str) -> u64 {
+        crate::capsule_style_menu::invalidate();
+        self.capsule.snapshot.lock().claim_ask(session_id)
+    }
+
+    #[cfg(not(mobile))]
+    pub(crate) fn ask_owns_capsule(&self) -> bool {
+        self.app().as_ref()
+            .and_then(|app| app.try_state::<Arc<crate::ask_window::Desktop>>())
+            .is_some_and(|ask| ask.owns_capsule())
     }
 
     pub(crate) fn cache_capsule_display_mode(&self, mode: CapsuleDisplayMode) {
@@ -2547,10 +2744,11 @@ impl TauriCoordinatorHost {
         }
     }
 
-    pub(crate) fn show_voice_edit(&self) {
-        if let Some(app) = self.app() {
-            crate::show_voice_edit_window(&app);
-        }
+    pub(crate) fn show_voice_edit(&self) -> Result<(), String> {
+        let app = self
+            .app()
+            .ok_or_else(|| "Tauri AppHandle is not bound yet".to_string())?;
+        crate::show_voice_edit_window(&app)
     }
 
     pub(crate) fn hide_voice_edit(&self) {
@@ -3006,15 +3204,15 @@ mod tests {
                 classic.top_offset,
                 classic.gap
             ),
-            (460.0, 52.0, 64.0, 8.0)
+            (460.0, 52.0, 48.0, 24.0)
         );
         assert_eq!(
             capsule_transcript_rail_position(CapsuleStyle::Classic, true, true),
             Some(CapsuleTranscriptRailPosition {
                 width: 460.0,
-                height: 88.0,
-                top_offset: 28.0,
-                gap: 8.0,
+                height: 52.0,
+                top_offset: 48.0,
+                gap: 24.0,
             })
         );
 
@@ -3042,11 +3240,9 @@ mod tests {
         ] {
             assert_eq!(capsule_transcript_rail_position(style, false, false), None);
         }
-        let classic_badge =
-            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false).unwrap();
         assert_eq!(
-            (classic_badge.height, classic_badge.top_offset),
-            (28.0, 88.0)
+            capsule_transcript_rail_position(CapsuleStyle::Classic, true, false),
+            None
         );
         let typeless_badge =
             capsule_transcript_rail_position(CapsuleStyle::Typeless, true, false).unwrap();
@@ -3076,6 +3272,24 @@ mod tests {
                 left: 172,
                 right: 288,
                 top: 124,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, false, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 72,
+                bottom: 156,
+            })
+        );
+        assert_eq!(
+            capsule_control_hit_rect(CapsuleStyle::Classic, true, true, 460, 172),
+            Some(CapsuleHitTestRect {
+                left: 100,
+                right: 360,
+                top: 12,
                 bottom: 156,
             })
         );

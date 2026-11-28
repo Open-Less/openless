@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const dest = resolve(root, 'linux-egui/assets/lucide');
+const dest = resolve(root, '../linux/egui/assets/lucide');
 // Names match src/components/Icon.tsx. Stop/Send/Pin/Chat are popup
 // controls and use the corresponding Lucide shape from the same version.
 export const icons = {

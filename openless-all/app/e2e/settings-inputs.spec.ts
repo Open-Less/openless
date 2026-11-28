@@ -18,7 +18,8 @@ test('channel fields stay editable right after the editor opens', async ({ page 
   await expect(dialog).toBeVisible();
 
   const name = dialog.locator('input[placeholder*="例如"]').first();
-  const apiKey = dialog.locator('input[type="password"]').first();
+  const apiKey = dialog.locator('input.ol-field-secret').first();
+  await expect(apiKey).toHaveAttribute('type', 'password');
   const endpoint = dialog.locator('input[placeholder*="https://"]').first();
   const model = dialog.locator('input[placeholder*="模型"], input[placeholder*="Qwen"]').first();
 
@@ -33,6 +34,22 @@ test('channel fields stay editable right after the editor opens', async ({ page 
     await field.fill(value);
     await expect(field).toHaveValue(value);
   }
+
+  for (const field of [name, endpoint, model]) {
+    const frame = field.locator('..');
+    await expect(frame).toHaveClass(/\bol-field\b/);
+    await expect(frame.getByRole('button')).toHaveCount(0);
+  }
+  const secretFrame = apiKey.locator('..');
+  const eye = secretFrame.getByRole('button');
+  await eye.focus();
+  await eye.press('Enter');
+  const revealed = secretFrame.locator('input');
+  await expect(revealed).toHaveAttribute('type', 'text');
+  await expect(revealed).toHaveValue('sk-input-test');
+  await expect(eye).toBeFocused();
+  await eye.press('Space');
+  await expect(revealed).toHaveAttribute('type', 'password');
 });
 
 for (const profile of [
@@ -184,6 +201,39 @@ test('multimodal provider switches flush the outgoing field to its own slot', as
   await provider.click();
   await page.getByRole('option', { name: '自定义', exact: true }).click();
   await expect(model).toHaveValue('saved-with-custom-provider');
+});
+
+test('dark provider fields and both menus share the same surface', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('ol.theme', 'dark'));
+  await openAiSettings(page);
+  await page.getByRole('button', { name: '多模态模式', exact: true }).click();
+  await settleNavigation(page);
+  const card = page.locator('.ol-omni-settings');
+  const model = card.getByLabel('模型', { exact: true });
+  await model.fill('draft-model');
+  const surface = await model.locator('..').evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(surface).not.toBe('rgba(0, 0, 0, 0)');
+  for (const frame of await card.locator('.ol-field').all()) {
+    await expect(frame).toHaveCSS('background-color', surface);
+  }
+  const provider = card.getByRole('combobox', { name: '供应商', exact: true });
+  await expect(provider).toHaveCSS('background-color', surface);
+  await provider.click();
+  await expect(page.locator('.ol-select-popup')).toHaveCSS('background-color', surface);
+  await page.keyboard.press('Escape');
+  await card.getByRole('button', { name: '拉取模型', exact: true }).click();
+  const picker = card.getByRole('combobox', { name: '选择一个模型写入上方字段', exact: true });
+  await expect(picker).toBeEnabled();
+  await expect(picker).toHaveCSS('background-color', surface);
+  await picker.click();
+  const popup = page.locator('.ol-select-popup[data-open]');
+  await expect(popup).toBeVisible();
+  await expect(popup).toHaveCSS('opacity', '1');
+  await expect(popup).toHaveCSS('background-color', surface);
+  await page.screenshot({ path: test.info().outputPath('dark-provider-menu.png') });
+  await popup.getByRole('option').first().click();
+  await expect(picker).toHaveCSS('background-color', surface);
+  await expect(model.locator('..')).toHaveCSS('background-color', surface);
 });
 
 test('Escape from a General subpage returns focus to its category', async ({ page }) => {

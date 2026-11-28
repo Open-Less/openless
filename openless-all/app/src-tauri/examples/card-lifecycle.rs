@@ -1,5 +1,5 @@
 //! macOS smoke fixture: real correction-card frontend and production window policy.
-//! Run through scripts/test-card-lifecycle-macos.py so the whole bundle is signed.
+//! Run through ../macos/scripts/test-card-lifecycle-macos.py so the whole bundle is signed.
 #![allow(dead_code, unexpected_cfgs)]
 
 #[cfg(target_os = "macos")]

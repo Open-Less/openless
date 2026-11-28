@@ -20,7 +20,8 @@ if (process.platform !== 'darwin') {
 }
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const root = mkdtempSync(join(tmpdir(), 'openless-macos-build-'));
+const sandbox = mkdtempSync(join(tmpdir(), 'openless-macos-build-'));
+const root = join(sandbox, 'app');
 const app = join(root, 'src-tauri/target/release/bundle/macos/OpenLess.app');
 const dmg = join(root, 'src-tauri/target/release/bundle/dmg/OpenLess_1.2.3_x64.dmg');
 const builds = join(root, 'src-tauri/target/release/build');
@@ -41,7 +42,7 @@ function run(mode = 'success') {
   for (const name of Object.keys(env)) {
     if (/^(APPLE_|TAURI_SIGNING_|CARGO_PROFILE_RELEASE_|GITHUB_ENV$)/.test(name)) delete env[name];
   }
-  return spawnSync('bash', ['scripts/build-mac.sh'], {
+  return spawnSync('bash', ['../macos/scripts/build-mac.sh'], {
     cwd: root,
     encoding: 'utf8',
     env: { ...env, INSTALL: '0', BUILD_FIXTURE_MODE: mode, PATH: `${root}/bin:${env.PATH}` },
@@ -49,13 +50,13 @@ function run(mode = 'success') {
 }
 
 try {
-  mkdirSync(join(root, 'scripts'), { recursive: true });
+  mkdirSync(join(root, '../macos/scripts'), { recursive: true });
   for (const name of [
     'build-mac.sh',
     'macos-build-env.sh',
     'check-macos-audio-usage-description.sh',
   ]) {
-    copyFileSync(join(scripts, name), join(root, 'scripts', name));
+    copyFileSync(join(scripts, '../../macos/scripts', name), join(root, '../macos/scripts', name));
   }
   put(join(root, 'package.json'), '{"version":"1.2.3"}');
   put(
@@ -113,7 +114,7 @@ if [ "$BUILD_FIXTURE_MODE" = failure ]; then exit 23; fi
   assert.equal(existsSync(app), false);
   assert.equal(existsSync(dmg), false);
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  rmSync(sandbox, { recursive: true, force: true });
 }
 
 console.log('macOS warm build and packaging failure tests passed');

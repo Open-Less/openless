@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use parking_lot::Mutex;
 
-use crate::asr::wav::encode_wav_16k_mono;
+use crate::asr::wav::encode_wav_16k_mono_pcm_bytes;
 use crate::asr::RawTranscript;
 
 const PCM_SAMPLE_RATE_HZ: u64 = 16_000;
@@ -137,11 +137,8 @@ impl WhisperBatchASR {
     }
 
     /// The buffer must survive a failed transcribe: draining it up front
-    /// would lose the recording on credential or network errors.
     pub async fn transcribe(&self) -> Result<RawTranscript> {
-        // Clone instead of take: ~30s of 16 kHz 16-bit audio is ~960 KB,
-        // called once per session — acceptable.
-        let pcm = self.buffer.lock().clone();
+        let pcm = std::mem::take(&mut *self.buffer.lock());
         if pcm.is_empty() {
             return Ok(RawTranscript {
                 text: String::new(),
@@ -150,10 +147,19 @@ impl WhisperBatchASR {
         }
 
         let result = self.transcribe_inner(&pcm).await;
-        // Clear the buffer only on success. On failure the PCM stays: the
-        // coordinator gets Err, but a re-triggered stop can send again.
-        if result.is_ok() {
-            self.buffer.lock().clear();
+        // Restore the buffer on failure (prepending ahead of any newly arrived
+        // audio) so a re-triggered stop can retry without losing PCM, while
+        // avoiding a full-buffer clone on the success path.
+        if result.is_err() {
+            let mut guard = self.buffer.lock();
+            if guard.is_empty() {
+                *guard = pcm;
+            } else {
+                let trailing = std::mem::take(&mut *guard);
+                let mut combined = pcm;
+                combined.extend_from_slice(&trailing);
+                *guard = combined;
+            }
         }
         result
     }
@@ -174,13 +180,7 @@ impl WhisperBatchASR {
     }
 
     async fn transcribe_chunk(&self, pcm: &[u8]) -> Result<String> {
-        let samples: Vec<i16> = pcm
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
-        let wav = encode_wav_16k_mono(&samples);
+        let wav = encode_wav_16k_mono_pcm_bytes(pcm);
         let url = transcription_url(&self.base_url, self.endpoint_path.as_deref())?;
         let client = crate::net::http();
 

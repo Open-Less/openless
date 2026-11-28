@@ -109,12 +109,9 @@ impl ExperimentalNativeRuntime {
             let timeout_cancelled = Arc::clone(&cancelled);
             let task = tokio::task::spawn_blocking(move || {
                 let _background = compute_policy::BackgroundScope::enter();
-                let _work = work.try_lock().map_err(|_| {
-                    BackendError::new(
-                        BackendErrorCode::Busy,
-                        "Another local model is computing; retry shortly",
-                    )
-                })?;
+                // A previous segment may still be finishing. Queue on the
+                // existing executor; this worker owns no microphone.
+                let _work = work.lock().map_err(failure)?;
                 let budget = compute_policy::Budget::capture();
                 let pacer = compute_policy::Pacer::new(budget);
                 let mut guard = loaded.lock().map_err(failure)?;
@@ -230,12 +227,9 @@ impl ExperimentalAsrRuntime for ExperimentalNativeRuntime {
             }
             tokio::task::spawn_blocking(move || {
                 let _background = compute_policy::BackgroundScope::enter();
-                let _work = work.try_lock().map_err(|_| {
-                    BackendError::new(
-                        BackendErrorCode::Busy,
-                        "Another local model is computing; retry shortly",
-                    )
-                })?;
+                // Live startup can overlap the preceding segment's inference.
+                // Reuse the same executor rather than failing the new capture.
+                let _work = work.lock().map_err(failure)?;
                 let budget = compute_policy::Budget::capture();
                 let mut slot = loaded.lock().map_err(failure)?;
                 if generation.load(Ordering::Acquire) != expected {

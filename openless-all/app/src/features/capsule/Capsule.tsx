@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion';
 import { collectCapsuleInputRegions } from '../../lib/capsuleInputRegions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,9 +9,16 @@ import { useReducedMotion } from '../../lib/motion';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { DEFAULT_CAPSULE_EXIT_MS, OpenLessPill } from './OpenLessCapsule';
 import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
+import { CapsulePickerMenu } from './capsulePickerMenu';
+import { CapsuleStyleBadge } from './CapsuleStyleBadge';
+import {
+  projectCapsuleOutputStyle,
+  sameCapsuleOutputStyle,
+  type CapsuleOutputStyle,
+} from './capsuleOutputStyle';
+import { useMainCaptionTrace } from './useMainCaptionTrace';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../../lib/capsuleTranscript';
 import { getSettings } from '../../api/preferences';
-import { qaCancelTurn, qaStopRecording } from '../../api/qa';
 import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../../api/dictation';
 import {
   getCapsuleHostMetrics,
@@ -46,7 +54,7 @@ import {
 
 // Inject the capsule keyframes once into document.head instead of rendering them in
 // JSX: per-frame (~60Hz) setLevel during recording would otherwise recreate this
-// static <style> element on every render. Same approach as QaPanel / LessComputerPanel.
+// static <style> element on every render.
 const CAPSULE_KEYFRAMES = `
   @keyframes capsule-in {
     from { opacity: 0; transform: scale(.46) translateY(18px); }
@@ -184,6 +192,7 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
 // white-and-blue recording/processing surface inside that stable host.
 
 interface ClassicCapsuleProps {
+  sessionId?: string;
   os: OS;
   state: CapsuleState;
   level: number;
@@ -191,21 +200,19 @@ interface ClassicCapsuleProps {
   message?: string;
   transcript?: string;
   transcriptFontSize?: number;
-  transcriptVisible?: boolean;
-  transcriptInSameWindow?: boolean;
   operating: boolean;
   translation: boolean;
-  qa: boolean;
   leaving: boolean;
   warming: boolean;
 }
 
 /**
- * Classic pill + "translating" badge (matching 1.3.14). Cancel/confirm call the
+ * Classic pill and transcript. Cancel/confirm call the
  * dictation commands directly (the capsule window never takes focus, so button
  * interaction only appears while recording).
  */
 function ClassicCapsule({
+  sessionId,
   os,
   state,
   level,
@@ -213,88 +220,48 @@ function ClassicCapsule({
   message,
   transcript,
   transcriptFontSize = 14,
-  transcriptVisible = false,
-  transcriptInSameWindow = true,
   operating,
   translation,
-  qa,
   leaving,
   warming,
 }: ClassicCapsuleProps) {
-  const { t } = useTranslation();
-  const hostMetrics = getCapsuleHostMetrics(os, translation || qa, 'classic');
+  const hostMetrics = getCapsuleHostMetrics(os, translation, 'classic');
   const onCancel = useCallback(() => {
-    void (qa ? qaCancelTurn() : cancelDictation());
-  }, [qa]);
+    void cancelDictation(sessionId);
+  }, [sessionId]);
   const onConfirm = useCallback(() => {
-    void (qa ? qaStopRecording() : stopDictation());
-  }, [qa]);
-  const asking = qa && isActiveCapsuleState(state) && !leaving;
+    void stopDictation(sessionId);
+  }, [sessionId]);
   const liveText = transcript?.trim() ?? '';
-  const classicGeometry = getClassicCapsuleGeometry(
-    os,
-    transcriptVisible || Boolean(liveText),
-    translation || qa,
-    transcriptInSameWindow,
-  );
 
   return (
-    <>
-      {/* "Translating" badge — two nested layers:
-          the outer layer only does absolute positioning + horizontal centering
-          (translateX(-50%)) with no animation; the inner layer only does vertical
-          shift + fade. This avoids conflicting with translateX(-50%) and avoids
-          keyframe vs inline transform overrides causing visual jumps. */}
-      {/* The language picker belongs to the interactive capsule, even when
-          Windows puts the transcript in a separate click-through rail. */}
-      <div
-        style={{
-          position: 'absolute',
-          left: '50%',
-          bottom: classicGeometry.badgeBottomOffset,
-          transform: 'translateX(-50%)',
-          pointerEvents: 'none',
-        }}
-      >
-        {qa ? (
-          <div className="ol-qa-capsule-badge" data-visible={asking} aria-hidden={!asking}>
-            {t('capsule.asking')}
-          </div>
-        ) : (
-          <CapsuleTranslationBadge visible={translation && state === 'recording' && !leaving} />
-        )}
-      </div>
-      <div className="ol-classic-capsule-stack">
-        {liveText && (
-          <CapsuleTranscriptRail
-            text={liveText}
-            fontSize={transcriptFontSize}
-            tone="frost"
-            stageWidth={hostMetrics.width}
-            maxWidth={hostMetrics.width - 16}
-            height={getCapsuleTranscriptRailHeight('classic')}
-          />
-        )}
-        <OpenLessPill
-          os={os}
-          state={state}
-          level={level}
-          insertedChars={insertedChars}
-          message={message}
-          operating={operating}
-          translation={translation}
-          leaving={leaving}
-          warming={warming}
-          onCancel={onCancel}
-          onConfirm={onConfirm}
+    <div className="ol-classic-capsule-stack">
+      {liveText && (
+        <CapsuleTranscriptRail
+          text={liveText}
+          fontSize={transcriptFontSize}
+          tone="frost"
+          stageWidth={hostMetrics.width}
+          maxWidth={hostMetrics.width - 16}
+          height={getCapsuleTranscriptRailHeight('classic')}
         />
-      </div>
-    </>
+      )}
+      <OpenLessPill
+        sessionId={sessionId}
+        os={os}
+        state={state}
+        level={level}
+        insertedChars={insertedChars}
+        message={message}
+        operating={operating}
+        translation={translation}
+        leaving={leaving}
+        warming={warming}
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />
+    </div>
   );
-}
-
-function isActiveCapsuleState(state: CapsuleState) {
-  return state === 'recording' || state === 'transcribing' || state === 'polishing';
 }
 
 // Must stay in sync with the @keyframes capsule-out duration — otherwise the timer
@@ -344,7 +311,6 @@ function getPreviewCapsulePayload() {
       level: 0,
       message: undefined,
       translation: false,
-      qa: false,
       warming: false,
       selectionPolish: false,
       style: 'classic' as CapsuleStyle,
@@ -364,7 +330,6 @@ function getPreviewCapsulePayload() {
     level: Number.isFinite(previewLevel) ? Math.min(1, Math.max(0, previewLevel)) : 0.6,
     message: params.get('message') ?? undefined,
     translation: params.get('translation') === '1',
-    qa: params.get('qa') === '1',
     warming: params.get('warming') === '1',
     selectionPolish: params.get('selectionPolish') === '1',
     style: parseCapsuleStyle(params.get('style')) ?? 'classic',
@@ -381,13 +346,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const os = forcedOs ?? getRuntimeOS();
   const isTauri = isTauriHost();
   const [publishInputRegions] = useState(createCapsuleRegionPublisher);
+  const [pickerController] = useState(() => new CapsulePickerMenu());
   const preview = useMemo(() => getPreviewCapsulePayload(), []);
   const reducedMotion = useReducedMotion();
   const metrics = getCapsulePillMetrics(os);
   const [state, setState] = useState<CapsuleState>(preview.state);
+  const [displayedSession, setDisplayedSession] = useState<string>();
   const [level, setLevel] = useState<number>(preview.level);
   const [message, setMessage] = useState<string | undefined>(preview.message);
-  const [localAsrText, setLocalAsrText] = useState('');
+  const [localAsrText, setLocalAsrText] = useState(() =>
+    isTauri ? '' : (new URLSearchParams(window.location.search).get('text') ?? ''),
+  );
   const [transcriptEnabled, setTranscriptEnabled] = useState(
     () => isTauri || new URLSearchParams(window.location.search).get('transcript') !== '0',
   );
@@ -401,11 +370,27 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const transcriptViewRef = useRef<TranscriptViewState>(createTranscriptViewState());
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
-  const [qa, setQa] = useState(preview.qa);
+  const [outputStyle, setOutputStyle] = useState<CapsuleOutputStyle | null>(null);
+  const [stylePickerEnabled, setStylePickerEnabled] = useState(false);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
   // Preference events restyle live; recording state carries the same style so the
   // first show also renders correctly.
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
+  const [processingJobs, setProcessingJobs] = useState<
+    { sessionId: string; translationActive?: boolean }[]
+  >(() =>
+    isTauri
+      ? []
+      : Array.from(
+          {
+            length: Math.min(
+              20,
+              Math.max(0, Number(new URLSearchParams(window.location.search).get('jobs')) || 0),
+            ),
+          },
+          (_, index) => ({ sessionId: `preview-${index}` }),
+        ),
+  );
   const stylePreferenceReadyRef = useRef(false);
   const isClassic = capsuleStyle === 'classic';
   // Windows keeps the transcript in the dedicated capsule-rail HWND. The browser
@@ -435,7 +420,6 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [lastVisibleSelectionPolish, setLastVisibleSelectionPolish] = useState<boolean>(
     preview.selectionPolish,
   );
-  const [lastVisibleQa, setLastVisibleQa] = useState(preview.qa);
   const [lastVisibleMessage, setLastVisibleMessage] = useState<string | undefined>(preview.message);
   // Exit duration follows the style; the leaving effect deliberately depends only on
   // state, so read the latest value through the ref.
@@ -449,7 +433,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Insert-failure fallback card. Same pattern as the vocab card: own event channel,
   // not part of the session state machine.
   const [insertFallback, setInsertFallback] = useState<InsertFallbackCardPayload | null>(null);
-  const hostMetrics = getCapsuleHostMetrics(os, translation || qa, capsuleStyle);
+  const hostMetrics = getCapsuleHostMetrics(os, translation, capsuleStyle);
   const badgeBottom = Math.round(metrics.height * 0.73);
 
   // Only the selected Siri style needs a GPU warmup; classic/typeless never allocate it.
@@ -466,7 +450,15 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     let stateRevision = 0;
     let suggestionsRevision = 0;
     let fallbackRevision = 0;
+    let jobsRevision = 0;
     void (async () => {
+      if (
+        !(await events.jobs((jobs) => {
+          jobsRevision += 1;
+          setProcessingJobs(jobs);
+        }))
+      )
+        return;
       const replayActiveSessionTranscript = async (sessionId: string) => {
         const snapshot = await getCapsuleSnapshot().catch((error) => {
           if (!cancelled) console.warn('[capsule] active session snapshot replay failed', error);
@@ -489,6 +481,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           console.info('[capsule] first capsule:state received in webview, state=', p.state);
         }
         setState(p.state);
+        setDisplayedSession(p.sessionId ?? undefined);
         setLevel(p.level ?? 0);
         setMessage(p.message ?? undefined);
         const previous = capsuleStateRef.current;
@@ -526,7 +519,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         transcriptViewRef.current = nextTranscript;
         if (nextTranscript !== previousTranscript) setLocalAsrText(nextTranscript.text);
         setTranslation(p.translation === true);
-        setQa(p.qa === true);
+        const nextOutputStyle = projectCapsuleOutputStyle(p);
+        setOutputStyle((current) =>
+          sameCapsuleOutputStyle(current, nextOutputStyle) ? current : nextOutputStyle,
+        );
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
         const style = parseCapsuleStyle(p.capsuleStyle);
@@ -543,7 +539,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         return;
       if (
         !(await events.transcript((payload) => {
-          const next = applyTranscriptEvent(transcriptViewRef.current, payload);
+          const previous = transcriptViewRef.current;
+          const next = applyTranscriptEvent(previous, payload);
+          observeCaptionTrace(payload, previous, next);
           transcriptViewRef.current = next;
           setLocalAsrText(next.text);
         }))
@@ -567,11 +565,13 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       // Disposable cards can miss their first event while the WebView is mounting.
       const suggestionsAtRead = suggestionsRevision;
       const fallbackAtRead = fallbackRevision;
+      const jobsAtRead = jobsRevision;
       try {
         const snapshot = await getCapsuleAuxiliarySnapshot();
         if (cancelled) return;
         if (suggestionsRevision === suggestionsAtRead) setSuggestions(snapshot.suggestions);
         if (fallbackRevision === fallbackAtRead) setInsertFallback(snapshot.fallback);
+        if (jobsRevision === jobsAtRead) setProcessingJobs(snapshot.processing ?? []);
       } catch {
         // Mobile hosts do not expose desktop card snapshots.
       }
@@ -621,6 +621,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       if (
         !(await events.preferences((preferences) => {
           preferenceRevision += 1;
+          setStylePickerEnabled(
+            preferences.showCapsule && preferences.skipAutoStylePickerEnabled === true,
+          );
           setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
           setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
           const next = parseCapsuleStyle(preferences.capsuleStyle);
@@ -634,11 +637,16 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       const revisionAtRead = preferenceRevision;
       const preferences = await getSettings();
       const next = parseCapsuleStyle(preferences.capsuleStyle);
-      if (!cancelled && revisionAtRead === preferenceRevision && next) {
+      if (!cancelled && revisionAtRead === preferenceRevision) {
+        setStylePickerEnabled(
+          preferences.showCapsule && preferences.skipAutoStylePickerEnabled === true,
+        );
         setTranscriptEnabled(preferences.capsuleTranscriptEnabled ?? true);
         setTranscriptFontSize(capsuleTranscriptFontSize(preferences.capsuleTranscriptFontSize));
-        stylePreferenceReadyRef.current = true;
-        setCapsuleStyle(next);
+        if (next) {
+          stylePreferenceReadyRef.current = true;
+          setCapsuleStyle(next);
+        }
       }
     })().catch((error) => console.warn('[capsule] preferences subscription failed', error));
     return () => {
@@ -681,9 +689,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   useEffect(() => {
     if (state === 'idle') return;
     setLastVisibleSelectionPolish(selectionPolish);
-    setLastVisibleQa(qa);
     setLastVisibleMessage(message);
-  }, [state, qa, selectionPolish, message]);
+  }, [state, selectionPolish, message]);
 
   // Learn how long the warm phase lasts (= mic-ready time); EMA-update warmupMs, the
   // baseline for the predicted expand duration.
@@ -733,15 +740,15 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // suggestion card, and the hidden idle branch.
   const renderedState: CapsuleState = state === 'idle' ? lastVisibleState : state;
   const renderedSelectionPolish = state === 'idle' ? lastVisibleSelectionPolish : selectionPolish;
-  const renderedQa = state === 'idle' ? lastVisibleQa : qa;
-  const showSiriBadge =
-    !leaving && (renderedQa ? isActiveCapsuleState(renderedState) : translation);
   const renderedMessage =
     state === 'idle'
       ? lastVisibleMessage
       : state === 'transcribing' && localAsrText
         ? localAsrText
-        : message;
+        : message === 'empty_transcript' ||
+            message === '未识别到语音，录音已保留，可在历史中重新转录'
+          ? t('capsule.emptyTranscript')
+          : message;
   const liveTranscript = visibleCapsuleTranscript(
     localAsrText,
     transcriptEnabled,
@@ -749,7 +756,24 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     renderedSelectionPolish,
   );
   const showLiveTranscript = state !== 'idle' && liveTranscript.length > 0;
-  const transcriptVisible = showLiveTranscript && !insertFallback && suggestions.length === 0;
+  const transcriptVisible =
+    showLiveTranscript && (state === 'recording' || (!insertFallback && suggestions.length === 0));
+  const translating =
+    !leaving &&
+    translation &&
+    (!isClassic || ['recording', 'transcribing', 'polishing'].includes(renderedState));
+  const badgeOffset = isClassic
+    ? getClassicCapsuleGeometry(
+        os,
+        transcriptVisible || (!splitTranscriptRail && showLiveTranscript),
+        translating || Boolean(outputStyle),
+        !splitTranscriptRail,
+      ).badgeBottomOffset
+    : badgeBottom;
+  const observeCaptionTrace = useMainCaptionTrace(
+    transcriptViewRef,
+    transcriptVisible && !splitTranscriptRail ? liveTranscript : '',
+  );
 
   useEffect(() => {
     if (!isTauri) return;
@@ -809,12 +833,18 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       ],
     });
     window.addEventListener('resize', schedule);
+    const onSatelliteAnimationEnd = (event: AnimationEvent) => {
+      if (event.target instanceof Element && event.target.matches('.ol-processing-satellite'))
+        schedule();
+    };
+    document.addEventListener('animationend', onSatelliteAnimationEnd, true);
     schedule();
     return () => {
       stopped = true;
       observer.disconnect();
       cancelAnimationFrame(frame);
       window.removeEventListener('resize', schedule);
+      document.removeEventListener('animationend', onSatelliteAnimationEnd, true);
     };
   }, [isTauri, os, state, leaving, insertFallback, suggestions.length, publishInputRegions]);
 
@@ -837,19 +867,51 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
+  const [displayedSatellite, setDisplayedSatellite] = useState<{
+    sessionId: string;
+    translationActive: boolean;
+    count: number;
+    leaving: boolean;
+  } | null>(null);
+  const backgroundJobs = processingJobs.filter((job) => job.sessionId !== displayedSession);
+  const showSatellite =
+    (renderedState === 'recording' ||
+      renderedState === 'transcribing' ||
+      renderedState === 'polishing') &&
+    backgroundJobs.length > 0;
+  const activeSatelliteId = backgroundJobs[0]?.sessionId;
+  const activeSatelliteTranslation = Boolean(backgroundJobs[0]?.translationActive);
+  const activeSatelliteCount = backgroundJobs.length;
+  useEffect(() => {
+    if (showSatellite && activeSatelliteId) {
+      setDisplayedSatellite({
+        sessionId: activeSatelliteId,
+        translationActive: activeSatelliteTranslation,
+        count: activeSatelliteCount,
+        leaving: false,
+      });
+      return undefined;
+    }
+    setDisplayedSatellite((prev) => (prev ? { ...prev, leaving: true } : null));
+    const timer = window.setTimeout(() => {
+      setDisplayedSatellite((prev) => (prev?.leaving ? null : prev));
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [showSatellite, activeSatelliteId, activeSatelliteTranslation, activeSatelliteCount]);
+
   // Fallback card comes first: it pops the moment the session ends, while the capsule
   // is still rendering the Done/Error terminal state — and the session's outcome was
   // exactly "didn't insert", so letting the terminal state cover it would report a
   // false success. The backend yields in sync: while the card is visible, idle hides
   // without closing the window (see capsule_focus.rs).
-  if (insertFallback) {
+  if (insertFallback && state !== 'recording') {
     return <InsertFallbackCard key={insertFallback.presentationId} payload={insertFallback} />;
   }
 
   // Card takes priority: it shares the window with the capsule but the timing doesn't
   // conflict — it pops after the text is corrected, when the session has long ended;
   // the backend dismisses it when a new dictation starts (see begin_session_as).
-  if (suggestions.length > 0) {
+  if (suggestions.length > 0 && state !== 'recording') {
     return <VocabSuggestionCard suggestions={suggestions} />;
   }
 
@@ -888,105 +950,103 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         willChange: isClassic ? 'auto' : 'transform, opacity',
       }}
     >
+      {displayedSatellite && (() => {
+        const satelliteLabel = displayedSatellite.translationActive
+          ? t('capsule.translating')
+          : t('capsule.transcribing');
+        return (
+          <button
+            className="ol-processing-satellite"
+            style={{ bottom: hostMetrics.bottomInset + 28 }}
+            data-session-id={displayedSatellite.sessionId}
+            data-translation={displayedSatellite.translationActive}
+            data-leaving={displayedSatellite.leaving}
+            data-capsule-interactive
+            disabled={displayedSatellite.leaving}
+            aria-label={`${satelliteLabel} · ${displayedSatellite.count} · ${t('common.cancel')}`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void cancelDictation(displayedSatellite.sessionId)}
+          >
+            <span className="ol-processing-satellite-label" aria-hidden="true">
+              {satelliteLabel}
+              {displayedSatellite.count > 1 ? ` · ${displayedSatellite.count}` : ''}
+            </span>
+          </button>
+        );
+      })()}
+      {!renderedSelectionPolish && (
+        <motion.div
+          className="ol-capsule-status-lane"
+          data-with-style={Boolean(outputStyle)}
+          data-translating={translating}
+          initial={false}
+          animate={{ bottom: badgeOffset }}
+          transition={{ duration: reducedMotion || !isClassic ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {isClassic ? (
+            <CapsuleTranslationBadge
+              pickerController={pickerController}
+              visible={translating}
+              processing={state !== 'recording'}
+            />
+          ) : (
+            <div className="ol-siri-translation-badge" aria-hidden={!translating}>
+              <span />
+              {t('capsule.translating')}
+            </div>
+          )}
+          <CapsuleStyleBadge
+            style={outputStyle}
+            pickerController={pickerController}
+            pickerEnabled={stylePickerEnabled && !leaving}
+            captureSessionId={state === 'recording' ? displayedSession : undefined}
+          />
+        </motion.div>
+      )}
       {!renderedSelectionPolish &&
         (isClassic ? (
           <ClassicCapsule
+            sessionId={displayedSession}
             os={os}
             state={renderedState}
             level={leaving ? 0 : level}
             insertedChars={insertedCharsRef.current}
-            message={renderedMessage}
+            message={renderedState === 'transcribing' ? undefined : renderedMessage}
             transcript={splitTranscriptRail ? '' : liveTranscript}
             transcriptFontSize={transcriptFontSize}
-            transcriptVisible={transcriptVisible}
-            transcriptInSameWindow={!splitTranscriptRail}
             operating={operatingRef.current}
             translation={translation}
-            qa={renderedQa}
             leaving={leaving}
             warming={warming}
           />
         ) : (
-          <>
-            {/* "Translating" badge — two nested layers:
-          the outer layer only does absolute positioning + horizontal centering
-          (translateX(-50%)) with no animation; the inner layer only does vertical
-          shift + fade. This avoids conflicting with translateX(-50%) and avoids
-          keyframe vs inline transform overrides causing visual jumps. */}
+          <div className="ol-siri-capsule-stack">
+            {showLiveTranscript && !splitTranscriptRail && (
+              <CapsuleTranscriptRail
+                text={liveTranscript}
+                fontSize={transcriptFontSize}
+                tone="frost"
+                stageWidth={hostMetrics.width}
+                maxWidth={hostMetrics.width - 24}
+                height={getCapsuleTranscriptRailHeight('siri')}
+              />
+            )}
             <div
               style={{
-                position: 'absolute',
-                left: '50%',
-                bottom: `${badgeBottom}px`,
-                transform: 'translateX(-50%)',
-                pointerEvents: 'none',
+                opacity: 1,
+                transition: 'opacity .28s var(--ol-motion-soft)',
               }}
             >
-              <div
-                aria-hidden={!showSiriBadge}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  fontSize: 10.5,
-                  fontWeight: 'var(--ol-font-weight-semibold)',
-                  color: 'var(--ol-capsule-center-ink)',
-                  background: 'var(--ol-capsule-badge-bg)',
-                  border: '1px solid var(--ol-capsule-pill-border)',
-                  borderRadius: 999,
-                  padding: '4px 10px',
-                  letterSpacing: '0.02em',
-                  whiteSpace: 'nowrap',
-                  // Hidden: starts just below the orb; shown: settles above the orb.
-                  opacity: showSiriBadge ? 1 : 0,
-                  transform: showSiriBadge
-                    ? 'translateY(0) scale(1)'
-                    : 'translateY(40px) scale(.88)',
-                  transformOrigin: 'center bottom',
-                  transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
-                  willChange: 'opacity, transform',
-                }}
-              >
-                <span
-                  style={{
-                    width: 5,
-                    height: 5,
-                    borderRadius: 999,
-                    background: 'rgba(150, 185, 255, 0.95)',
-                    boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
-                  }}
-                />
-                {t(renderedQa ? 'capsule.asking' : 'capsule.translating')}
-              </div>
+              <VoiceOrbStage
+                os={os}
+                state={renderedState}
+                level={leaving ? 0 : level}
+                warming={!leaving && warming}
+                warmupMs={warmupMs}
+                message={renderedMessage}
+              />
             </div>
-            <div className="ol-siri-capsule-stack">
-              {showLiveTranscript && !splitTranscriptRail && (
-                <CapsuleTranscriptRail
-                  text={liveTranscript}
-                  fontSize={transcriptFontSize}
-                  tone="frost"
-                  stageWidth={hostMetrics.width}
-                  maxWidth={hostMetrics.width - 24}
-                  height={getCapsuleTranscriptRailHeight('siri')}
-                />
-              )}
-              <div
-                style={{
-                  opacity: 1,
-                  transition: 'opacity .28s var(--ol-motion-soft)',
-                }}
-              >
-                <VoiceOrbStage
-                  os={os}
-                  state={renderedState}
-                  level={leaving ? 0 : level}
-                  warming={!leaving && warming}
-                  warmupMs={warmupMs}
-                  message={renderedMessage}
-                />
-              </div>
-            </div>
-          </>
+          </div>
         ))}
       {renderedSelectionPolish && (
         <SelectionPolishNotice state={renderedState} message={renderedMessage} />

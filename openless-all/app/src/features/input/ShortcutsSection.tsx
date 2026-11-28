@@ -1,14 +1,17 @@
-import { useDeferredValue, useEffect, useState } from 'react';
+import { TextField } from '../../ui/controls/TextField';
+import { Segmented } from '../../ui/controls/Segmented';
+import { Fragment, useDeferredValue, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Icon } from '../../components/Icon';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { Kbd } from '../../components/Kbd';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { PageSkeleton } from '../../components/ui/PageSkeleton';
+import { Toggle } from '../../ui/controls/SettingRow';
 import { getRuntimeOS } from '../../runtime/environment';
 import {
   defaultDictationHotkey,
   defaultOpenAppShortcut,
-  defaultQaShortcut,
   defaultSelectionPolishShortcut,
   defaultSwitchStyleShortcut,
   formatComboLabel,
@@ -20,19 +23,25 @@ import {
   setOpenAppHotkey,
   setQuickNoteHotkey,
   setSelectionPolishHotkey,
+  setSkipAutoStyleHotkey,
   setStylePackHotkeys,
   setSwitchStyleHotkey,
   setTranslationHotkey,
 } from '../../api/hotkeys';
-import { setQaHotkey } from '../../api/qa';
 import { getStylePackPresentation } from '../../lib/stylePackPresentation';
-import type { ShortcutBinding, StylePack, StylePackHotkey } from '../../api/contracts';
+import type {
+  PlatformCapabilities,
+  ShortcutBinding,
+  StylePack,
+  StylePackHotkey,
+} from '../../api/contracts';
 import { useHotkeySettings } from '../../data/preferences';
+import { supportsSkipAutoStyleHotkey } from './skipAutoStyleSettings';
 
-export function ShortcutsSection() {
+export function ShortcutsSection({ platform }: { platform: PlatformCapabilities }) {
   const { t } = useTranslation();
   const os = getRuntimeOS();
-  const { prefs, hotkey, refresh, updatePrefs } = useHotkeySettings();
+  const { prefs, hotkey, capability, refresh, updatePrefs } = useHotkeySettings();
   const [packs, setPacks] = useState<StylePack[]>([]);
   const [query, setQuery] = useState('');
   const search = useDeferredValue(query.trim().toLocaleLowerCase());
@@ -42,6 +51,7 @@ export function ShortcutsSection() {
   const [draftPackId, setDraftPackId] = useState('');
   const [error, setError] = useState('');
   const tr = (key: string) => t(`uiRefinement.${key}`);
+  const stylePickerLabel = t('settings.shortcuts.skipAutoStylePicker');
   useEffect(() => {
     let cancelled = false;
     void listStylePacks()
@@ -59,8 +69,10 @@ export function ShortcutsSection() {
     id: string;
     label: string;
     desc?: string;
+    searchLabel?: string;
     group: string;
     binding: ShortcutBinding | null;
+    unavailable?: boolean;
     save: (binding: ShortcutBinding) => Promise<void>;
     disable?: () => Promise<void>;
     reset?: () => Promise<void>;
@@ -99,26 +111,28 @@ export function ShortcutsSection() {
         await refresh();
       },
     },
-    {
-      id: 'qa',
-      label: t('selectionAsk.title'),
-      group: 'recording',
-      desc: t('askAnything.auxiliaryHint', { key: formatComboLabel(prefs.dictationHotkey) }),
-      binding: prefs.qaCompanionKey ? { primary: prefs.qaCompanionKey, modifiers: [] } : null,
-      save: async (binding) => {
-        await setQaHotkey(binding);
-        await refresh();
-      },
-      disable: async () => {
-        await setQaHotkey(null);
-        await refresh();
-      },
-      reset: async () => {
-        const binding = defaultQaShortcut();
-        await setQaHotkey(binding);
-        await refresh();
-      },
-    },
+    ...(supportsSkipAutoStyleHotkey(platform, capability?.adapter)
+      ? [
+          {
+            id: 'skipAutoStyle',
+            label: t('settings.shortcuts.skipAutoStyle'),
+            searchLabel: stylePickerLabel,
+            group: 'recording',
+            binding: prefs.skipAutoStyleHotkey ?? null,
+            save: async (binding: ShortcutBinding) => {
+              if (capability?.adapter === 'windowsLowLevel' && binding.modifiers.length === 0) {
+                throw new Error(t('settings.shortcuts.skipAutoStyleComboRequired'));
+              }
+              await setSkipAutoStyleHotkey(binding);
+              await refresh();
+            },
+            disable: async () => {
+              await setSkipAutoStyleHotkey(null);
+              await refresh();
+            },
+          },
+        ]
+      : []),
     {
       id: 'note',
       label: t('settings.shortcuts.quickNote'),
@@ -198,7 +212,8 @@ export function ShortcutsSection() {
     (status === 'all' || (status === 'assigned') === Boolean(binding?.primary.trim()));
   const visible = commands.filter(
     (command) =>
-      (category === 'all' || category === command.group) && matches(command.label, command.binding),
+      (category === 'all' || category === command.group) &&
+      matches([command.label, command.searchLabel].filter(Boolean).join(' '), command.binding),
   );
   const packHotkeys = prefs.stylePackHotkeys ?? [];
   const savePacks = async (next: StylePackHotkey[]) => {
@@ -241,7 +256,7 @@ export function ShortcutsSection() {
   return (
     <section className="ol-shortcuts" aria-label={t('settings.shortcuts.title')}>
       <div className="ol-shortcuts-toolbar">
-        <input
+        <TextField
           type="search"
           className="ol-settings-search-field"
           value={query}
@@ -257,52 +272,74 @@ export function ShortcutsSection() {
         <aside className="ol-shortcuts-filters">
           <nav aria-label={tr('category')}>
             <h3>{tr('category')}</h3>
-            {['all', 'recording', 'styles', 'system'].map((id) => (
-              <button
-                type="button"
-                key={id}
-                aria-pressed={category === id}
-                onClick={() => setCategory(id)}
-              >
-                {tr(id)}
-              </button>
-            ))}
+            <Segmented
+              className="ol-shortcut-filter-options"
+              label={tr('category')}
+              value={category}
+              onChange={setCategory}
+              options={['all', 'recording', 'styles', 'system'].map((value) => ({
+                value,
+                label: tr(value),
+              }))}
+            />
           </nav>
           <nav aria-label={tr('status')}>
             <h3>{tr('status')}</h3>
-            {['all', 'assigned', 'unassigned'].map((id) => (
-              <button
-                type="button"
-                key={id}
-                aria-pressed={status === id}
-                onClick={() => setStatus(id)}
-              >
-                {tr(id)}
-              </button>
-            ))}
+            <Segmented
+              className="ol-shortcut-filter-options"
+              label={tr('status')}
+              value={status}
+              onChange={setStatus}
+              options={['all', 'assigned', 'unassigned'].map((value) => ({
+                value,
+                label: tr(value),
+              }))}
+            />
           </nav>
         </aside>
         <div className="ol-shortcut-results">
           <p className="ol-section-note">{tr('shortcutHint')}</p>
           {visible.map((command) => (
-            <div
-              className="ol-shortcut-row"
-              role="group"
-              aria-label={command.label}
-              key={command.id}
-            >
-              <div>
-                <span>{command.label}</span>
-                {command.desc && <small>{command.desc}</small>}
+            <Fragment key={command.id}>
+              <div
+                className="ol-shortcut-row"
+                role="group"
+                aria-label={command.label}
+                aria-disabled={command.unavailable}
+              >
+                <div>
+                  <span>{command.label}</span>
+                  {command.desc && <small>{command.desc}</small>}
+                </div>
+                <ShortcutRecorder
+                  value={command.binding}
+                  disabled={command.unavailable}
+                  onSave={command.save}
+                  onDisable={command.disable}
+                  onReset={command.reset}
+                  comboOnly={
+                    command.id === 'skipAutoStyle' && capability?.adapter === 'windowsLowLevel'
+                  }
+                  sideSpecificModifiers={command.id === 'dictation'}
+                />
               </div>
-              <ShortcutRecorder
-                value={command.binding}
-                onSave={command.save}
-                onDisable={command.disable}
-                onReset={command.reset}
-                sideSpecificModifiers={command.id === 'dictation'}
-              />
-            </div>
+              {command.id === 'skipAutoStyle' && (
+                <div className="ol-shortcut-row">
+                  <span>{stylePickerLabel}</span>
+                  <Toggle
+                    label={stylePickerLabel}
+                    on={prefs.skipAutoStylePickerEnabled ?? false}
+                    onToggle={(skipAutoStylePickerEnabled) => {
+                      // The shared preference store handles rollback and error feedback.
+                      void updatePrefs((current) => ({
+                        ...current,
+                        skipAutoStylePickerEnabled,
+                      })).catch(() => {});
+                    }}
+                  />
+                </div>
+              )}
+            </Fragment>
           ))}
           {readonly.map((row) => (
             <div className="ol-shortcut-row" key={row.label}>
@@ -347,7 +384,7 @@ export function ShortcutsSection() {
                   )
                 }
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             </div>
           ))}
@@ -378,10 +415,11 @@ export function ShortcutsSection() {
                   />
                   <button
                     type="button"
+                    className="ol-shortcut-remove"
                     onClick={() => setDraftOpen(false)}
                     aria-label={t('common.cancel')}
                   >
-                    ×
+                    <Icon name="close" size={16} />
                   </button>
                 </div>
               ) : (

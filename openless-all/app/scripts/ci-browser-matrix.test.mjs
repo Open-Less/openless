@@ -6,12 +6,46 @@ const workflow = yaml.load(
   readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
 );
 const browser = workflow.jobs['ui-motion-browsers'];
+assert.equal(browser.name, 'UI motion / ${{ matrix.browser }} (${{ matrix.shard }}/2)');
 assert.deepEqual(browser.strategy.matrix.browser, ['chromium', 'webkit']);
+assert.deepEqual(browser.strategy.matrix.shard, [1, 2]);
 assert.equal(browser.strategy['fail-fast'], false);
-assert.ok(browser.steps.some((s) => s.run?.includes('--project=${{ matrix.browser }}')));
-assert.ok(browser.steps.some((s) => s.with?.name === 'ui-motion-failure-${{ matrix.browser }}'));
+assert.equal(browser.strategy['max-parallel'], 4);
+assert.equal(browser['timeout-minutes'], 50);
+const run = browser.steps.find((s) => s.name === 'Run UI motion checks');
+assert.equal(
+  run.run,
+  'npm run test:ui-motion -- --project=${{ matrix.browser }} --shard=${{ matrix.shard }}/2',
+);
+assert.equal(run['timeout-minutes'], 30);
+const config = readFileSync(new URL('../playwright.config.ts', import.meta.url), 'utf8');
+const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
+assert.match(
+  viteConfig,
+  /optimizeDeps:\s*\{\s*entries:\s*\[\s*'index\.html',\s*'ask-window\/index\.html',\s*'e2e\/fixtures\/\*\.html'\s*\]/,
+  'prebundle dependencies from all browser fixture entries',
+);
+assert.match(config, /globalTimeout:\s*process\.env\.CI\s*\?\s*25\s*\*\s*60_000\s*:\s*undefined/);
+for (const setting of ['fullyParallel: false', 'retries: 0', 'workers: 1', 'timeout: 30_000']) {
+  assert.ok(config.includes(setting), `preserve timing isolation: ${setting}`);
+}
+const save = browser.steps.find((s) => s.name === 'Save Playwright browsers on beta builds');
+assert.equal(
+  save.if,
+  "matrix.shard == 1 && steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')",
+);
+const failure = browser.steps.find(
+  (s) => s.with?.name === 'ui-motion-failure-${{ matrix.browser }}-shard-${{ matrix.shard }}',
+);
+assert.equal(failure?.uses, 'actions/upload-artifact@v4');
+assert.equal(failure?.if, 'failure()');
+assert.equal(failure?.with['retention-days'], 7);
+assert.equal(
+  failure?.with.path,
+  'openless-all/app/test-results/\nopenless-all/app/playwright-report/\n',
+);
 const acceptance = browser.steps.find(
-  (s) => s.with?.name === 'ui-acceptance-${{ matrix.browser }}',
+  (s) => s.with?.name === 'ui-acceptance-${{ matrix.browser }}-shard-${{ matrix.shard }}',
 );
 assert.equal(acceptance?.uses, 'actions/upload-artifact@v4');
 assert.equal(acceptance?.if, 'always()');
@@ -44,4 +78,4 @@ for (const [result, required, expected] of [
     `${result}/${required} must not incorrectly report a green browser gate`,
   );
 }
-console.log('parallel browser coverage and aggregate failure propagation passed');
+console.log('2 engines × 2 shards, unique artifacts and aggregate failure propagation passed');

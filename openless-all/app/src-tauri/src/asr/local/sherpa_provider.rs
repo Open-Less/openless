@@ -230,7 +230,8 @@ impl SherpaOnnxAsr {
 
     pub fn cancel(&self) {
         self.cancel_generation.fetch_add(1, Ordering::SeqCst);
-        self.runtime.request_cancel_prepare();
+        // This provider already owns its prepared session. Cancelling it must
+        // not interrupt another segment loading the shared runtime.
         match &self.mode {
             SherpaProviderMode::Offline { buffer } => buffer.lock().clear(),
             SherpaProviderMode::Online { worker } => {
@@ -509,7 +510,7 @@ mod tests {
         provider.cancel();
         let after = provider.cancel_generation.load(Ordering::SeqCst);
         assert!(after > before);
-        assert!(runtime.cancel_prepare_requested_for_tests());
+        assert!(!runtime.cancel_prepare_requested_for_tests());
         match &provider.mode {
             SherpaProviderMode::Offline { buffer } => assert!(buffer.lock().is_empty()),
             SherpaProviderMode::Online { .. } => panic!("expected offline provider"),

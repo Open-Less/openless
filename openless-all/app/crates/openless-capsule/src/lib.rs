@@ -50,6 +50,12 @@ pub struct CapsulePopupState {
     /// Display name of the translation target, already localized by the host.
     #[serde(default)]
     pub translation_target: Option<String>,
+    #[serde(default)]
+    pub skip_auto_style: bool,
+    #[serde(default)]
+    pub style_pack_id: Option<String>,
+    #[serde(default)]
+    pub style_pack_name: Option<String>,
 }
 
 /// Copy shared with the WebView capsule (`src/i18n/*.ts`, `capsule.*`).
@@ -58,6 +64,8 @@ pub struct CapsulePopupState {
 #[serde(default)]
 pub struct CapsuleLabels {
     pub thinking: String,
+    pub transcribing: String,
+    pub empty_transcript: String,
     pub using: String,
     pub cancelled: String,
     pub error: String,
@@ -88,10 +96,10 @@ impl CapsuleLabels {
                 "已插入 {{count}}",
                 "翻譯為",
                 "正在翻譯",
-                "正在潤色...",
+                "正在潤色…",
                 "已替換",
-                "未選中內容",
-                "潤色失敗，請重試",
+                "未選取文字",
+                "潤色失敗",
             ]
         } else if locale.starts_with("zh") {
             [
@@ -102,10 +110,10 @@ impl CapsuleLabels {
                 "已插入 {{count}}",
                 "翻译为",
                 "正在翻译",
-                "正在润色...",
+                "正在润色…",
                 "已替换",
-                "未选中内容",
-                "润色失败，请重试",
+                "未选中文本",
+                "润色失败",
             ]
         } else if locale.starts_with("ja") {
             [
@@ -116,10 +124,10 @@ impl CapsuleLabels {
                 "{{count}} 文字を入力しました",
                 "翻訳先",
                 "翻訳中",
-                "推敲中...",
+                "推敲中…",
                 "置き換えました",
-                "選択されていません",
-                "推敲に失敗しました。もう一度お試しください",
+                "テキスト未選択",
+                "推敲に失敗",
             ]
         } else if locale.starts_with("ko") {
             [
@@ -130,10 +138,10 @@ impl CapsuleLabels {
                 "{{count}}자 입력됨",
                 "번역 언어",
                 "번역 중",
-                "다듬는 중...",
+                "다듬는 중…",
                 "교체됨",
-                "선택된 내용 없음",
-                "다듬기 실패, 다시 시도하세요",
+                "선택된 텍스트 없음",
+                "다듬기 실패",
             ]
         } else if locale.starts_with("es") {
             [
@@ -144,10 +152,10 @@ impl CapsuleLabels {
                 "{{count}} insertados",
                 "Traducir al",
                 "Traduciendo",
-                "Mejorando el texto…",
+                "Mejorando…",
                 "Reemplazado",
-                "No hay texto seleccionado",
-                "No se pudo mejorar el texto. Inténtalo de nuevo",
+                "Sin texto seleccionado",
+                "Error al mejorar",
             ]
         } else if locale.starts_with("fr") {
             [
@@ -158,10 +166,10 @@ impl CapsuleLabels {
                 "{{count}} insérés",
                 "Traduire en",
                 "Traduction",
-                "Amélioration du texte…",
+                "Amélioration…",
                 "Remplacé",
                 "Aucun texte sélectionné",
-                "L’amélioration a échoué. Réessayez",
+                "Échec",
             ]
         } else if locale.starts_with("de") {
             [
@@ -175,7 +183,7 @@ impl CapsuleLabels {
                 "Wird überarbeitet…",
                 "Ersetzt",
                 "Kein Text ausgewählt",
-                "Überarbeitung fehlgeschlagen. Erneut versuchen",
+                "Fehlgeschlagen",
             ]
         } else {
             [
@@ -188,14 +196,33 @@ impl CapsuleLabels {
                 "Translating",
                 "Polishing…",
                 "Replaced",
-                "Nothing selected",
-                "Polish failed, try again",
+                "No text selected",
+                "Polish failed",
             ]
         };
         let [thinking, using, cancelled, error, inserted, translate_to, translating, polishing, replaced, no_selection, polish_failed] =
             labels.map(String::from);
         Self {
             thinking,
+            empty_transcript: match locale {
+                _ if locale.starts_with("zh") && !locale.starts_with("zh-TW") && !locale.starts_with("zh-HK") => "空稿 · 未识别到语音",
+                _ if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") => "空稿 · 未辨識到語音",
+                _ if locale.starts_with("en") => "Empty · No speech",
+                _ if locale.starts_with("de") => "Leer · Keine Sprache",
+                _ if locale.starts_with("es") => "Vacío · Sin voz",
+                _ if locale.starts_with("fr") => "Vide · Aucune voix",
+                _ if locale.starts_with("ja") => "空の原稿・音声なし",
+                _ if locale.starts_with("ko") => "빈 초안 · 음성 없음",
+                _ => "Empty · No speech",
+            }.into(),
+            transcribing: if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") { "處理中" }
+                else if locale.starts_with("zh") { "处理中" }
+                else if locale.starts_with("de") { "Transkription" }
+                else if locale.starts_with("es") { "Transcribiendo" }
+                else if locale.starts_with("fr") { "Transcription" }
+                else if locale.starts_with("ja") { "文字起こし中" }
+                else if locale.starts_with("ko") { "변환 중" }
+                else { "Transcribing" }.into(),
             using,
             cancelled,
             error,
@@ -242,6 +269,12 @@ pub struct Frame {
     #[serde(default = "default_transcript_font_size")]
     pub transcript_font_size: f32,
     #[serde(default)]
+    pub processing_count: usize,
+    #[serde(default)]
+    pub processing_translation: bool,
+    #[serde(default)]
+    pub processing_session_id: Option<String>,
+    #[serde(default)]
     pub labels: CapsuleLabels,
     #[serde(default)]
     pub theme: ThemeMode,
@@ -278,7 +311,9 @@ impl Frame {
     pub fn accepts(&self, session_id: &str, sequence: u64, action: Action) -> bool {
         self.interactive
             && !self.leaving
-            && self.session_id == session_id
+            && (self.session_id == session_id || (action == Action::Cancel
+                && matches!(self.state.phase.as_str(), "recording" | "transcribing" | "polishing")
+                && self.processing_session_id.as_deref() == Some(session_id)))
             && sequence <= self.sequence
             && match action {
                 Action::Confirm => self.state.phase == "recording",
@@ -384,6 +419,9 @@ mod tests {
             transcript: String::new(),
             show_transcript: true,
             transcript_font_size: 15.0,
+            processing_count: 0,
+            processing_translation: false,
+            processing_session_id: None,
             labels: Default::default(),
             theme: ThemeMode::System,
             leaving: false,
@@ -402,6 +440,27 @@ mod tests {
         assert!(!frame.accepts("new", 42, Action::Confirm));
         frame.state.phase = "completed".into();
         assert!(!frame.accepts("new", 42, Action::Cancel));
+    }
+
+    #[test]
+    fn background_cancel_only_accepts_the_displayed_job_without_cancelling_capture() {
+        let mut recording = frame();
+        recording.processing_count = 1;
+        recording.processing_session_id = Some("background-a".into());
+        assert!(recording.accepts("background-a", 42, Action::Cancel));
+        assert!(!recording.accepts("background-a", 42, Action::Confirm));
+        assert!(recording.accepts("new", 42, Action::Cancel));
+        for phase in ["transcribing", "polishing"] {
+            recording.state.phase = phase.into();
+            assert!(recording.accepts("new", 42, Action::Cancel));
+            assert!(recording.accepts("background-a", 42, Action::Cancel));
+            assert!(!recording.accepts("background-a", 42, Action::Confirm));
+            assert!(!recording.accepts("unknown", 42, Action::Cancel));
+        }
+        recording.processing_session_id = Some("background-b".into());
+        assert!(!recording.accepts("background-a", 42, Action::Cancel));
+        recording.state.phase = "completed".into();
+        assert!(!recording.accepts("background-b", 42, Action::Cancel));
     }
     #[test]
     fn transcript_updates_without_volume_frames_but_never_crosses_sessions_or_terminal_states() {
@@ -456,8 +515,8 @@ mod tests {
     fn labels_match_the_webview_i18n_sources() {
         fn value(block: &str, key: &str) -> String {
             let start = block
-                .find(&format!("\n    {key}: "))
-                .or_else(|| block.find(&format!("\n      {key}: ")))
+                .find(&format!("\n    {key}:"))
+                .or_else(|| block.find(&format!("\n      {key}:")))
                 .unwrap_or_else(|| panic!("missing capsule.{key}"));
             let rest = &block[start..];
             let quote = rest.find('\'').unwrap() + 1;
@@ -481,6 +540,8 @@ mod tests {
             let labels = CapsuleLabels::for_locale(locale);
             for (key, actual) in [
                 ("thinking", &labels.thinking),
+                ("transcribing", &labels.transcribing),
+                ("emptyTranscript", &labels.empty_transcript),
                 ("using", &labels.using),
                 ("cancelled", &labels.cancelled),
                 ("error", &labels.error),

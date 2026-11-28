@@ -18,6 +18,7 @@ import type {
 import { OL_DATA } from '../mockData';
 import { publishPreviewChange } from '../../preview/events';
 import { readPreviewThemePreference } from '../../preview/preferences';
+import { getShortcutPlatform } from '../../runtime/environment';
 import { defaultAppShortcutModifiers, defaultSelectionPolishShortcut } from '../hotkey';
 
 export let mockSettings: UserPreferences = {
@@ -94,6 +95,11 @@ export let mockSettings: UserPreferences = {
   outputLanguagePreference: 'auto',
   qaSaveHistory: false,
   customComboHotkey: null,
+  skipAutoStyleHotkey: {
+    primary: getShortcutPlatform().isMac ? 'LeftCommand' : '',
+    modifiers: [],
+  },
+  skipAutoStylePickerEnabled: false,
   translationHotkey: { primary: 'Shift', modifiers: [] },
   switchStyleHotkey: {
     primary: 'S',
@@ -126,6 +132,8 @@ export let mockSettings: UserPreferences = {
   historyRetentionDays: 7,
   polishContextWindowMinutes: 5,
   polishSkipMaxChars: 0,
+  polishStrategyEnabled: false,
+  polishStrategyScript: '',
   startMinimized: false,
   themeMode: readPreviewThemePreference(),
   updateChannel: 'stable',
@@ -169,7 +177,7 @@ export let mockSettings: UserPreferences = {
     up: 'cancel',
     down: 'none',
     left: 'translation',
-    right: 'qa',
+    right: 'none',
   },
   androidOverlaySizeDp: 72,
 };

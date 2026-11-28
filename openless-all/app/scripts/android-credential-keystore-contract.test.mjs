@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 const paths = {
-  cipher: new URL('../android/kotlin/OpenLessCredentialCipher.kt', import.meta.url),
-  vault: new URL('../android/kotlin/OpenLessCredentialVault.kt', import.meta.url),
-  unitTest: new URL('../android/kotlin/test/OpenLessCredentialCipherTest.kt', import.meta.url),
+  cipher: new URL('../../android/kotlin/OpenLessCredentialCipher.kt', import.meta.url),
+  vault: new URL('../../android/kotlin/OpenLessCredentialVault.kt', import.meta.url),
+  unitTest: new URL('../../android/kotlin/test/OpenLessCredentialCipherTest.kt', import.meta.url),
   instrumentedTest: new URL(
-    '../android/kotlin/androidTest/OpenLessCredentialVaultInstrumentedTest.kt',
+    '../../android/kotlin/androidTest/OpenLessCredentialVaultInstrumentedTest.kt',
     import.meta.url,
   ),
   rustStore: new URL('../src-tauri/src/persistence/android_credentials.rs', import.meta.url),
@@ -18,7 +18,7 @@ const paths = {
   coreApi: new URL('../crates/openless-core/src/api.rs', import.meta.url),
   mobileRuntime: new URL('../src-tauri/src/mobile_runtime.rs', import.meta.url),
   channelList: new URL('../src/features/providers/ChannelList.tsx', import.meta.url),
-  copyScript: new URL('./copy-android-scaffolding.mjs', import.meta.url),
+  copyScript: new URL('../../android/scripts/copy-android-scaffolding.mjs', import.meta.url),
   ci: new URL('../../../.github/workflows/ci.yml', import.meta.url),
 };
 

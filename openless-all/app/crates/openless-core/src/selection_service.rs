@@ -10,7 +10,7 @@ use crate::dictation_context::{
     DictationContext, DictationProviderInvocations, DictationStartOptions, ProviderInvocation,
 };
 use crate::domains::{
-    SelectionApi, SelectionCapture, SelectionPhase, SelectionPolishRequest,
+    SelectionApi, SelectionCapture, SelectionCaptureAuthorization, SelectionPhase, SelectionPolishRequest,
     SelectionRuntimeAdapter, SelectionSnapshot,
 };
 use crate::errors::{BackendError, BackendErrorCode};
@@ -30,6 +30,7 @@ use crate::{
 #[derive(Clone, Default)]
 struct SelectionState {
     snapshot: SelectionSnapshot,
+    capture_authorization: Option<SelectionCaptureAuthorization>,
     source_app: Option<String>,
     context: Option<Arc<DictationContext>>,
     started_at: Option<std::time::Instant>,
@@ -37,6 +38,14 @@ struct SelectionState {
     polish_ms: Option<u64>,
     llm_used: bool,
     reverting: bool,
+}
+
+impl SelectionState {
+    fn revoke_capture_authorization(&self) {
+        if let Some(authorization) = &self.capture_authorization {
+            authorization.revoke();
+        }
+    }
 }
 
 struct SelectionServiceInner {
@@ -126,8 +135,8 @@ impl SelectionServiceInner {
         let _ = self
             .runtime_work
             .cleanup(Box::pin(async move {
-                let _ = polisher.cancel(session_id).await;
-                let _ = runtime.cancel(session_id).await;
+                let runtime_cancel = runtime.cancel(session_id);
+                let _ = futures_util::future::join(runtime_cancel, polisher.cancel(session_id)).await;
                 Ok(())
             }))
             .await;
@@ -139,7 +148,9 @@ impl SelectionServiceInner {
         }
     }
 
-    fn begin(&self, request: &SelectionPolishRequest) -> Result<SessionId, BackendError> {
+    fn begin(&self, request: &SelectionPolishRequest)
+        -> Result<(SessionId, SelectionCaptureAuthorization), BackendError>
+    {
         let mut state = self.state.write().expect("selection state lock poisoned");
         if matches!(
             state.snapshot.phase,
@@ -150,7 +161,10 @@ impl SelectionServiceInner {
                 "a selection session is already active",
             ));
         }
+        state.revoke_capture_authorization();
         let session_id = SessionId::new();
+        let authorization = SelectionCaptureAuthorization::new(session_id);
+        state.capture_authorization = Some(authorization.clone());
         state.snapshot = SelectionSnapshot {
             phase: SelectionPhase::Capturing,
             session_id: Some(session_id),
@@ -173,7 +187,7 @@ impl SelectionServiceInner {
             Some(session_id),
             BackendEventKind::SelectionStateChanged(snapshot),
         );
-        Ok(session_id)
+        Ok((session_id, authorization))
     }
 
     fn ensure_active(state: &SelectionState, session_id: SessionId) -> Result<(), BackendError> {
@@ -191,10 +205,39 @@ impl SelectionServiceInner {
         Ok(())
     }
 
+    fn publish_history_changed(&self) {
+        let revision = self.history_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        self.events.publish(None, BackendEventKind::HistoryChanged(HistoryChange { revision }));
+    }
+
+    fn persist_original(
+        &self,
+        id: SessionId,
+        capture: &SelectionCapture,
+        mode: crate::types::PolishMode,
+    ) -> Result<(), BackendError> {
+        let prefs = self.preferences.get();
+        let record = original_record(
+            id,
+            capture,
+            mode,
+            HistorySource::SelectionPolish,
+            self.clock.now_utc().to_rfc3339(),
+        );
+        self.history.upsert_with_retention(
+            record,
+            prefs.history_retention_days,
+            prefs.history_max_entries,
+        )?;
+        self.publish_history_changed();
+        Ok(())
+    }
+
     fn set_capture(
         &self,
         session_id: SessionId,
         capture: &SelectionCapture,
+        mode: crate::types::PolishMode,
     ) -> Result<(), BackendError> {
         if capture.text.trim().is_empty() {
             return Err(BackendError::new(
@@ -204,6 +247,9 @@ impl SelectionServiceInner {
         }
         let mut state = self.state.write().expect("selection state lock poisoned");
         Self::ensure_active(&state, session_id)?;
+        // Cancellation must settle an existing original, rather than race a
+        // late insert that would leave a permanent selectionProcessing row.
+        self.persist_original(session_id, capture, mode)?;
         state.snapshot.source_text = Some(capture.text.clone());
         state.source_app = capture.source_app.clone();
         Ok(())
@@ -320,10 +366,17 @@ impl SelectionServiceInner {
     fn set_preview(&self, session_id: SessionId, preview_text: String) -> Result<(), BackendError> {
         let mut state = self.state.write().expect("selection state lock poisoned");
         Self::ensure_active(&state, session_id)?;
+        update_original_record(
+            &self.history,
+            session_id,
+            Some(&preview_text),
+            "selectionPreview",
+        )?;
         state.snapshot.preview_text = Some(preview_text);
         state.snapshot.phase = SelectionPhase::Preview;
         let snapshot = state.snapshot.clone();
         drop(state);
+        self.publish_history_changed();
         self.events.publish(
             Some(session_id),
             BackendEventKind::SelectionStateChanged(snapshot),
@@ -355,6 +408,7 @@ impl SelectionServiceInner {
                 "selection source is unavailable",
             )
         })?;
+        require_original_record(&self.history, session_id, &source_text)?;
         let replacement_text = replacement
             .or_else(|| state.snapshot.preview_text.clone())
             .filter(|text| !text.trim().is_empty())
@@ -403,7 +457,15 @@ impl SelectionServiceInner {
                 "selection session is not applying",
             ));
         }
+        update_original_record(
+            &self.history,
+            session_id,
+            Some(&final_text),
+            "selectionPreview",
+        )?;
         state.snapshot.preview_text = Some(final_text.clone());
+        drop(state);
+        self.publish_history_changed();
         Ok(final_text)
     }
 
@@ -415,6 +477,7 @@ impl SelectionServiceInner {
         let mut state = self.state.write().expect("selection state lock poisoned");
         Self::ensure_active(&state, session_id)?;
         state.snapshot.insert_outcome = Some(outcome);
+        state.revoke_capture_authorization();
         state.snapshot.phase = SelectionPhase::Completed;
         // Completion makes a new capture admissible. Freeze all history fields
         // before publishing it so a successor cannot replace this turn's text.
@@ -511,7 +574,7 @@ impl SelectionServiceInner {
         };
         let activity_app = session.app_name.clone();
         let mut changed = false;
-        match self.history.append_with_retention(
+        match self.history.upsert_with_retention(
             session,
             preferences.history_retention_days,
             preferences.history_max_entries,
@@ -540,7 +603,7 @@ impl SelectionServiceInner {
         }
     }
 
-    fn fail_if_active(&self, session_id: SessionId) -> bool {
+    fn fail_if_active(&self, session_id: SessionId, cause: &BackendError) -> bool {
         let mut state = self.state.write().expect("selection state lock poisoned");
         // Settle only sessions still in progress: Cancelled means the user ended it;
         // Completed means paste succeeded (race: the narrow window between the
@@ -552,9 +615,23 @@ impl SelectionServiceInner {
                 SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
             )
         {
+            if let Err(error) = update_original_record(
+                &self.history,
+                session_id,
+                state.snapshot.preview_text.as_deref(),
+                if matches!(cause.message.as_str(), "selectionInputTooLarge" | "selectionPolishWriteUnconfirmed") {
+                    cause.message.as_str()
+                } else {
+                    "selectionFailed"
+                },
+            ) {
+                log::warn!("failed to settle selection history: {error}");
+            }
+            state.revoke_capture_authorization();
             state.snapshot.phase = SelectionPhase::Failed;
             let snapshot = state.snapshot.clone();
             drop(state);
+            self.publish_history_changed();
             self.events.publish(
                 Some(session_id),
                 BackendEventKind::SelectionStateChanged(snapshot),
@@ -577,12 +654,26 @@ impl SelectionServiceInner {
                 | BackendErrorCode::InvalidState
                 | BackendErrorCode::InvalidArgument
                 | BackendErrorCode::Busy
+                | BackendErrorCode::OutcomeUnknown
         );
         let mut state = self.state.write().expect("selection state lock poisoned");
         let active = state.snapshot.session_id == Some(session_id)
             && !matches!(state.snapshot.phase, SelectionPhase::Cancelled);
         if !active {
             return false;
+        }
+        if error.code == BackendErrorCode::OutcomeUnknown {
+            if let Err(persistence_error) = update_original_record(
+                &self.history,
+                session_id,
+                state.snapshot.preview_text.as_deref(),
+                "selectionPolishWriteUnconfirmed",
+            ) {
+                log::warn!("failed to settle uncertain selection history: {persistence_error}");
+            }
+        }
+        if settled {
+            state.revoke_capture_authorization();
         }
         state.snapshot.phase = if settled {
             SelectionPhase::Failed
@@ -591,6 +682,9 @@ impl SelectionServiceInner {
         };
         let snapshot = state.snapshot.clone();
         drop(state);
+        if error.code == BackendErrorCode::OutcomeUnknown {
+            self.publish_history_changed();
+        }
         self.events.publish(
             Some(session_id),
             BackendEventKind::SelectionStateChanged(snapshot),
@@ -686,25 +780,20 @@ impl SelectionApi for SelectionService {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
             let _runtime = inner.begin_runtime_work()?;
-            let session_id = inner.begin(&request)?;
+            let (session_id, authorization) = inner.begin(&request)?;
             let result = async {
                 let capture = inner
                     .runtime
-                    .capture(session_id, request.selected_text.clone())
+                    .capture_authorized(session_id, request.selected_text.clone(), authorization)
                     .await?;
-                inner.set_capture(session_id, &capture)?;
+                inner.set_capture(session_id, &capture, request.mode)?;
+                inner
+                    .runtime
+                    .protect_original(session_id, capture.text.clone())
+                    .await?;
                 let (mut context, output_mode, uses_llm) = inner
                     .polish_context(&request, inner.source_app(session_id)?)
                     .await?;
-                // The polish prompt truncates at the XML envelope cap, but DirectReplace
-                // writes the model output over the entire captured selection. Refuse
-                // before any provider call so the unseen tail cannot be deleted.
-                if uses_llm && crate::prompts::exceeds_xml_envelope_cap(&capture.text) {
-                    return Err(BackendError::new(
-                        BackendErrorCode::InvalidArgument,
-                        crate::prompts::truncated_selection_replacement_message(),
-                    ));
-                }
                 context.polish.selection_input = true;
                 let context = Arc::new(context);
                 inner.set_context(session_id, Arc::clone(&context))?;
@@ -807,9 +896,11 @@ impl SelectionApi for SelectionService {
                 Ok(session_id)
             }
             .await;
-            if result.is_err() && inner.fail_if_active(session_id) {
-                inner.cancel_runtime_best_effort(session_id).await;
-                inner.hide_preview();
+            if let Err(error) = &result {
+                if inner.fail_if_active(session_id, error) {
+                    inner.cancel_runtime_best_effort(session_id).await;
+                    inner.hide_preview();
+                }
             }
             result
         })
@@ -871,6 +962,24 @@ impl SelectionApi for SelectionService {
                 if state.snapshot.phase == SelectionPhase::Cancelled {
                     return Ok(());
                 }
+                // Revoke even if the host has not received capture(A) yet.
+                // This is a local atomic store, never an adapter callback under
+                // the Core state lock. B cannot become active before it.
+                state.revoke_capture_authorization();
+                if matches!(
+                    state.snapshot.phase,
+                    SelectionPhase::Capturing | SelectionPhase::Preview | SelectionPhase::Applying
+                ) && state.snapshot.source_text.is_some()
+                {
+                    if let Err(error) = update_original_record(
+                        &inner.history,
+                        active_session,
+                        state.snapshot.preview_text.as_deref(),
+                        "selectionCancelled",
+                    ) {
+                        log::warn!("failed to settle cancelled selection history: {error}");
+                    }
+                }
                 state.snapshot.phase = SelectionPhase::Cancelled;
                 let snapshot = state.snapshot.clone();
                 (active_session, snapshot)
@@ -879,10 +988,15 @@ impl SelectionApi for SelectionService {
                 Some(active_session.0),
                 BackendEventKind::SelectionStateChanged(active_session.1),
             );
+            inner.publish_history_changed();
             inner.hide_preview();
             let active_session = active_session.0;
-            let polish_result = inner.polisher.cancel(active_session).await;
-            let runtime_result = inner.runtime.cancel(active_session).await;
+            // The host synchronously invalidates pending native work at this
+            // call boundary; do not postpone it behind provider cancellation.
+            let runtime_cancel = inner.runtime.cancel(active_session);
+            let (runtime_result, polish_result) = futures_util::future::join(
+                runtime_cancel, inner.polisher.cancel(active_session),
+            ).await;
             polish_result?;
             runtime_result
         }))
@@ -909,5 +1023,82 @@ struct DiscardTextStreamSink;
 impl TextStreamSink for DiscardTextStreamSink {
     fn publish(&self, _chunk: TextStreamChunk) -> Result<(), BackendError> {
         Ok(())
+    }
+}
+
+/// A provisional row in the existing history store; raw_transcript is immutable input.
+pub(crate) fn original_record(
+    id: SessionId,
+    capture: &SelectionCapture,
+    mode: crate::types::PolishMode,
+    source: HistorySource,
+    created_at: String,
+) -> DictationSession {
+    let app = crate::shared_types::split_front_app_opt(capture.source_app.as_deref());
+    DictationSession {
+        id: id.to_string(),
+        created_at,
+        source,
+        raw_transcript: capture.text.clone(),
+        asr_transcript: None,
+        final_text: String::new(),
+        mode,
+        style_pack_id: None,
+        translation_active: false,
+        polish_source: None,
+        app_bundle_id: app.bundle_id,
+        app_name: app.name,
+        insert_status: HistoryInsertStatus::NotRequested,
+        error_code: Some("selectionProcessing".into()),
+        duration_ms: None,
+        dictionary_entry_count: None,
+        has_audio_recording: None,
+        asr_provider: None,
+        asr_model: None,
+        llm_provider: None,
+        llm_model: None,
+        pipeline_mode: None,
+        asr_ms: None,
+        polish_ms: None,
+    }
+}
+
+/// Update only terminal/progress fields; never replace the persisted original.
+pub(crate) fn update_original_record(
+    history: &HistoryStore,
+    id: SessionId,
+    result: Option<&str>,
+    status: &str,
+) -> Result<(), BackendError> {
+    if let Some(mut row) = history.read_entry(&id.to_string())? {
+        if let Some(result) = result {
+            row.final_text = result.to_string();
+        }
+        row.error_code = Some(status.to_string());
+        history.update_entry(row)?;
+    } else {
+        return Err(BackendError::new(
+            BackendErrorCode::Persistence,
+            "selectionOriginalUnavailable",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn require_original_record(
+    history: &HistoryStore,
+    id: SessionId,
+    original: &str,
+) -> Result<(), BackendError> {
+    if history
+        .read_entry(&id.to_string())?
+        .is_some_and(|row| row.raw_transcript == original)
+    {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            BackendErrorCode::Persistence,
+            "selectionOriginalUnavailable",
+        ))
     }
 }

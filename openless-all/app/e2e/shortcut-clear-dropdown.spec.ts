@@ -1,6 +1,6 @@
 import { fixtureOrigin } from './support/server';
 import { expect, test } from '@playwright/test';
-import { openMicrophoneSettings } from './support/navigation';
+import { openMicrophoneSettings, settleSelectDismissal } from './support/navigation';
 
 test('every configurable shortcut can be cleared and stays clear after remount', async ({
   page,
@@ -8,10 +8,12 @@ test('every configurable shortcut can be cleared and stays clear after remount',
   await page.goto('/?os=mac');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
-  const rows = page.locator('.ol-shortcut-row[role="group"]');
+  // Ask bindings live in their dedicated entry settings, not this legacy row.
+  await expect(page.getByRole('group', { name: '随便问', exact: true })).toHaveCount(0);
+  const rows = page.locator('.ol-shortcut-row[role="group"]:not([aria-disabled="true"])');
   await expect(rows.first()).toBeVisible();
   const count = await rows.count();
-  expect(count).toBeGreaterThanOrEqual(7);
+  expect(count).toBeGreaterThanOrEqual(6);
   await expect(page.getByRole('button', { name: 'Mac 听写键', exact: true })).toHaveCount(0);
   for (let index = 0; index < count; index++) {
     const row = rows.nth(index);
@@ -58,6 +60,8 @@ for (const scale of [0.9, 1, 1.1]) {
       await trigger.click();
       const popup = page.locator('.ol-select-popup[data-open]');
       await expect(popup).toBeVisible();
+      await expect(popup).toHaveAttribute('data-side', 'bottom');
+      await expect(popup).toHaveCSS('opacity', '1');
       await expect(async () => {
         const anchor = (await trigger.boundingBox())!;
         const bounds = (await popup.boundingBox())!;
@@ -65,7 +69,7 @@ for (const scale of [0.9, 1, 1.1]) {
         expect(Math.abs(bounds.x - anchor.x)).toBeLessThan(2);
       }).toPass({ timeout: 3000 });
       await page.keyboard.press('Escape');
-      await expect(popup).toBeHidden();
+      await settleSelectDismissal(page);
     }
   });
 }

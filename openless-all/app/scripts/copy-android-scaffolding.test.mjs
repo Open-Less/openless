@@ -18,7 +18,7 @@ import {
   mergeMissingStringResources,
   mergeKeyboardSettingsDebugActivity,
   SHIZUKU_STRINGS_BY_LOCALE,
-} from './copy-android-scaffolding.mjs';
+} from '../../android/scripts/copy-android-scaffolding.mjs';
 
 const baseXml = `<?xml version="1.0" encoding="utf-8"?>
 <resources>
@@ -100,14 +100,24 @@ assert.equal(
 );
 console.log('keyboard settings debug manifest checks passed');
 
-const fixture = mkdtempSync(join(tmpdir(), 'openless-keyboard-debug-manifest-'));
+const sandbox = mkdtempSync(join(tmpdir(), 'openless-keyboard-debug-manifest-'));
+const fixture = join(sandbox, 'app');
+mkdirSync(fixture, { recursive: true });
 try {
-  mkdirSync(join(fixture, 'scripts'));
-  const script = join(fixture, 'scripts/copy-android-scaffolding.mjs');
-  copyFileSync(new URL('./copy-android-scaffolding.mjs', import.meta.url), script);
-  cpSync(new URL('../android/', import.meta.url), join(fixture, 'android'), { recursive: true });
+  mkdirSync(join(fixture, '../android/scripts'), { recursive: true });
+  const script = join(fixture, '../android/scripts/copy-android-scaffolding.mjs');
+  copyFileSync(
+    new URL('../../android/scripts/copy-android-scaffolding.mjs', import.meta.url),
+    script,
+  );
+  cpSync(new URL('../../android', import.meta.url), join(fixture, '../android'), {
+    recursive: true,
+  });
   // The normal build generates this source before copying the scaffolding.
-  writeFileSync(join(fixture, 'android/kotlin/OpenLessBuildInfo.kt'), 'package com.openless.app\n');
+  writeFileSync(
+    join(fixture, '../android/kotlin/OpenLessBuildInfo.kt'),
+    'package com.openless.app\n',
+  );
   cpSync(
     new URL('../src-tauri/icons/android/', import.meta.url),
     join(fixture, 'src-tauri/icons/android'),
@@ -128,9 +138,24 @@ try {
   assert.equal(run(['--dry-run']), original);
   const first = run();
   assert.match(first, /android:name="com\.openless\.app\.OpenLessKeyboardSettingsActivity"/);
+  assert.match(first, /android:name="com\.openless\.app\.OpenLessRuntimeService"/);
+  assert.equal(
+    readFileSync(
+      join(app, 'src/androidTest/java/com/openless/app/OpenLessRuntimeServiceInstrumentedTest.kt'),
+      'utf8',
+    ),
+    readFileSync(
+      new URL(
+        '../../android/kotlin/androidTest/OpenLessRuntimeServiceInstrumentedTest.kt',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    'runtime lifecycle regression must reach the generated instrumentation source set',
+  );
   assert.match(first, /android:usesCleartextTraffic="true"/);
   assert.equal(run(), first, 'repeated scaffolding copies must preserve the debug manifest');
 } finally {
-  rmSync(fixture, { recursive: true, force: true });
+  rmSync(sandbox, { recursive: true, force: true });
 }
 console.log('keyboard settings instrumentation scaffolding checks passed');

@@ -7,10 +7,10 @@ import ts from 'typescript';
 import { icons } from './sync-egui-lucide-icons.mjs';
 
 const app = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const linux = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/icons.rs'), 'utf8');
+const linux = readFileSync(resolve(app, '../linux/egui/src/ui/frontend/icons.rs'), 'utf8');
 const tauri = readFileSync(resolve(app, 'src/components/Icon.tsx'), 'utf8');
-const nav = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/layout.rs'), 'utf8');
-const settings = readFileSync(resolve(app, 'linux-egui/src/ui/frontend/settings.rs'), 'utf8');
+const nav = readFileSync(resolve(app, '../linux/egui/src/ui/frontend/layout.rs'), 'utf8');
+const settings = readFileSync(resolve(app, '../linux/egui/src/ui/frontend/settings.rs'), 'utf8');
 const tauriSettings = readFileSync(
   resolve(app, 'src/features/settings/shell/navigation.ts'),
   'utf8',
@@ -141,12 +141,12 @@ const desktopEntries = propertyValue(desktopTools, 'children');
 assert.ok(desktopEntries && ts.isArrayLiteralExpression(desktopEntries), 'Tauri desktop tools');
 assert.deepEqual(
   desktopEntries.elements.map((item) => stringProperty(item, 'id')),
-  ['corrections', 'selectionAsk', 'translation', 'quickNote'],
+  ['corrections', 'translation', 'quickNote'],
   'Tauri sidebar tools order',
 );
 assert.deepEqual(
   navArray('MORE_TABS').map((item) => stringProperty(item, 'id')),
-  ['vocab', 'translation', 'selectionAsk', 'quickNote', 'corrections'],
+  ['vocab', 'translation', 'quickNote', 'corrections'],
   'Tauri compact More sheet order',
 );
 console.log('egui SVG outlines match Tauri; sidebar and compact navigation orders verified');

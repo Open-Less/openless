@@ -116,6 +116,10 @@ pub struct OpenAICompatibleConfig {
     /// allowlist checks, but the official OpenAI channel skips ordinary chat models known
     /// not to support reasoning_effort.
     pub thinking_enabled: bool,
+    /// One-call normalized effort selected by the post-ASR strategy, if any.
+    pub reasoning_effort: Option<String>,
+    /// One-call token cap selected by the post-ASR strategy.
+    pub max_tokens_override: Option<u32>,
 }
 
 impl OpenAICompatibleConfig {
@@ -143,11 +147,23 @@ impl OpenAICompatibleConfig {
             temperature,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             thinking_enabled: false,
+            reasoning_effort: None,
+            max_tokens_override: None,
         }
     }
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.thinking_enabled = enabled;
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_max_tokens_override(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_tokens_override = max_tokens;
         self
     }
 
@@ -273,6 +289,37 @@ impl ActiveLLMProvider {
     /// Responses transport. Gemini is routed separately by cloud_providers.
     pub fn supports_streaming_polish(&self) -> bool {
         matches!(self, Self::OpenAI(_) | Self::Codex(_))
+    }
+
+    pub(crate) async fn selection_streaming<F, C>(
+        &self,
+        system: String,
+        user: String,
+        on_delta: F,
+        should_cancel: C,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
+        let input_chars = user.chars().count();
+        let messages = vec![
+            json!({"role":"system", "content":system}),
+            json!({"role":"user", "content":user}),
+        ];
+        match self {
+            Self::OpenAI(p) => {
+                p.chat_completion_messages_streaming_checked(
+                    messages,
+                    StreamingTimeouts::for_input(input_chars),
+                    on_delta,
+                    should_cancel,
+                    true,
+                )
+                .await
+            }
+            Self::Codex(p) => p.codex_responses(messages, on_delta, should_cancel).await,
+        }
     }
 
     pub async fn polish_streaming<F, C>(
@@ -547,12 +594,22 @@ impl OpenAICompatibleLLMProvider {
         let no_proxy =
             crate::net::should_bypass_proxy(&config.base_url, crate::net::use_system_proxy());
         let polish_base_url = config.base_url.clone();
-        let polish_client =
+        let cached_client = ||
             crate::net::cached_client((POLISH_CLIENT_HARD_CAP_SECS, no_proxy), || {
                 http_client_builder(&polish_base_url, POLISH_CLIENT_HARD_CAP_SECS)
                     .build()
                     .unwrap_or_else(|_| reqwest::Client::new())
             });
+        // The comparison must never reuse a production client's pool, redirects,
+        // or protocol retry policy. Other tests and production keep the cache.
+        #[cfg(test)]
+        let polish_client = if live_acceptance::intent_active() {
+            live_acceptance::intent_client(&polish_base_url, POLISH_CLIENT_HARD_CAP_SECS)
+        } else {
+            cached_client()
+        };
+        #[cfg(not(test))]
+        let polish_client = cached_client();
         Self {
             config,
             qa_web_search: false,
@@ -905,18 +962,52 @@ impl OpenAICompatibleLLMProvider {
                 body["temperature"] = temperature_json(temperature);
             }
         }
-        apply_openai_compatible_thinking_control(
+        if let Some(max_tokens) = self.config.max_tokens_override {
+            let field = if self.config.provider_id.trim() == "openai"
+                && openai_model_uses_max_completion_tokens(&self.config.model)
+            {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            };
+            body[field] = json!(max_tokens);
+        }
+        apply_openai_compatible_thinking_control_with_effort(
             &mut body,
             &self.config.provider_id,
             &self.config.base_url,
             &self.config.model,
             self.config.thinking_enabled,
+            self.config.reasoning_effort.as_deref(),
         );
         self.config
             .protocol
             .apply_service_tier(&self.config.provider_id, &mut body);
         crate::prompt_cache::apply(&self.config, &mut body);
         body
+    }
+
+    pub(crate) fn ask_config(&self) -> &OpenAICompatibleConfig {
+        &self.config
+    }
+
+    pub(crate) fn ask_request(
+        &self,
+        messages: Vec<Value>,
+        configure: impl FnOnce(&mut Value),
+    ) -> Result<reqwest::RequestBuilder, LLMError> {
+        self.config
+            .protocol
+            .validate()
+            .and_then(|_| self.config.protocol.validate_headers(&self.config.extra_headers))
+            .map_err(|error| LLMError::ParseError(error.message))?;
+        let url = self.config.protocol.format.url(&self.config.base_url)?;
+        let mut body = self.chat_body(true, messages);
+        configure(&mut body);
+        Ok(self
+            .authorize(crate::net::credential_http_for_url(&url).post(url), &body)
+            .header("Accept", "text/event-stream")
+            .json(&body))
     }
 
     /// Shared HTTP send + body parsing. chat_completion / chat_completion_with_polish_history
@@ -1079,6 +1170,21 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
+        self.chat_completion_messages_streaming_checked(messages, timeouts, on_delta, should_cancel, false).await
+    }
+
+    async fn chat_completion_messages_streaming_checked<F, C>(
+        &self,
+        messages: Vec<Value>,
+        timeouts: StreamingTimeouts,
+        on_delta: F,
+        should_cancel: C,
+        require_complete: bool,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
         if let Some(access) = &self.siwc_access {
             return access
                 .infer(
@@ -1141,13 +1247,15 @@ impl OpenAICompatibleLLMProvider {
                     result.map_err(|_| LLMError::Timeout)?.map_err(llm_error_from_reqwest)?
                 }
             };
+            #[cfg(test)]
+            live_acceptance::observe_error_code(&body_text);
             return Err(LLMError::InvalidResponse {
                 status: status.as_u16(),
                 body: safe_str_slice(&body_text, BODY_PREVIEW_LIMIT.min(body_text.len()))
                     .to_string(),
             });
         }
-        let mut events = TextEventStream::new(self.config.protocol.format);
+        let mut events = TextEventStream::new(self.config.protocol.format).require_complete(require_complete);
         let mut full_text = String::new();
         let mut delta_count = 0usize;
         let mut cancelled = false;
@@ -1253,6 +1361,8 @@ pub struct CodexOAuthConfig {
     pub model: String,
     pub auth_path: Option<PathBuf>,
     pub reasoning_effort: Option<String>,
+    /// Requested strategy limit; omitted because the Codex endpoint rejects it.
+    pub max_output_tokens: Option<u32>,
     pub text_verbosity: Option<String>,
     pub request_timeout_secs: u64,
 }
@@ -1264,6 +1374,7 @@ impl CodexOAuthConfig {
             model: normalize_codex_model(model.into().as_str()),
             auth_path: None,
             reasoning_effort: Some("medium".to_string()),
+            max_output_tokens: None,
             text_verbosity: Some("medium".to_string()),
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
         }
@@ -1281,6 +1392,16 @@ impl CodexOAuthConfig {
 
     pub fn with_thinking_enabled(mut self, enabled: bool) -> Self {
         self.reasoning_effort = Some(if enabled { "medium" } else { "low" }.to_string());
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    pub fn with_max_output_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_tokens;
         self
     }
 }
@@ -1553,6 +1674,14 @@ impl CodexOAuthLLMProvider {
         if let Some(effort) = self.config.reasoning_effort.as_deref() {
             body["reasoning"] = json!({ "effort": effort });
         }
+        if let Some(max_tokens) = self.config.max_output_tokens {
+            // The subscription endpoint accepts a subset of Responses fields;
+            // unlike the public API, it rejects max_output_tokens with HTTP 400.
+            log::debug!(
+                "[llm] omitting unsupported Codex strategy maxTokens={}",
+                max_tokens
+            );
+        }
         if let Some(verbosity) = self.config.text_verbosity.as_deref() {
             body["text"] = json!({ "verbosity": verbosity });
         }
@@ -1601,6 +1730,7 @@ impl CodexOAuthLLMProvider {
         let mut utf8_pending: Vec<u8> = Vec::new();
         let mut full_text = String::new();
         let mut final_text = String::new();
+        let mut completed = false;
         let mut cancelled = false;
         loop {
             if should_cancel() {
@@ -1615,6 +1745,7 @@ impl CodexOAuthLLMProvider {
             while let Some(idx) = buffer.find("\n\n") {
                 let event = buffer[..idx].to_string();
                 buffer.drain(..idx + 2);
+                validate_codex_completion(&event, &mut completed)?;
                 handle_codex_sse_event(&event, &mut full_text, &mut final_text, &on_delta);
             }
         }
@@ -1622,9 +1753,13 @@ impl CodexOAuthLLMProvider {
             finish_utf8_sse_chunks(&mut buffer, &mut utf8_pending)?;
         }
         if !buffer.trim().is_empty() {
+            validate_codex_completion(&buffer, &mut completed)?;
             handle_codex_sse_event(&buffer, &mut full_text, &mut final_text, &on_delta);
         }
 
+        if !completed || cancelled {
+            return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+        }
         if full_text.is_empty() && !final_text.is_empty() {
             full_text = final_text;
         }
@@ -1796,6 +1931,20 @@ fn should_retry_transient(is_connect: bool, is_request: bool, is_timeout: bool) 
 pub(crate) async fn send_with_transient_retry(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LLMError> {
+    #[cfg(test)]
+    if live_acceptance::intent_active() {
+        let mut send = live_acceptance::intent_before_send()?;
+        let response = request.send().await.map_err(llm_error_from_reqwest);
+        send.succeeded = response.as_ref().is_ok_and(|response| response.status().is_success());
+        return response;
+    }
+    #[cfg(test)]
+    if live_acceptance::active() {
+        let attempt = live_acceptance::before_send()?;
+        let response = request.send().await.map_err(llm_error_from_reqwest);
+        println!("LIVE_HTTP {}", serde_json::json!({"attempt":attempt, "status":response.as_ref().ok().map(|response| response.status().as_u16()), "final_url":response.as_ref().ok().map(|response| response.url().as_str())}));
+        return response;
+    }
     const RETRY_DELAY_MS: u64 = 500;
     let Some(initial) = request.try_clone() else {
         // try_clone failed (e.g. stream body is not cloneable) -> skip retry, send once.
@@ -1897,6 +2046,29 @@ fn codex_input_from_chat_messages(messages: &[Value]) -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+fn validate_codex_completion(event: &str, completed: &mut bool) -> Result<(), LLMError> {
+    for data in event.lines().filter_map(|line| line.strip_prefix("data:")) {
+        if let Ok(value) = serde_json::from_str::<Value>(data.trim()) {
+            match value["type"].as_str().unwrap_or_default() {
+                "response.failed" | "response.incomplete" | "error" => {
+                    return Err(LLMError::ParseError("llmResponseIncomplete".into()))
+                }
+                "response.completed" => {
+                    if value["response"]["status"]
+                        .as_str()
+                        .is_some_and(|status| status != "completed")
+                    {
+                        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+                    }
+                    *completed = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_codex_sse_event<F>(
@@ -2030,13 +2202,23 @@ fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn apply_openai_compatible_thinking_control(
+pub(crate) fn apply_openai_compatible_thinking_control_with_effort(
     body: &mut Value,
     provider_id: &str,
     base_url: &str,
     model: &str,
     thinking_enabled: bool,
+    override_effort: Option<&str>,
 ) {
+    // Providers with boolean thinking controls cannot represent four effort
+    // levels, but the strategy still needs to be able to enable or disable
+    // thinking for this request. Preserve the exact effort only in the
+    // provider-specific fields that support it; map low/medium/high to enabled
+    // for boolean controls.
+    let base_thinking_enabled = thinking_enabled;
+    let thinking_enabled = override_effort
+        .map(|effort| effort != "none")
+        .unwrap_or(thinking_enabled);
     if provider_id.trim() == "tencentTokenHub" {
         apply_tokenhub_chat_thinking_control(body, model, thinking_enabled);
         return;
@@ -2066,10 +2248,51 @@ pub(crate) fn apply_openai_compatible_thinking_control(
             // Official OpenAI Chat Completions only accepts reasoning_effort on the
             // reasoning model families; ordinary chat models get a plain 400. Other
             // compatible channels keep sending it as declared per channel.
-            let effort = if provider_id.trim() == "openai" {
-                openai_chat_reasoning_effort(model, thinking_enabled)
+            let effort = if let Some(override_effort) = override_effort {
+                if provider_id.trim() == "openai" {
+                    if openai_model_is_gpt5_pro(model) {
+                        if override_effort != "high" {
+                            log::debug!(
+                                "[llm] preserving gpt-5-pro high reasoning effort instead of unsupported strategy effort={}",
+                                override_effort
+                            );
+                        }
+                        Some("high")
+                    } else if openai_model_supports_reasoning_effort(model, override_effort) {
+                        Some(override_effort)
+                    } else {
+                        log::debug!(
+                            "[llm] omitting unsupported strategy reasoning_effort provider={} model={} effort={}",
+                            provider_id,
+                            model,
+                            override_effort
+                        );
+                        openai_chat_reasoning_effort(model, base_thinking_enabled)
+                    }
+                } else if override_effort == "none" {
+                    // StepFun and other compatible reasoning-effort providers do
+                    // not accept `none`; preserve the channel's existing tier.
+                    log::debug!(
+                        "[llm] preserving configured reasoning effort for unsupported strategy effort=none provider={} model={}",
+                        provider_id,
+                        model
+                    );
+                    Some(if base_thinking_enabled {
+                        "medium"
+                    } else {
+                        "low"
+                    })
+                } else {
+                    Some(override_effort)
+                }
+            } else if provider_id.trim() == "openai" {
+                openai_chat_reasoning_effort(model, base_thinking_enabled)
             } else {
-                Some(if thinking_enabled { "medium" } else { "low" })
+                Some(if base_thinking_enabled {
+                    "medium"
+                } else {
+                    "low"
+                })
             };
             if let Some(effort) = effort {
                 body["reasoning_effort"] = json!(effort);
@@ -2080,7 +2303,7 @@ pub(crate) fn apply_openai_compatible_thinking_control(
         }
         Some(ThinkingControl::OpenRouterReasoning) => {
             body["reasoning"] = json!({
-                "effort": if thinking_enabled { "medium" } else { "none" },
+                "effort": override_effort.unwrap_or(if thinking_enabled { "medium" } else { "none" }),
                 // OpenLess QA/polish output only shows the final answer; reasoning
                 // content, even if generated, must not reach the UI.
                 "exclude": true,
@@ -2279,6 +2502,33 @@ fn openai_model_supports_none_reasoning_effort(model: &str) -> bool {
     .any(|family| openai_model_matches_family(model, family))
 }
 
+pub(crate) fn openai_model_is_gpt5_pro(model: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    normalized.starts_with("gpt-5-pro")
+        || normalized.starts_with("gpt-5.") && normalized.contains("-pro")
+}
+
+pub(crate) fn openai_model_uses_max_completion_tokens(model: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+        || normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
+}
+
+fn openai_model_supports_reasoning_effort(model: &str, effort: &str) -> bool {
+    let normalized = normalize_openai_model_id(model);
+    if effort == "none" {
+        return openai_model_supports_none_reasoning_effort(&normalized);
+    }
+    normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+        || normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
+}
+
 fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&'static str> {
     let normalized = normalize_openai_model_id(model);
 
@@ -2317,6 +2567,12 @@ pub(crate) fn extract_assistant_content_raw(body: &str) -> Result<String, LLMErr
     let first = choices
         .first()
         .ok_or_else(|| LLMError::ParseError("choices array is empty".into()))?;
+    if first["finish_reason"]
+        .as_str()
+        .is_some_and(|reason| reason != "stop")
+    {
+        return Err(LLMError::ParseError("llmResponseIncomplete".into()));
+    }
     let content = first
         .get("message")
         .and_then(|m| m.get("content"))
@@ -3713,13 +3969,10 @@ mod tests {
     }
 
     // ──────────────── Conversation-aware polish chat message construction ────────────────
-    // Core concern: give the LLM context but keep it from echoing that context back.
-    // "Do not repeat" is enforced by two defenses:
-    //   1. role=assistant marks historical polished output, so the LLM treats it as
-    //      already-said
-    //   2. polish_context_instruction appended to the system prompt explicitly forbids
-    //      repeating
-    // The 3 tests below lock the construction path; any regression fails immediately.
+    // Keep historical input/output separate from the current user message. The
+    // system instruction limits history to understanding the current input; it
+    // must still allow the current style to produce the same result again.
+    // The tests below lock message construction and that instruction contract.
 
     #[test]
     fn build_polish_history_messages_empty_prior_falls_back_to_two_messages() {
@@ -3783,7 +4036,7 @@ mod tests {
         // Key invariant: historical polish must sit on the assistant role, never merged
         // into the current user message. If polish ends up in the user role (e.g. a
         // refactoring typo), the LLM takes it as new user input and may polish it again
-        // — repeating prior text and violating the "no repetition" goal.
+        // — treating historical text as the current task.
         let prior = vec![("我说点什么".into(), "我说点什么。".into())];
         let msgs = build_polish_history_messages("SYS", &prior, "现在说的话");
 
@@ -3834,24 +4087,27 @@ mod tests {
     }
 
     #[test]
-    fn polish_context_instruction_explicitly_forbids_repeating_prior_assistant_output() {
-        // Second defense: the system prompt must contain an explicit "do not repeat
-        // prior assistant output" instruction. Chat structure alone is not enough —
-        // some models still echo prior turns in long contexts. The wording may change;
-        // these keywords must not.
+    fn polish_context_instruction_limits_history_without_overriding_current_style() {
+        // History must not become the current task or extra output. This is not a
+        // blanket ban on repeated text: a fixed-output style (e.g. "一一一") must
+        // still produce its required result even when history contains that result.
         let s = prompts::polish_context_instruction();
-        assert!(s.contains("不要"), "需要中文显式禁止指令");
         assert!(
-            s.contains("复读") || s.contains("重复") || s.contains("不要把上文带进来"),
-            "需要明确禁止复读语义"
+            s.contains("历史只用于理解当前输入"),
+            "历史只能提供理解当前输入所需的语境，不能成为本轮任务或答案"
         );
         assert!(
-            s.contains("assistant") || s.contains("已经整理"),
-            "需要点名是 assistant role 的历史输出 / 整理后内容"
+            s.contains("不得覆盖当前风格包的任务或输出要求"),
+            "历史不能覆盖当前风格包要求"
         );
         assert!(
-            s.contains("当前") && s.contains("最新"),
-            "需要明确：只输出当前最新一条"
+            s.contains("每次只处理**当前最新一条** user message"),
+            "只能处理当前最新用户消息"
+        );
+        assert!(s.contains("不要附带历史消息"), "输出不能夹带历史消息");
+        assert!(
+            s.contains("当前风格包要求的结果即使与历史输出相同，也应照常输出"),
+            "当前风格要求的相同结果必须仍可输出，不能笼统禁止重复"
         );
     }
 
@@ -4238,6 +4494,57 @@ mod tests {
     }
 
     #[test]
+    fn strategy_max_tokens_uses_completion_field_for_openai_reasoning_models() {
+        for model in ["o1", "o3-mini", "o4-mini", "gpt-5-mini", "gpt-6"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    model,
+                )
+                .with_max_tokens_override(Some(321)),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(body["max_completion_tokens"], 321, "{model}");
+            assert!(body.get("max_tokens").is_none(), "{model}");
+        }
+
+        let custom = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://example.test/v1",
+                "k",
+                "o3-mini",
+            )
+            .with_max_tokens_override(Some(321)),
+        );
+        let body = custom.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+        assert_eq!(body["max_tokens"], 321);
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_preserves_gpt5_pro_high_capability() {
+        for effort in ["none", "low", "medium", "high"] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "openai",
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "k",
+                    "gpt-5-pro",
+                )
+                .with_reasoning_effort(Some(effort.to_string())),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(body["reasoning_effort"], "high", "{effort}");
+        }
+    }
+
+    #[test]
     fn openai_chat_body_lowers_reasoning_when_disabled_for_channel() {
         let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
             "codingPlanX",
@@ -4287,6 +4594,25 @@ mod tests {
     }
 
     #[test]
+    fn strategy_reasoning_effort_overrides_openrouter_default() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "openrouterFree",
+                "OpenRouter",
+                "https://openrouter.ai/api/v1",
+                "k",
+                "openai/gpt-5-mini",
+            )
+            .with_reasoning_effort(Some("high".into())),
+        );
+
+        let body = provider.chat_body(true, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["reasoning"]["exclude"], true);
+    }
+
+    #[test]
     fn openai_chat_body_adds_openrouter_reasoning_by_channel_not_model() {
         let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
             "openrouterFree",
@@ -4315,6 +4641,111 @@ mod tests {
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_boolean_thinking_presets() {
+        let body = |provider_id: &str, endpoint: &str, model: &str, effort: &str| -> Value {
+            OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(provider_id, provider_id, endpoint, "k", model)
+                    .with_reasoning_effort(Some(effort.to_string())),
+            )
+            .chat_body(false, vec![json!({ "role": "user", "content": "hi" })])
+        };
+
+        assert_eq!(
+            body(
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                "deepseek-chat",
+                "high"
+            )["thinking"]["type"],
+            "enabled"
+        );
+        assert_eq!(
+            body(
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                "deepseek-chat",
+                "none"
+            )["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(
+            body(
+                "alibabaCoding",
+                "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "qwen3-coder",
+                "medium",
+            )["enable_thinking"],
+            true
+        );
+        assert_eq!(
+            body(
+                "alibabaCoding",
+                "https://coding-intl.dashscope.aliyuncs.com/v1",
+                "qwen3-coder",
+                "none",
+            )["enable_thinking"],
+            false
+        );
+        assert_eq!(
+            body(
+                "minimax",
+                "https://api.minimaxi.com/v1",
+                "MiniMax-M3",
+                "low"
+            )["thinking"]["type"],
+            "adaptive"
+        );
+        assert_eq!(
+            body(
+                "minimax",
+                "https://api.minimaxi.com/v1",
+                "MiniMax-M3",
+                "none"
+            )["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(
+            body("lmstudio", "http://localhost:1234/v1", "model", "high")["chat_template_kwargs"]
+                ["enable_thinking"],
+            true
+        );
+        assert_eq!(
+            body("lmstudio", "http://localhost:1234/v1", "model", "none")["chat_template_kwargs"]
+                ["enable_thinking"],
+            false
+        );
+    }
+
+    #[test]
+    fn strategy_reasoning_effort_controls_tokenhub_thinking() {
+        let body = |model: &str, effort: &str| {
+            OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "tencentTokenHub",
+                    "Tencent TokenHub",
+                    "https://tokenhub.tencentmaas.com/v1",
+                    "k",
+                    model,
+                )
+                .with_reasoning_effort(Some(effort.to_string())),
+            )
+            .chat_body(false, vec![json!({ "role": "user", "content": "hi" })])
+        };
+
+        assert_eq!(
+            body("deepseek-v4-pro", "high")["thinking"]["type"],
+            "enabled"
+        );
+        assert_eq!(
+            body("deepseek-v4-pro", "none")["thinking"]["type"],
+            "disabled"
+        );
+        assert_eq!(body("qwen3.5-plus", "low")["enable_thinking"], true);
+        assert_eq!(body("qwen3.5-plus", "none")["enable_thinking"], false);
+        assert_eq!(body("kimi-k3", "none").get("reasoning_effort"), None);
     }
 
     #[test]
@@ -4504,6 +4935,25 @@ mod tests {
 
             assert_eq!(body["reasoning_effort"], expected);
         }
+    }
+
+    #[test]
+    fn strategy_none_preserves_stepfun_reasoning_capability() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "stepfun",
+                "StepFun",
+                "https://api.stepfun.com/v1",
+                "k",
+                "step-3.7-flash",
+            )
+            .with_thinking_enabled(true)
+            .with_reasoning_effort(Some("none".into())),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["reasoning_effort"], "medium");
     }
 
     #[test]
@@ -5166,6 +5616,13 @@ mod tests {
     }
 
     #[test]
+    fn codex_oauth_config_omits_unsupported_none_reasoning() {
+        let config = CodexOAuthConfig::new("gpt-5.5").with_reasoning_effort(None);
+
+        assert_eq!(config.reasoning_effort, None);
+    }
+
+    #[test]
     fn codex_oauth_config_lowers_reasoning_when_thinking_disabled() {
         let config = CodexOAuthConfig::new("gpt-5.5").with_thinking_enabled(false);
 
@@ -5173,7 +5630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_oauth_provider_streams_text_from_codex_responses() {
+    async fn codex_oauth_provider_omits_unsupported_token_limit_and_streams_text() {
         let auth_path = write_codex_auth_fixture("acct-openless", unix_now_secs() + 3600);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -5193,6 +5650,7 @@ mod tests {
             assert!(request_text.contains(r#""role":"developer"#));
             assert!(request_text.contains(r#""type":"input_text"#));
             assert!(request_text.contains(r#""reasoning":{"effort":"medium"}"#));
+            assert!(!request_text.contains(r#""max_output_tokens":"#));
             assert!(!request_text.contains(r#""temperature":"#));
 
             let body = concat!(
@@ -5210,7 +5668,8 @@ mod tests {
         let provider = CodexOAuthLLMProvider::new(
             CodexOAuthConfig::new("gpt-5.5")
                 .with_base_url(format!("http://{}", addr))
-                .with_auth_path(auth_path.clone()),
+                .with_auth_path(auth_path.clone())
+                .with_max_output_tokens(Some(321)),
         );
         let deltas = StdMutex::new(String::new());
         let output = provider
@@ -5297,4 +5756,106 @@ mod tests {
 
         server.join().unwrap();
     }
+}
+
+// Only the explicitly selected ignored live test enables this probe. It bounds
+// actual HTTP sends (including translation fallback), disables network retries,
+// and observes the public response model without retaining raw SSE or reasoning.
+#[cfg(test)]
+pub(crate) mod live_acceptance {
+    use std::sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Mutex};
+    tokio::task_local! {
+        static INTENT: Arc<Mutex<IntentState>>;
+    }
+    #[derive(Default)]
+    struct IntentState {
+        sends: usize,
+        fallbacks: usize,
+        in_fallback: bool,
+        stopped: bool,
+    }
+    pub async fn intent_scope<F: std::future::Future>(future: F) -> F::Output {
+        INTENT.scope(Arc::new(Mutex::new(IntentState::default())), future).await
+    }
+    pub fn intent_active() -> bool { INTENT.try_with(|_| ()).is_ok() }
+    pub fn intent_client(base_url: &str, timeout_secs: u64) -> reqwest::Client {
+        super::http_client_builder(base_url, timeout_secs)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .http1_only()
+            .pool_max_idle_per_host(0)
+            .build()
+            .expect("isolated intent transport")
+    }
+    pub struct IntentSend {
+        state: Arc<Mutex<IntentState>>,
+        pub succeeded: bool,
+    }
+    impl Drop for IntentSend {
+        fn drop(&mut self) {
+            if !self.succeeded { self.state.lock().unwrap().stopped = true; }
+        }
+    }
+    pub fn intent_before_send() -> Result<IntentSend, super::LLMError> {
+        let state = INTENT.with(Arc::clone);
+        {
+            let mut current = state.lock().unwrap();
+            if current.stopped || current.sends >= 36 {
+                return Err(super::LLMError::Network("intent comparison stopped or budget exhausted".into()));
+            }
+            current.sends += 1;
+            if current.in_fallback { current.fallbacks += 1; }
+        }
+        Ok(IntentSend { state, succeeded: false })
+    }
+    pub struct IntentFallback(Option<Arc<Mutex<IntentState>>>);
+    impl Drop for IntentFallback {
+        fn drop(&mut self) {
+            if let Some(state) = &self.0 { state.lock().unwrap().in_fallback = false; }
+        }
+    }
+    pub fn intent_fallback() -> IntentFallback {
+        let state = INTENT.try_with(Arc::clone).ok();
+        if let Some(state) = &state { state.lock().unwrap().in_fallback = true; }
+        IntentFallback(state)
+    }
+    pub fn intent_counts() -> serde_json::Value {
+        INTENT.with(|state| {
+            let current = state.lock().unwrap();
+            serde_json::json!({"attemptedSends": current.sends, "fallbackSends": current.fallbacks})
+        })
+    }
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static SENDS: AtomicUsize = AtomicUsize::new(0);
+    static RESPONSE_MODEL: Mutex<Option<String>> = Mutex::new(None);
+    pub fn begin() { SENDS.store(0, Ordering::SeqCst); ACTIVE.store(true, Ordering::SeqCst); }
+    pub fn active() -> bool { ACTIVE.load(Ordering::SeqCst) }
+    pub fn legacy_limit(first_only: bool) -> usize { if first_only { 1 } else { 10 } }
+    pub fn before_send() -> Result<usize, super::LLMError> {
+        let previous = SENDS.fetch_add(1, Ordering::SeqCst);
+        if previous >= legacy_limit(std::env::var_os("OPENLESS_LIVE_FIRST_ONLY").is_some()) {
+            return Err(super::LLMError::Network("live acceptance request limit reached".into()));
+        }
+        Ok(previous + 1)
+    }
+    pub fn observe_model(value: &serde_json::Value) {
+        if active() {
+            if let Some(model) = value["model"].as_str() {
+                *RESPONSE_MODEL.lock().unwrap() = crate::usage_ledger::sanitized_identifier(model);
+            }
+        }
+    }
+    pub fn observe_error_code(body: &str) {
+        if !active() { return; }
+        let value = serde_json::from_str::<serde_json::Value>(body).ok();
+        let code = value.as_ref().and_then(|value| value.pointer("/error/code"));
+        let safe = code.filter(|code| match code {
+            serde_json::Value::Number(_) | serde_json::Value::Null => true,
+            serde_json::Value::String(code) => matches!(code.as_str(), "invalid_api_key" | "authentication_error" | "insufficient_balance" | "model_not_found" | "invalid_request_error" | "invalid_parameter" | "permission_denied" | "rate_limit_exceeded"),
+            _ => false,
+        });
+        println!("LIVE_ERROR {}", serde_json::json!({"error_code":safe}));
+    }
+    pub fn take_model() -> Option<String> { RESPONSE_MODEL.lock().unwrap().take() }
 }

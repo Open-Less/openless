@@ -525,7 +525,7 @@ fn rewrite_uses_core_selection_prompt_and_returns_preview_without_insertion() {
             text: String,
             _partials: Arc<dyn TextStreamSink>,
         ) -> BoxFuture<'static, Result<PolishOutput, BackendError>> {
-            assert_eq!(text, "source text");
+            assert_eq!(text, " \nsource text\t ");
             *self.0.lock().unwrap() = Some(context);
             Box::pin(async { Ok(PolishOutput::text("fixture rewrite")) })
         }
@@ -598,7 +598,7 @@ fn rewrite_uses_core_selection_prompt_and_returns_preview_without_insertion() {
     };
     let result = runtime
         .block_on(owner.control(control::ControlAction::Rewrite {
-            text: "source text".into(),
+            text: " \nsource text\t ".into(),
             instruction: "make this concise".into(),
         }))
         .unwrap();
@@ -616,7 +616,12 @@ fn rewrite_uses_core_selection_prompt_and_returns_preview_without_insertion() {
             .phase,
         openless_core::domains::SelectionPhase::Cancelled
     );
-    assert!(owner.backend.list_history().unwrap().is_empty());
+    let history = owner.backend.list_history().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].raw_transcript, " \nsource text\t ");
+    assert_eq!(history[0].final_text, "fixture rewrite");
+    assert_eq!(history[0].insert_status, openless_core::types::HistoryInsertStatus::NotRequested);
+    assert!(owner.broker.pending.lock().unwrap().is_empty());
 }
 
 #[test]

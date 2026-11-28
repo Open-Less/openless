@@ -117,9 +117,6 @@ export function ExpressionLearningSection() {
       >
         {t('settings.expressionLearning.clear')}
       </button>
-      <p style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
-        {t('settings.expressionLearning.clearHint')}
-      </p>
       {error && <p role="alert">{t('settings.expressionLearning.error')}</p>}
     </Card>
   );

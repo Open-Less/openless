@@ -102,6 +102,10 @@ export {
   getCapsuleSnapshot,
   setCapsuleTranscriptVisible,
   handleWindowHotkeyEvent,
+  getDictationStyleTarget,
+  getCapsuleStyleMenuRequest,
+  updateDictationStyle,
+  setCapsuleStyleMenu,
 } from './dictation';
 
 // style-packs
@@ -146,6 +150,7 @@ export {
   setDictationHotkey,
   setSelectionPolishHotkey,
   setTranslationHotkey,
+  setSkipAutoStyleHotkey,
   setSwitchStyleHotkey,
   setOpenAppHotkey,
   setQuickNoteHotkey,
@@ -162,26 +167,6 @@ export {
   stopMicrophoneLevelMonitor,
   isWaylandCliMode,
 } from './devices';
-
-// qa
-export {
-  getQaHotkeyLabel,
-  setQaHotkey,
-  qaWindowDismiss,
-  qaWindowSetExpanded,
-  qaGetSnapshot,
-  qaToggleRecording,
-  qaSubmitText,
-  qaSetEditInstructionMode,
-  qaCancelTurn,
-  qaStopRecording,
-} from './qa';
-
-export {
-  getSelectionPolishPreview,
-  confirmSelectionPolishPreview,
-  cancelSelectionPolishPreview,
-} from './selection-polish-preview';
 
 export {
   getSelectionVoiceIntentPrompt,

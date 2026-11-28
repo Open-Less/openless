@@ -17,6 +17,7 @@ const EMPTY: Snapshot = { models: [], error: null, pending: [] };
 let snapshot = EMPTY;
 const listeners = new Set<() => void>();
 const requests = new Set<ExperimentalAsrModel>();
+const awaitingHost = new Set<ExperimentalAsrModel>();
 let sequence = 0;
 let pollGeneration = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -39,7 +40,18 @@ async function refresh() {
   const request = ++sequence;
   try {
     const models = await getExperimentalAsrStatus();
-    if (request === sequence) update({ ...snapshot, models, error: null });
+    if (request !== sequence) return;
+    // An overlapping poll may have read the previous job before the host handled a switch.
+    const current = snapshot.models;
+    update({
+      ...snapshot,
+      models: models.map((status) =>
+        awaitingHost.has(status.model)
+          ? (current.find((entry) => entry.model === status.model) ?? status)
+          : status,
+      ),
+      error: null,
+    });
   } catch (error) {
     if (request === sequence) update({ ...snapshot, error: String(error) });
   }
@@ -77,10 +89,14 @@ async function mutate(
     return;
   }
   requests.add(model);
+  awaitingHost.add(model);
   ++sequence;
   update({ ...snapshot, pending: [...requests], error: null });
   try {
     await action();
+    // Discard reads initiated before the acknowledgement, even if they return later.
+    ++sequence;
+    awaitingHost.delete(model);
     if (transition !== 'delete') {
       // The host acknowledged the switch even if the following status read fails.
       // A successfully cancelled job must not linger as a downloading card.
@@ -98,7 +114,6 @@ async function mutate(
         ),
       });
     } else {
-      ++sequence;
       update({
         ...snapshot,
         models: snapshot.models.map((status) =>
@@ -114,11 +129,12 @@ async function mutate(
     // Propagate failure to the cancel button instead of silently pretending it worked.
     throw error;
   } finally {
+    awaitingHost.delete(model);
     requests.delete(model);
     update({ ...snapshot, pending: [...requests] });
   }
 }
-const toggle = (model: ExperimentalAsrModel, enabled: boolean) =>
+export const toggleExperimentalAsr = (model: ExperimentalAsrModel, enabled: boolean) =>
   mutate(model, () => setExperimentalAsrEnabled(model, enabled), enabled);
 const remove = (model: ExperimentalAsrModel) =>
   mutate(model, () => deleteExperimentalAsr(model), 'delete');
@@ -128,6 +144,13 @@ const acknowledge = async (ready: ExperimentalAsrStatus[]) => {
 };
 const getSnapshot = () => snapshot;
 const getEmptySnapshot = () => EMPTY;
+
+export function observeExperimentalAsr(listener: (state: Snapshot) => void) {
+  const receive = () => listener(getSnapshot());
+  const unsubscribe = subscribe(receive);
+  receive();
+  return unsubscribe;
+}
 
 export function useExperimentalAsr(enabled: boolean) {
   const listen = useCallback(
@@ -139,6 +162,6 @@ export function useExperimentalAsr(enabled: boolean) {
     enabled ? getSnapshot : getEmptySnapshot,
     getEmptySnapshot,
   );
-  return { ...state, toggle, remove, acknowledge, refresh };
+  return { ...state, toggle: toggleExperimentalAsr, remove, acknowledge, refresh };
 }
 export type ExperimentalAsrController = ReturnType<typeof useExperimentalAsr>;

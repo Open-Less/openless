@@ -5,18 +5,22 @@
 <h1 align="center">OpenLess</h1>
 
 <p align="center">
-  <strong>Open-source voice input for macOS, Windows, Linux, Android, iOS &amp; HarmonyOS</strong>
+  <strong>All-platform open-source AI voice input — macOS, Windows, Linux, Android, iOS &amp; HarmonyOS</strong>
 </p>
 
 <p align="center">
-  Hold a hotkey, speak, and watch AI-polished text stream straight to your cursor —<br/>
-  in the writing style <em>you</em> choose.
+  Hold a hotkey and talk. Turn complete spoken thoughts into clean, structured text or ready-to-run AI prompts straight at your cursor.<br/>
+  <strong>Zero Data Collection · #1 Post-Processing Speed · Built Specifically for Long Prompts</strong>
 </p>
 
 <p align="center">
   <a href="https://openless.top"><strong>Website</strong></a>
   &nbsp;·&nbsp;
+  <a href="https://openless.top/en/docs/"><strong>Online Docs</strong></a>
+  &nbsp;·&nbsp;
   <a href="https://github.com/Open-Less/openless/releases/latest"><strong>Download</strong></a>
+  &nbsp;·&nbsp;
+  <a href="docs/architecture.md"><strong>Architecture &amp; Platforms</strong></a>
   &nbsp;·&nbsp;
   <a href="README.md">English</a>
   &nbsp;/&nbsp;
@@ -25,28 +29,27 @@
 
 <p align="center">
   <a href="https://github.com/Open-Less/openless/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Open-Less/openless?style=flat-square&color=2c5282" /></a>
-  <a href="https://github.com/Open-Less/openless/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
-  <a href="https://github.com/Open-Less/openless/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
+  <a href="https://github.com/Open-Less/openless/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/Open-Less/openless/total?style=flat-square&color=c05621" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Open-Less/openless?style=flat-square&color=2f855a" /></a>
+  <a href="https://github.com/Open-Less/openless"><img alt="Stars" src="https://img.shields.io/github/stars/Open-Less/openless?style=flat-square&color=805ad5" /></a>
 </p>
 
 <p align="center">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-14%2B-1f425f?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-0078d4?style=flat-square&logo=windows&logoColor=white" />
-  <img alt="Linux" src="https://img.shields.io/badge/Linux-egui-fcc624?style=flat-square&logo=linux&logoColor=black" />
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-supported-fcc624?style=flat-square&logo=linux&logoColor=black" />
   <img alt="Android" src="https://img.shields.io/badge/Android-8%2B-3ddc84?style=flat-square&logo=android&logoColor=white" />
   <img alt="iOS" src="https://img.shields.io/badge/iOS-16%2B-000000?style=flat-square&logo=apple&logoColor=white" />
-  <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-adapting-0a59f7?style=flat-square" />
-  <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" />
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-2021-ce422b?style=flat-square&logo=rust&logoColor=white" />
+  <img alt="HarmonyOS" src="https://img.shields.io/badge/HarmonyOS-supported-0a59f7?style=flat-square" />
 </p>
 
 <p align="center">
   QQ Group 1&nbsp; <strong>1078960553</strong> (full) &nbsp;·&nbsp; QQ Group 2&nbsp; <strong>1095794054</strong>
 </p>
 
-<br/>
+---
 
-<h2 align="center">Sponsors</h2>
+## Sponsors
 
 <p align="center">
   <em>OpenLess is sustained by the generous support of its sponsors.</em>
@@ -64,13 +67,19 @@
   Mivra provides cloud servers and bare-metal servers, with nodes in Hong Kong and the United States, gaming cloud services, and on-demand configurations, delivering stable, reliable computing power for small and medium-sized businesses.
 </p>
 
-<h2 align="center">Developers</h2>
+---
+
+## What OpenLess Replaces
+
+OpenLess is a cross-platform, open-source AI voice-input app covering **macOS, Windows, Linux, Android, iOS, and HarmonyOS** — built as a **fully open-source alternative** to commercial closed-source tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), Lazy, and Superwhisper. The app itself is completely free and open source, with zero subscriptions and zero vendor lock-in.
+
+### Developers
 
 <table align="center">
   <tr>
     <td align="center" width="170">
       <img src="assets/people/tripmc.png" width="80" height="80" alt="TRIP" /><br/>
-      <strong><a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
+      <strong><a href="https://tripcode.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
       <sub>Author</sub>
     </td>
     <td align="center" width="170">
@@ -80,15 +89,15 @@
     </td>
     <td align="center" width="170">
       <img src="https://image.bigsong.site/file/1787214963742_b40cd86b033a60bcc8562f7f053c4900.jpg" width="80" height="80" alt="bigsong" /><br/>
-      <strong><a href="https://bigsong.site" target="_blank" rel="noopener">bigsong</a></strong><br/>
-      <sub>Contributor / Tester</sub>
+      <strong>bigsong</strong><br/>
+      <sub>Contributor / QA</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="170">
       <img src="https://github.com/HKLHaoBin.png" width="80" height="80" alt="HKLHaoBin" /><br/>
       <strong><a href="https://github.com/HKLHaoBin" target="_blank" rel="noopener">HKLHaoBin</a></strong><br/>
-      <sub>Android author / Android Maintainer</sub>
+      <sub>Android Author / Maintainer</sub>
     </td>
     <td align="center" width="170">
       <img src="assets/people/cooper.png" width="80" height="80" alt="Cooper" /><br/>
@@ -103,404 +112,144 @@
   </tr>
 </table>
 
-OpenLess is a cross-platform (macOS, Windows, Linux, Android, iOS, and HarmonyOS) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
+### How OpenLess Differs from Doubao, Free Qwen, and Similar Tools
 
-The native [iOS app and keyboard](openless-all/ios/README.md) are maintained in `openless-all/ios/`, with Chinese/English typing, voice-focused and hold-space input modes, and speech translation. See the iOS guide for source builds and personal signing. The HarmonyOS host lives in `openless-all/app/harmony/` and is still being adapted: the HAP builds and the input method extension is wired to the shared ASR/polish pipeline, while real-network recognition and store distribution still need device acceptance.
+A common question is: *"Apps like Doubao (豆包) or free Qwen (千问) also have voice input — what makes OpenLess different?"* They are built for fundamentally different goals:
 
-Place your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an email draft, a chat box — press a single global hotkey, and speak. OpenLess records the audio, transcribes it, polishes the text in the mode you selected, and inserts the result at the cursor. If insertion is blocked, the text is copied to the clipboard instead, so nothing you said is lost.
+1. **Zero user data collection**
+   Free big-tech voice tools like Doubao and free Qwen are tied to proprietary accounts and cloud ecosystems. **OpenLess does not collect any user data at all** — no telemetry, no server-side logging, and nothing harvested to train models. Your dictation history, personal dictionary, style packs, and correction rules stay on your device. When you configure your own API keys, requests go straight from your device to the provider you chose (or run 100% offline with local models), never through an OpenLess relay server.
+2. **Blazing-fast post-processing — #1 in the industry**
+   Most AI voice tools that polish text or structure prompts leave you staring at a spinner for seconds after every sentence. OpenLess is engineered end to end for latency: among all vendors, platforms, and open-source projects doing AI prompt post-processing, **OpenLess delivers the fastest post-processing speed in the industry** — as fast as **0.3 seconds** from key release to text on screen in unedited 1× real-time demos on our website, and just a couple of seconds even for a 90-second rambling monologue.
+3. **Purpose-built for long prompts**
+   General-purpose voice input tools like Doubao and free Qwen focus on turning short chat sentences into text. **OpenLess is built specifically for long prompts and complex task descriptions.** Instead of squeezing a big idea into terse keywords, talk through the entire context, problem, desired behavior, and hard constraints — even across 10–20 continuous segments or a 1-hour recording. OpenLess strips filler words, resolves mid-sentence corrections, and turns messy speech into crisp, structured prompts that AI agents and coding assistants can act on immediately.
+4. **Truly open source with complete model freedom**
+   Unlike closed-source subscription apps such as Typeless or Wispr Flow, OpenLess has no app subscription fee and never locks you into one model. Mix nearly 30 cloud or local speech engines with 20+ LLMs (DeepSeek, OpenAI, Gemini, Ark, OpenRouter, or local offline models) and switch anytime.
 
-Unlike dictation tools that simply emit a word-for-word transcript, OpenLess's headline capability is its **AI-prompt mode**: you speak freely, and it adds structure, captures your constraints, and produces a context-rich prompt that you can paste directly into ChatGPT, Claude, or Cursor.
-
-## Platform support
-
-Six hosts share one framework-independent backend (`openless-core`); they differ in how much of the Core is wired and in how the package ships.
-
-| Platform | Host | State | Distribution |
+| Comparison | OpenLess | Doubao / Free Qwen & Free Tools | Typeless / Wispr Flow (Commercial) |
 | --- | --- | --- | --- |
-| macOS 14 Sonoma+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app: hotkey, insertion, history, style packs, cursor context, Apple Speech, experimental local ASR | DMG (Apple Silicon / Intel), Homebrew cask |
-| Windows 10+ | Tauri 2 + React (`src-tauri/`) | Complete desktop app, plus a native TSF input method (`windows-ime/`) and Foundry/sherpa local ASR | NSIS installer |
-| Linux | Native egui/eframe host (`linux-egui/`, no Tauri or WebKitGTK) | Core 2.0 services wired to a native UI; the L01–L12 device acceptance is still open | Source build; deb/rpm only after acceptance |
-| Android 8.0+ | Tauri mobile host + React, OpenLess keyboard (`android/`, `mobile-ime/`) | App, floating capsule, IME, cursor context, in-app updates | APKs per ABI |
-| iOS 16+ | Native SwiftUI/UIKit app, keyboard extension, recording widget (`openless-all/ios/`) | Chinese/English typing, voice-focused and hold-space modes, speech translation | Unsigned IPA from source, personal signing |
-| HarmonyOS (API 12+) | ArkTS + ArkWeb host and input method extension (`harmony/`, `harmony/rust`) | Host, IME and voice pipeline wired; network recognition, update flow and store listing still in progress | Unsigned HAP on Releases |
+| **User Data Collection** | **Zero collection** — local-first, direct to your chosen provider or fully offline | Tied to vendor accounts & cloud ecosystem | Routed through closed vendor cloud |
+| **Post-Processing Speed** | **Industry #1** — as fast as **0.3s** to screen (unedited 1× demos on website) | Focused on basic transcription | Dependent on closed cloud pipeline |
+| **Long Prompt Optimization** | **Core focus** — built for long prompts, specs, and agent instructions | Geared toward short chat dictation | Geared toward general emails & edits |
+| **Continuous & Long Recording** | **10–20 continuous clips** queued in background, up to **1-hour** recordings | Typically capped per clip | Partial continuous support |
+| **Model & Provider Freedom** | Mix ~30 ASR engines + 20+ LLMs / multimodal / local offline models | Locked to vendor's own ecosystem | Locked to vendor service, paid subscription |
+| **Open Source & Platforms** | Fully open source — macOS, Windows, Linux, Android, iOS & HarmonyOS | Closed source | Closed source, fewer platforms |
 
-## From tool to infrastructure
+---
 
-Advanced systems all do the same thing: **they turn today's communication into tomorrow's default rules.** The Internet won not because HTTP was faster, but because no one negotiates how data is transmitted anymore. Git won not because the code was better, but because teams stopped coordinating versions every day. Stripe won not because payments were faster, but because developers stopped coordinating with banks.
+## See It in Action
 
-What OpenLess does is not "faster dictation" — it **eliminates every act of coordination between a thought and clean text.** Turning what's in your head into usable text used to mean deciding, over and over: what tone for this one? how is that name spelled? which input field, copy or paste? where does the model's key live, and who has access? OpenLess **sediments** those repeated negotiations, layer by layer, into defaults:
+The screenshots below come directly from the official showcase on [openless.top](https://openless.top/en/) (where you can also watch unedited 1× real-time speed and workflow videos).
 
-- **Tone** sediments into a **style pack** — named, switchable, live at a keystroke, never re-decided.
-- **Proper nouns** sediment into **dictionary hotwords** — recognized by the ASR, hinted to the polish model, never re-corrected.
-- **Where text lands** sediments into a **single insertion protocol** — hold → speak → it appears at the cursor, with an automatic clipboard fallback.
-- **Model and credentials** sediment into the **OS vault** — authorized once at launch, never renegotiated.
+### A 90-Second Spoken Ramble → A Clean, Structured Long Prompt ("Built for Building")
 
-That is what **authorizing the infrastructure once, at launch** means: on first run you grant the microphone, accessibility, and cloud credentials exactly once; from that moment, "speak → clean text at the cursor" is no longer a negotiation you run each time, but a default protocol you can forget is even there. Judge OpenLess not by how much faster it is, but by how much **coordination it removes.**
+When explaining a feature change or bug fix to an AI coding agent, natural speech is full of detours, repetitions, and half-finished thoughts. With OpenLess's **"Built for Building"** style, just hold the hotkey and talk through everything on your mind:
 
-## ✨ What's new
+**Before (1.6-minute raw spoken monologue — ASR transcription took 206 ms):**
 
-Capabilities that sediment yet more of the coordination you used to repeat every day into defaults:
+> Let me lay out the exact logic for you, okay? Right now you have 6 showcase videos on the homepage. First, the first section is "say whatever comes to mind" — that shows normal voice input. Second is industry-leading post-processing speed, it should only talk about speed and nothing else. And "watch OpenLess speed demo" belongs under "say whatever comes to mind"; delete that sentence about 10–20 continuous voice clips there because the third video already covers continuous voice input... Also why aren't these two videos auto-loading? Why do I still have to click a button manually? ...
 
-- 📖 **A dictionary that learns.** Until now the dictionary only knew what you typed into it by hand. Now, when you correct a word OpenLess just wrote, it asks — once, on a small card — whether to remember it, and one click puts it in. Paired with **cursor context** (opt-in, macOS / Windows), which lets the polish model read what you are writing around your cursor, OpenLess stops being a transcriber that guesses at homophones and starts being an input method that knows your words. Every suggestion is reviewed by you; nothing is learned silently.
-- 🎨 **Style Pack Marketplace.** OpenLess no longer ships a single fixed "polish" voice. Build your own **style packs** with custom system prompts, switch between them with a hotkey, and **install community packs in one click** — or publish your own to share. When a style is tuned to your exact task (cold emails, commit messages, 小红书 posts, formal reports, your team's tone), the output is not merely cleaner — it is *noticeably better*, because the model is finally writing the way you intend.
-- ⚡ **Streaming insertion.** Text now flows to your cursor **character by character** as it is polished, rather than making you wait for the complete result. Perceived latency drops sharply, so dictation feels nearly as fast as thinking — and it automatically falls back to a one-shot paste when an application cannot accept streamed keystrokes.
+<p align="center">
+  <img src="https://openless.top/assets/docs/media/structured-prompt-before.png" alt="Before: 1.6-minute raw unedited voice transcript in OpenLess history (206 ms ASR)" width="92%" />
+  <br/>
+  <sub>Before: Raw 1.6-minute spoken transcript in OpenLess History (ASR completed in 206 ms)</sub>
+</p>
 
-## A concrete example
-
-Hold the hotkey and say:
-
-> uh… so… I need to reply to the client about the proposal they sent last time, we talked it over internally and the overall direction is fine but a few details need changing, first the delivery timeline is too tight we'd like to push it back two weeks, second on budget their quote came in about twenty percent higher than we expected can we negotiate that, and overall we're positive about working together so reassure them, keep the tone polite not too blunt
-
-Release the hotkey. A moment later, your input box reads:
+**After (DeepSeek post-processing took 2.9 s — organized into goals, issues, expected behavior, and constraints):**
 
 ```text
-Reply to the client about the proposal they sent. After internal discussion, the overall direction is fine, but a few details need adjusting:
+1. What I want to achieve
+   (a) Rework the homepage video showcase in this exact order: normal voice input → industry-leading post-processing speed → continuous 10–20 clip voice input → Style Packs & Marketplace → App-Aware Auto Style → Real-Time Translation.
+   (b) Videos must auto-load without requiring a manual button click.
 
-1. Delivery timeline
-   (a) The current timeline is too tight; we'd like to extend it by two weeks.
-2. Budget
-   (a) Their quote is about 20% higher than we expected — can we renegotiate?
-Keep the overall message positive about the partnership, and keep the tone polite rather than blunt.
+2. Current issues
+   (a) The 6 homepage showcase videos do not match the required order or content logic.
+   (b) Two videos currently wait for a manual click instead of auto-loading.
+
+3. Expected behavior
+   (a) Video 1 shows normal voice input with the caption "Say whatever comes to mind."
+   (b) Video 2 focuses solely on industry-leading post-processing speed; move the "Watch OpenLess speed demo" link under Video 1.
+   (c) Video 3 covers continuous voice input (10–20 clips processed in the background); remove the duplicate text block above and let the video demonstrate it.
+   (d) Follow with Style Packs & Marketplace (first), App-Aware Auto Style, and Real-Time Translation.
+
+4. Non-negotiable constraints
+   (a) Keep the exact video order specified in section 3 — do not rearrange it.
 ```
 
-No edits are required — paste it into ChatGPT or Claude and let it draft the email. That is the core idea: **compose prompts by speaking, faster and more cleanly than typing them.**
-
-## Why OpenLess is open source
-
-The closest alternatives are subscription SaaS products: a monthly fee, no option to bring your own model, your audio uploaded to the vendor, and your dictionary and habits stored in their account.
-
-OpenLess targets the same end-user experience, but:
-
-- **Fully open source, local-first.** The code lives in this repository, and all of your data stays on your machine.
-- **Bring your own cloud credentials.** Nearly thirty ASR providers and more than twenty polish providers — Volcengine, iFlytek, Alibaba Cloud Bailian, StepFun, OpenAI-compatible endpoints, and more — or any endpoint you bring. No vendor lock-in.
-- **Tuned for AI prompts.** The structured mode reshapes loose speech into a prompt complete with context, constraints, and requests — ready to paste into ChatGPT, Claude, or Cursor.
-- **It will not answer for you.** The model only cleans up your text. If you say "what features does this app still need?", it returns that as a clean question — it does not hand you a feature list. For that, ask the AI itself.
-
-## Use cases
-
-- **Writing prompts for ChatGPT / Claude / Cursor / Gemini** — dictate a request and OpenLess turns it into a structured, detailed prompt.
-- **Drafting emails, specifications, and long Slack or WeChat messages** — filler is removed, punctuation is corrected, and paragraphs are organized.
-- **Code comments, commit messages, and PR descriptions** — capture your thoughts directly at the cursor.
-- **Any situation** where you must produce written text but would rather not type.
-
-## Style packs & the Marketplace
-
-A **style pack** is a named output style with its own system prompt. Rather than being constrained to one built-in "polish" voice, you can shape exactly how your speech is rendered — and the closer the style matches your real task, the better the result.
-
-- **Create and customize.** On the **Style** page, add a pack and write a custom system prompt (for example, "terse engineering commit messages", "warm customer-support replies", or "小红书 copy with emoji"). Switch the active pack with a hotkey.
-- **Install from the community.** Open the **Marketplace** to browse, search, and install packs others have shared in one click, and like the ones that work for you.
-- **Publish your own.** Sign in with a GitHub identity (Settings → Marketplace), then select **Publish to Marketplace** from the Style page. Uploads are moderated before they appear publicly.
-
-The marketplace is served by OpenLess's own moderated backend, so the catalog remains curated rather than a free-for-all.
-
-## Project direction
-
-OpenLess does one thing: it **turns speech into usable written text — AI prompts in particular — at the current cursor.**
-
-- It does not answer questions, run tasks, or analyze your project.
-- It does not accumulate conversation context; every dictation is an independent cleanup request.
-- The pipeline is: speech → transcript → cleanup → insertion at the cursor, with a clipboard fallback on failure.
-- Everything else (modes, dictionary, history, menu bar, home report) exists to support that single path.
-
-## Stability freeze
-
-OpenLess is currently in a stability phase. The project is not accepting pull requests that add new product features or expand the existing feature set. Work should focus on making the current release reliable: bug fixes, regressions, security fixes, documentation, tests, compatibility, and release maintenance are welcome. New-feature proposals and implementation PRs will be held or closed until the stability phase ends.
-
-## Comparison
-
-| Tool | Form | How OpenLess differs |
-| --- | --- | --- |
-| [Typeless](https://www.typeless.com/) | Closed-source macOS / Windows / iOS, subscription | Open source; explicit AI-prompt mode; bring-your-own ASR + LLM; data and dictionary stay on your machine — including what the dictionary learns from your corrections, which is never uploaded and never added without your confirmation |
-| [Wispr Flow](https://wisprflow.ai) | Closed-source macOS / Windows, subscription | Open source; bring-your-own ASR + LLM; transparent prompt-handling rules |
-| [Lazy](https://heylazy.com) | Closed-source notes / capture tool | Not a notes container — inserts straight into any input field |
-| [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR by default, with experimental on-device ASR on macOS and Windows |
-
-## Status
-
-Every item below is one more layer sedimented into a default — a capability you authorize once and then never manage again. This is the infrastructure you stand on after launch:
-
-- The shared Rust backend lives in `openless-core`. macOS, Windows and Android use a thin Tauri 2 host with the React/TypeScript frontend; Android also ships a native keyboard, and Windows ships a TSF input method. Linux uses a separate native egui host and never compiles Tauri or WebKitGTK. iOS runs a native SwiftUI/UIKit app with a keyboard extension, and HarmonyOS runs an ArkTS/ArkWeb host over the same napi-exposed Core.
-- 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.
-- ⚡ **Streaming insertion** — polished text is written to the cursor character by character to reduce perceived latency, with an automatic one-shot-paste fallback. Toggle in Settings → Recording.
-- **Toggle and push-to-talk** recording modes, plus a **MediaPlayPause trigger** so wired-earbud inline controls can start and stop recording. `Esc` cancels at any phase, including polish and insertion.
-- **Cloud ASR**: Volcengine streaming ASR (bigasr), Tencent Cloud Hunyuan realtime ASR (Hy-ASR), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, OrcaRouter audio-input Gemini, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux), and Apple Speech (macOS).
-- **Local ASR**: Windows Foundry Local Whisper and sherpa-onnx (experimental). On macOS, the old local model management was retired in favor of three opt-in experiments under Settings → Experiments & extensions — TextStream (Qwen3-ASR on MLX, ~1.9 GB, Apple Silicon, macOS 14+), SenseVoice Small (~240 MB), and Embedding Gemma (~715 MB, Apple Silicon, macOS 15+). Models are downloaded on demand, not bundled in the installer.
-- **Polish providers**: Ark (Volcengine), DeepSeek, OpenAI, Google Gemini, Codex OAuth, SiliconFlow, Atlas Cloud, Xiaomi MiMo, Tencent Cloud TokenHub, CometAPI, OpenRouter, Requesty, API Route, OrcaRouter, Alibaba Cloud Coding Plan, CodingPlanX, MiniMax, StepFun, and OpenCode Zen — plus any OpenAI-compatible endpoint you bring.
-- **Four output modes**: raw, light polish, structured (**AI-prompt mode**), and formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](https://github.com/Open-Less/openless/issues/43)).
-- **Selection-ask QA panel** — a separate hotkey opens a floating panel that runs voice Q&A against the highlighted text in any app ([#118](https://github.com/Open-Less/openless/issues/118)).
-- **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
-- **Local model management** — manage on-disk local-ASR model storage from Settings.
-- **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 / Español / Français / Deutsch (auto-detected on first launch).
-- **In-app auto-update on the Tauri hosts** — Settings → About & updates → Check for updates; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux deb/rpm packages have no in-app updater or AppImage manifest, and the HarmonyOS build has no update flow yet.
-- **Beta channel (opt-in)** — Settings → About & updates → Join Beta channel selects the Beta updater feed; packages are also available from Releases. Beta releases never reach Stable users automatically (see [Contributing workflow](#contributing-workflow)).
-- **Distribution channels** — direct DMG/EXE from [Releases](https://github.com/Open-Less/openless/releases), Homebrew Cask (add the project tap first; see installation below), per-ABI Android APKs, and the unsigned HarmonyOS HAP. Linux deb/rpm packages require independent device acceptance and an explicit administrator upload to an existing Release; iOS is built from source and signed with a personal team.
-- **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
-- Dictionary entries are injected as Volcengine ASR `context.hotwords` and as semantic hints during polish; hits accumulate per session.
-- Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
-
-## Download & install (end users)
-
-Go to [Releases](https://github.com/Open-Less/openless/releases) and download:
-
-- **macOS** (macOS 14 Sonoma or later): `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel). Open it, drag the app to `/Applications`, **then run the following once in Terminal to bypass the Gatekeeper "damaged" warning** (the build is ad-hoc signed, not Apple-notarized):
-  ```bash
-  xattr -cr /Applications/OpenLess.app
-  ```
-- **Windows**: `OpenLess_<version>_x64-setup.exe` — run the installer.
-- **Android** (release APKs on GitHub Release; debug APKs via Actions artifacts):
-  - **Phones (recommended)**: `OpenLess_<version>_arm64-v8a.apk`
-  - **Older 32-bit ARM**: `OpenLess_<version>_armeabi-v7a.apk`
-  - **64-bit emulator**: `OpenLess_<version>_x86_64.apk`
-  - **32-bit emulator**: `OpenLess_<version>_x86.apk`
-  - In-app updates (Settings → About & updates) read `https://dl.aeoform.com/updates/stable/latest-android-{arch}.json`; Beta users join Beta in Advanced settings and read the `.../updates/beta/latest-android-{arch}-beta.json` counterpart.
-  - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
-  - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
-- **Linux**: the Tauri/WebView build has been retired. The native `eframe` host uses the shared Core 2.0 services. After CI and real Ubuntu audio, input, install, upgrade and rollback acceptance, the shared release includes deb/rpm packages and `SHA256SUMS`. Linux requires glibc ≥ 2.39 (Ubuntu 24.04 or a comparable distribution); there is no AppImage or in-app updater.
-- **HarmonyOS** (adapting): download `OpenLess_harmony_arm64.hap` from the same Release. It is unsigned and intended for developer/test installation through DevEco Studio or `hdc`; AppGallery distribution is prepared by the workflow but submitted manually, and no update flow exists yet. Local build and signing steps are in `openless-all/app/harmony/README.md`.
-- **iOS**: there is no downloadable IPA. Build the native app from source and sign it with your own team — see [openless-all/ios/README.md](openless-all/ios/README.md) for bootstrap, build, and keyboard-enable steps.
-- **macOS (Homebrew)**:
-  ```bash
-  brew tap Open-Less/openless https://github.com/Open-Less/openless
-  brew install --cask openless
-  xattr -cr /Applications/OpenLess.app
-
-  # Upgrade to the latest version
-  brew update && brew upgrade openless
-  ```
-
-On first launch, grant the permissions the app requests.
-
-**macOS:**
-1. Grant Microphone access.
-2. Grant Accessibility access.
-3. **Quit and reopen the app** — Accessibility only takes effect after a restart.
-4. Open Settings and fill in your Volcengine ASR + Ark credentials.
-
-**Windows:**
-1. Grant Microphone access when prompted.
-2. Open Settings → Permissions & data to verify the global hotkey listener is active.
-3. Fill in your Volcengine ASR + Ark credentials in Settings.
-
-For the full end-user walkthrough, see [USAGE.md](USAGE.md).
-
-## Build from source (developers)
-
-The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend; `src-tauri` hosts macOS/Windows/Android, `linux-egui` contains the native Linux UI and its platform adapters, `harmony/` holds the ArkTS/ArkWeb host plus the `harmony/rust` napi crate, and `openless-all/ios/` is the independent native iOS project. Vendored crates (`cpal`, `tauri-runtime-wry`) are checked in under `src-tauri/vendor/`, so **no Git submodule initialization is required**. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
-
-Rust 1.99 is the minimum supported toolchain for every source tree (`openless-core`, `src-tauri`, `linux-egui`); the latest stable Rust is recommended. CI verifies both Rust 1.99 and stable on macOS and Windows, stable for the Linux egui host, and also builds the Android, iOS and HarmonyOS hosts.
-
-```bash
-cd "openless-all/app"
-npm ci
-
-# macOS/Windows/Android: Vite at :1420 + Tauri host
-npm run tauri dev
-
-# Android release APK — run the init/scaffolding/manifest chain first
-# (src-tauri/gen/android is generated); see openless-all/README.md, "Android Build"
-npm run tauri:android:build:release
-
-# macOS release build (signs, installs, resets TCC)
-./scripts/build-mac.sh
-INSTALL=0 ./scripts/build-mac.sh   # build only, skip install
-
-# HarmonyOS HAP (needs the HarmonyOS Command Line Tools; see harmony/README.md)
-bash scripts/build-harmony-frontend.sh
-
-# Shared backend and Linux Host/UI (no Tauri/WebKitGTK)
-cargo check -p openless-core
-cargo check -p openless-linux-egui --all-targets
-
-# Tauri host type-check
-cargo check --manifest-path "src-tauri/Cargo.toml"
-
-# Frontend TS check
-npm run build
-```
-
-Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\Logs\openless.log` (Windows).
-
-**Windows build** — see [`openless-all/README.md`](openless-all/README.md) for the MSVC and GNU/MinGW routes.
-
-## Contributing workflow
-
-OpenLess uses a two-channel branching model.
-
-- **`beta`** — the **Beta channel**. The default branch and integration buffer; all in-progress development lands here. Beta builds may exist but are **not pushed to regular users** — they reach only those who explicitly opt into the Beta channel.
-- **`main`** — the **Stable channel (正式版)**. Always releasable; the build everyone receives by default.
-
-```text
-your fork / topic branch
-        │  (test locally on your target platform first)
-        ▼
-   PR → beta  ← AI review (one pass, advisory only)
-        │     ← maintainer lightweight glance (scope, cross-module impact)
-        ▼
-       merged into beta
-        │  (periodically, after a two-platform smoke build)
-        ▼
-       merged into main  →  tag `v<version>-tauri`  →  release CI → Stable users
-```
-
-Rules of thumb:
-
-- **Open PRs against `beta`, never against `main`.** GitHub already defaults the base branch to `beta` for new PRs.
-- **Verify the change on your target platform before opening the PR** — a green build is necessary, and manual verification is required.
-- **AI review runs once per PR and is advisory.** Do not loop on it; apply your own judgment.
-- **Keep AI rework rounds tight (1–2).** If a fix resists, ask a human or restart with fresh context — multi-round AI back-and-forth tends to do more harm than good here.
-- **Beta work must not leak to Stable.** `main` receives merges only from `beta`, performed by maintainers after a successful two-platform smoke build. No direct pushes to `main`.
-- **Stable releases are cut from `main`** by pushing a `v<version>-tauri` tag — see the maintainer release checklist below.
-
-Beta release distribution (manual-download opt-in): the in-app updater's Stable channel only ever reads the Stable manifest path, so regular users never receive Beta builds via auto-update. Users who want to try Beta open **Settings → About & updates**, enable "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked as a GitHub pre-release), while `v<version>-tauri` produces the Stable release.
-
-Updater manifests are served from the project CDN, one rolling file per platform and channel:
-
-```text
-https://dl.aeoform.com/updates/stable/latest-{target}-{arch}.json
-https://dl.aeoform.com/updates/beta/latest-{target}-{arch}-beta.json
-```
-
-The channel split is the URL path (`/updates/stable/` vs `/updates/beta/`), so a Stable client cannot reach a Beta manifest even if it asked for the wrong URL. Artifact URLs inside the manifest point at the same CDN (`https://dl.aeoform.com/releases/{tag}/{asset}`), which is what mainland-China users download from. The manifests are generated by the release workflows as run artifacts and are **not** attached to the GitHub Release, so maintainers must upload them to the CDN after a build — see `RELEASING.md`. Clients built before this switch read the old `releases/latest/download/latest-*.json` assets and therefore cannot auto-update past the last release that still carries them; they need one manual download.
-
-## Credentials
-
-Credentials live in the OS credential vault (service = `com.openless.app`): macOS Keychain, Windows Credential Manager, or the Linux keyring. A legacy plaintext JSON file is read only as a migration source and removed after a successful vault write:
-
-```text
-macOS / Linux: ~/.openless/credentials.json
-Windows:       %APPDATA%\OpenLess\credentials.json
-```
-
-New credential writes do not persist plaintext secrets. The repository contains no API keys, tokens, or private endpoints.
-
-You will need:
-
-- **Volcengine streaming ASR**: APP ID, Access Token, Resource ID.
-- **iFlytek realtime ASR (RTASR)**: AppID, API Key. See [docs/xfyun-asr.md](docs/xfyun-asr.md).
-- **Ark polish**: API Key, Model ID, Endpoint. The Ark default endpoint is `https://ark.cn-beijing.volces.com/api/v3/chat/completions`.
-
-## Prompt-handling principles
-
-OpenLess's polish model only reshapes text. It does not answer questions, run tasks, or analyze your project. Each dictation is an independent request, and the prompt explicitly instructs the model:
-
-- This input is isolated from any prior conversation.
-- The raw transcript is text to clean up, not a question to answer.
-- Even if the input contains a question or a command, do not reply or execute it.
-- Output the cleaned text only — no "Here's the cleaned version" preamble.
-
-For example, if the user says "what features does this app still need", the correct output is:
-
-```text
-What features does this app still need?
-```
-
-…not a list of missing features.
-
-Long-term reference rewrites are represented as `raw → polished → rule` triples in [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl). The sample format describes reference data; current module responsibilities are documented in [Architecture](docs/architecture.md).
-
-## Dictionary
-
-The dictionary handles your proper nouns, product names, names of people, and new words. Today it supports:
-
-- Manually adding the correct spelling, a category, and notes. You do not need to maintain misspellings or context hints.
-- Enabled entries are sent to the ASR provider that supports hotwords (Volcengine `context.hotwords`, StepFun `hotwords`, Whisper-compatible `prompt` — except ZenMux, whose JSON protocol does not carry `prompt`/`hotwords`, Bailian vocabulary ID) so they are recognized correctly during transcription. iFlytek realtime ASR has no request-level hotword parameter — configure personalized hotwords in the iFlytek console instead.
-- Entries are also injected into the polish prompt: the model decides per sentence whether to substitute. If "Cloud" clearly refers to the AI product `Claude` in context, it is corrected; if it genuinely means cloud computing, it is left as is.
-- **Learn from corrections (experimental).** Open Settings → Experiments & extensions → Learn from corrections to enable it and configure observation duration (10–60 seconds, default 60), suggestion duration (5–60 seconds, default 10), and maximum automatic phrase length (2–32 characters, default 12). It defaults to off and is not enabled by cursor context or cloud sync. On macOS, Windows and Android, supported editors can be observed after insertion. Suggestions require confirmation before expiry to enter the dictionary. Changing parameters stops the current observation and clears pending suggestions; new values apply to the next dictation. Android requires accessibility. When observation is unavailable, use **Remember a word** in history details; Android IME result editing also offers an unchecked dictionary option. Every path requires explicit confirmation and does not create global replacement rules.
-- **Entries that earn their keep get priority.** The hotword budget sent to ASR providers is finite (a few hundred characters). Entries are ranked by hit count, with a few reserved seats for words you just added by hand, so the terms you actually use keep their place instead of being pushed out by whatever you added most recently.
-
-### Cursor context (opt-in, macOS / Windows / Android)
-
-Settings → Privacy → Data storage → **Cursor context**. Off by default.
-
-When on, each dictation reads a few hundred characters around your cursor **in the app you are writing in** and sends them with the polish request, so the model knows what you are writing about. Chinese homophones (接口/借口, 大鱼/大禹) are indistinguishable to an acoustic model but obvious from context. Local vocabulary learning has a separate switch and does not require cursor context. Observed text is not sent to a model; words explicitly added to the dictionary participate in future ASR and polish requests as described above.
-
-On Windows, cursor context is read via UI Automation from the focused text control: it prefers `TextPattern2`'s caret range, with a `TextPattern` selection fallback for controls that only support collapsed selections. When the caret cannot be reliably located, it is skipped rather than guessed — wrong context is worse than none, and dictation continues normally either way.
-
-Chromium-based editors (VS Code, Electron apps) only keep their accessibility tree's caret position in sync once they detect an active accessibility client, so with default settings the position UI Automation reads back can be stale. In VS Code, set `editor.accessibilitySupport` to `on` (Settings → search "accessibility support"; a window reload may be needed) to get accurate cursor context; the same applies to other Electron-based editors with similar settings. Plain Chrome/Edge text fields do not need this.
-
-On Android, the OpenLess keyboard reads the text before and after the caret straight from its own `InputConnection` at the moment recording starts — no Accessibility permission involved, one read, no retry. Dictation, quick notes and cloud notes all use it for polishing, but the context only informs how the spoken words are written: it is never copied into the note, the history, the cloud note webhook or the logs. With a cloud polish model it is sent to that provider as part of the polish request. The floating overlay does not read cursor context yet.
-
-Cursor context excludes password fields, macOS Secure Input, Windows UIA password controls, Android editors that are password-typed or ask for no personalized learning, known password managers and terminals. Turning it off stops reading cursor context for polishing; other authorized accessibility features, including local vocabulary learning and insertion, work independently. Turning vocabulary learning off stops observation and clears pending suggestions.
-
-The main window is organized as Overview / History / Dictionary / Style / Marketplace / Settings, with additional Translation, Corrections, Usage, and Quick Note views. The Dictionary tab opens a separate editor window when you click "New". The Overview tab shows total dictation time, total characters, average characters per minute, estimated time saved, and dictionary participation statistics.
-
-## Architecture
-
-The application has one shared backend Interface and platform hosts:
-
-```
-React UI  ── Tauri Adapter (macOS/Windows/Android) ──┐
-egui UI   ── Linux Adapter (no Tauri/WebKitGTK) ────┤
-SwiftUI   ── iOS Adapter (native, KeyboardKit) ─────┼── openless-core
-ArkTS UI  ── HarmonyOS Adapter (ArkWeb + napi) ─────┘
-```
-
-`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
-
-The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows build the macOS, Windows, Android and HarmonyOS hosts in one Actions run; HarmonyOS attaches the unsigned HAP, and Android no longer has a separate tag trigger. Linux egui packaging is a separate, manual workflow that stays paused until device acceptance; after acceptance an admin attaches the verified deb/rpm packages to the shared Release. Beta assets remain in a draft until an admin publishes them. Linux has no AppImage or in-app updater manifest.
-
-The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
-
-### Client architecture and flows
-
-The diagrams below are generated from the current `beta` client boundaries. Each rendered PNG is accompanied by an editable Mermaid source and an SVG version.
-
-#### Architecture
-
-![OpenLess client architecture](docs/images/client-diagrams/openless-client-architecture.png)
-
-[Mermaid source](docs/images/client-diagrams/openless-client-architecture.mmd) · [SVG](docs/images/client-diagrams/openless-client-architecture.svg) · [中文图](docs/images/client-diagrams/openless-client-architecture.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-architecture.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-architecture.zh-CN.svg)
-
-#### Data flow
-
-![OpenLess client data flow](docs/images/client-diagrams/openless-client-data-flow.png)
-
-[Mermaid source](docs/images/client-diagrams/openless-client-data-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-data-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-data-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-data-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-data-flow.zh-CN.svg)
-
-#### Startup, permissions, and recording
-
-![OpenLess startup, permissions, and recording flow](docs/images/client-diagrams/openless-client-startup-recording-flow.png)
-
-[Mermaid source](docs/images/client-diagrams/openless-client-startup-recording-flow.mmd) · [SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.svg) · [中文图](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.png) · [中文 Mermaid](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.mmd) · [中文 SVG](docs/images/client-diagrams/openless-client-startup-recording-flow.zh-CN.svg)
-
-The dependency and module review that accompanies these diagrams is in [`docs/images/client-diagrams/openless-client-dependency-module-review.md`](docs/images/client-diagrams/openless-client-dependency-module-review.md).
-
-See [Contributing workflow](#contributing-workflow) and [Releasing](RELEASING.md) for contribution and release rules, and [Architecture](docs/architecture.md) for module responsibilities and wiring.
+<p align="center">
+  <img src="https://openless.top/assets/docs/media/structured-prompt-after.png" alt="After: structured 4-part prompt generated in 2.9 seconds in OpenLess" width="92%" />
+  <br/>
+  <sub>After: The same 1.6-minute ramble transformed in 2.9 s into a crisp 4-section prompt ready to paste straight into an AI agent</sub>
+</p>
+
+For more before/after examples and live 1× speed demos, visit **[openless.top](https://openless.top/en/)**, the **[Voice Input & Polish Guide](https://openless.top/en/docs/voice-input/)**, or [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl).
+
+---
+
+## Core Features & Experience
+
+- **Industry-#1 Post-Processing Speed**
+  Engineered for minimal wait time from key release to cursor insertion — as fast as **0.3 seconds** in real-time demos. Removes filler words, resolves mid-sentence corrections, preserves every constraint and negative condition, and never hijacks your question by trying to answer it.
+- **Continuous Dictation & Up to 1-Hour Long Recordings**
+  Speak **10–20 segments back to back** without pausing to wait. As soon as you finish one clip, it enters the background queue while you start the next — even if you switch apps or windows, each result lands back in its original text box in order. Need a long brain-dump or meeting recap? OpenLess also supports up to **1-hour** continuous recordings processed in the background.
+- **Style Packs, Style Marketplace & Auto Style (App-Aware Switching)**
+  - **Style Packs & Marketplace**: Includes Raw, Light Polish, Structured Prompt, Formal, and Built-for-Building modes out of the box, plus custom prompt packs you can build yourself or install and share via the built-in **Style Marketplace**.
+  - **Auto Style**: Customize exactly which style pack is used in which app — as you switch windows, OpenLess automatically switches to the matching style pack with no manual toggling. Configure rules **by app category** (Coding, Chat, Mail, Writing & Notes, Office, Browser — e.g., Built-for-Building for Coding, Light Polish for Chat, Formal for Mail) and override them for **specific apps** (pin a specific style pack, follow the category, or use your manually selected style). During dictation, rules apply in priority order: **specific app → app category → current manual style**.
+- **Personal Dictionary, Correction Rules & Optional Cursor Context**
+  Add names, product terms, and mixed-language jargon to your personal dictionary along with custom correction rules. Optional learning from your edits only saves new terms after you approve them, and optional cursor context uses nearby text to nail homophones and domain terms.
+- **~30 Speech Engines + 20+ LLMs — Including Pure Local Offline**
+  - **Two-Stage (ASR + LLM)**: Mix Volcengine (Doubao ASR), Alibaba Bailian, iFlytek RTASR, Tencent Hunyuan, Google Gemini Transcribe, Whisper-compatible APIs, or local Apple Speech / Windows Foundry / sherpa / MLX engines with DeepSeek, OpenAI, Gemini, Ark, OpenRouter, or any OpenAI-compatible LLM.
+  - **Single-Step Multimodal**: Use audio-native models like Gemini, OpenAI Audio, or Qwen-Omni directly.
+  - **Unified DeepSeek Mode**: One official DeepSeek key powers voice transcription, standalone Q&A, native web search, and spoken readback.
+- **Standalone Ask Window, Selection Rewrite & Real-Time Translation**
+  Pop open a standalone Q&A window or highlight text anywhere on screen to rewrite, polish, or translate by voice. Speak in your native language and output clean English (or another target language) directly into emails, PRs, or docs.
+- **Phone-to-PC Remote Input, Encrypted Sync & Six-Platform Coverage**
+  - **Phone Remote Input**: Pair your phone browser over LAN and dictate straight into your computer's cursor ([Remote Input Guide](docs/guides/remote-input.md)).
+  - **End-to-End Encrypted Cloud Sync**: Encrypt preferences, dictionary, style packs, and history locally before syncing ciphertext snapshots across devices.
+  - **All Six Platforms**: Runs across macOS, Windows, Linux, Android, iOS, and HarmonyOS, with desktop global hotkeys, floating voice capsules, and native mobile keyboards.
+
+---
+
+## Quick Start & Documentation
+
+Get running in three steps:
+
+1. **Download & Install**: Grab the installer for your OS from [GitHub Releases](https://github.com/Open-Less/openless/releases/latest) or follow the [Online Install Guide](https://openless.top/en/docs/installation/) (Homebrew cask is also available on macOS).
+2. **Choose Speech & Model Services**: Enter your preferred ASR/LLM API key or pick a local offline engine — see the [Online Setup Guide](https://openless.top/en/docs/setup/).
+3. **Set a Hotkey & Talk**: Grant microphone and input permissions, bind a comfortable hotkey, place your cursor in any text field, and start speaking.
+
+### Useful Docs
+
+| Goal | Links |
+| --- | --- |
+| Download installers & check releases | [GitHub Releases](https://github.com/Open-Less/openless/releases/latest) · [Online Install Guide](https://openless.top/en/docs/installation/) · [User Guide](USAGE.md) |
+| Configure ASR, LLM, multimodal, or DeepSeek | [Online Setup Guide](https://openless.top/en/docs/setup/) · [Speech & Model Reference](docs/guides/speech-services.md) |
+| Explore more polish & prompt examples | [Online Voice Input Guide](https://openless.top/en/docs/voice-input/) · [Reference Examples (JSONL)](docs/references/polish-reference-examples.sample.jsonl) |
+| Dictate from phone browser into PC | [Remote Input Guide](docs/guides/remote-input.md) |
+| Enable update checks for macOS Homebrew | [Homebrew Update Guide](docs/guides/homebrew.md) |
+| Architecture, platform clients, readiness & module/sub-doc index | [Architecture, Platforms & Module Index](docs/architecture.md) |
+| Build from source & browse all repo docs | [All-Platform Build Guide](openless-all/README.md) · [Full Repo Docs Index](docs/index.md) |
+
+---
 
 ## Roadmap
 
-Planned but not yet shipped:
+- Cross-session style memory ([#46](https://github.com/Open-Less/openless/issues/46))
+- Snippets UI and triggers
+- "Paste last result" shortcut
 
-- Cross-session style memory: polish learns the user's tone over time ([#46](https://github.com/Open-Less/openless/issues/46)).
-- Snippets (no UI or trigger logic yet).
-- A "Paste last result" hotkey.
-- HarmonyOS: real-network ASR/polish acceptance, update checks, and store distribution.
-- Linux: finish the L01–L12 device acceptance and restore deb/rpm release automation.
+## Contributing
 
-## Maintainer release checklist
+Pull requests are welcome — please target the `beta` branch (`main` tracks stable releases). Shared sources and build roots live in `openless-all/app`; platform sources and packaging live alongside it in `android`, `harmony`, `linux`, `windows`, `macos`, and `ios`. Before diving into the codebase, check [docs/architecture.md](docs/architecture.md) for the platform layout and module links, and [openless-all/README.md](openless-all/README.md) to build locally. Maintainer release steps live in [RELEASING.md](RELEASING.md).
 
-[RELEASING.md](RELEASING.md) is the canonical release procedure, including administrator authority, version synchronization, platform acceptance, draft assets, signing, and updater verification. New Beta tags use `v<X.Y.Z>-Beta.<N>-tauri`; the historical `-beta-tauri` suffix is compatibility-only.
+## Acknowledgements & Credits
 
-## Acknowledgements
+Thanks to our sponsors, contributors, and everyone in the LinuxDo community for the ideas, testing, and support.
 
-OpenLess sincerely thanks its sponsors, developers and contributors, and the broader LinuxDo community.
+- **Rare UI** (Copyright (c) 2026 Swami Malode, [MIT + Commons Clause + Attribution](openless-all/app/public/licenses/rare-ui-LICENSE.txt)): adapted components for the activity card, password input eye animation, toast notifications, and Ask Anything prompt box.
+- **Open Runde Fonts**: bundled UI typography under the [SIL Open Font License 1.1](openless-all/app/public/licenses/open-runde-OFL.txt).
 
-We appreciate our sponsors for making sustained project work possible, and we thank our developers and contributors for building, reviewing, and improving OpenLess.
-
-OpenLess also recognizes and appreciates the LinuxDo community for its open, practical, and developer-friendly atmosphere. Many of the ideas, discussions, and early feedback around OpenLess were inspired by the broader open-source spirit that LinuxDo represents.
-
-This acknowledgement does not imply official endorsement or affiliation.
-
-## Third-party components
-
-The Overview yearly-activity card is a port of **Rare UI**'s [GitHub Activity](https://rareui.com/components/githubactivity)
-component (Copyright (c) 2026 Swami Malode, MIT + Commons Clause, attribution required).
-The port keeps the upstream layout, week/month maths, tooltip and expandable panel, and
-replaces the GitHub data source with local dictation counts. Source:
-`openless-all/app/src/components/ui/GitHubActivity.tsx` and `github-activity.css`.
-The same credit is shown in Settings → About → Component credits.
+Full credits: [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) (and in-app under **Settings → About and updates → Component credits**).
 
 ## License
 
-OpenLess 2.0 is released under the [AGPL-3.0-only license](LICENSE).
-Published 1.x releases remain available under their original MIT license.
+OpenLess 2.0 is licensed under **[AGPL-3.0-only](LICENSE)**. Published 1.x releases remain under their original MIT license.

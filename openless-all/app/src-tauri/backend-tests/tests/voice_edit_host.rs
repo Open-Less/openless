@@ -34,6 +34,40 @@ mod types {
     pub use openless_core::shared_types::InsertStatus;
 }
 
+#[path = "../../src/insertion/clipboard_delivery.rs"]
+mod clipboard_delivery;
+
+#[derive(Default)]
+struct ClipboardState {
+    text: Option<String>,
+    sequence: u64,
+    dispatched: Vec<String>,
+}
+
+struct ClipboardAdapter(Arc<Mutex<ClipboardState>>);
+
+impl clipboard_delivery::ClipboardDelivery for ClipboardAdapter {
+    fn text(&mut self) -> Result<Option<String>, String> {
+        Ok(self.0.lock().unwrap().text.clone())
+    }
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        let mut clipboard = self.0.lock().unwrap();
+        clipboard.text = Some(text.into());
+        clipboard.sequence += 1;
+        Ok(())
+    }
+    fn sequence(&self) -> Option<u64> {
+        Some(self.0.lock().unwrap().sequence)
+    }
+    fn paste(&mut self) -> Result<(), clipboard_delivery::DispatchError> {
+        let mut clipboard = self.0.lock().unwrap();
+        let text = clipboard.text.clone().unwrap();
+        clipboard.dispatched.push(text);
+        Ok(())
+    }
+    fn wait_for_consumption(&mut self) {}
+}
+
 struct HostLock<T>(Mutex<T>);
 impl<T> HostLock<T> {
     fn lock(&self) -> MutexGuard<'_, T> {
@@ -47,11 +81,29 @@ impl FakeHost {
     fn set_voice_edit_interactive(&self, interactive: bool) {
         self.0.store(interactive, Ordering::SeqCst);
     }
+    #[cfg(target_os = "android")]
+    fn show_voice_edit(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
-struct FakeInserter;
+#[derive(Default)]
+struct FakeInserter(Arc<Mutex<ClipboardState>>);
 impl FakeInserter {
-    fn insert<T>(&self, _: &str, _: bool, _: T) -> types::InsertStatus {
-        types::InsertStatus::Inserted
+    fn insert_guarded<T>(
+        &self,
+        text: &str,
+        restore: bool,
+        _: T,
+        expected: Option<u64>,
+        still_current: impl FnMut() -> bool,
+    ) -> types::InsertStatus {
+        clipboard_delivery::insert_with(
+            &mut ClipboardAdapter(Arc::clone(&self.0)),
+            text,
+            restore,
+            expected,
+            still_current,
+        )
     }
 }
 struct Inner {
@@ -67,7 +119,10 @@ mod voice_edit_session;
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static WRITES: AtomicUsize = AtomicUsize::new(0);
 static CAPTURE_GATE: Mutex<Option<Arc<CaptureGate>>> = Mutex::new(None);
+static CAPTURE_SELECTION: Mutex<Option<openless_core::TextSelection>> = Mutex::new(None);
 static CAPTURE_TEXT: Mutex<Option<String>> = Mutex::new(None);
+static CURRENT_TARGET: Mutex<Option<host_document::NativeVoiceEditTarget>> = Mutex::new(None);
+static TARGET_PREPARED: Mutex<Option<Arc<Semaphore>>> = Mutex::new(None);
 
 struct CaptureGate {
     entered: Semaphore,
@@ -105,8 +160,12 @@ impl Drop for ReleaseCaptureOnDrop {
 mod host_document {
     use super::*;
 
-    #[derive(Clone)]
-    pub(crate) struct NativeVoiceEditTarget;
+    #[derive(Clone, PartialEq, Eq)]
+    pub(crate) struct NativeVoiceEditTarget {
+        pub control: u64,
+        pub text: String,
+        pub selection: (usize, usize),
+    }
 
     pub(crate) fn capture_voice_edit_target() -> Result<
         (
@@ -125,16 +184,36 @@ mod host_document {
             .unwrap()
             .take()
             .unwrap_or_else(|| "original".into());
-        Ok((text, None, NativeVoiceEditTarget))
+        let target = NativeVoiceEditTarget {
+            control: 1,
+            selection: (text.encode_utf16().count(), text.encode_utf16().count()),
+            text: text.clone(),
+        };
+        *CURRENT_TARGET.lock().unwrap() = Some(target.clone());
+        Ok((text, CAPTURE_SELECTION.lock().unwrap().take(), target))
     }
 
     pub(crate) fn apply_voice_edit_target(
-        _: &NativeVoiceEditTarget,
+        target: &NativeVoiceEditTarget,
         text: &str,
-        insert: impl FnOnce(&str) -> Result<(), String>,
+        insert: impl FnOnce(&str, &mut dyn FnMut() -> bool) -> Result<(), String>,
     ) -> Result<(), String> {
+        {
+            let mut current = CURRENT_TARGET.lock().unwrap();
+            if current.as_ref() != Some(target) {
+                return Err("voiceEditTargetChanged".into());
+            }
+            // Model the native selection setup that happens before the legacy inserter waits.
+            current.as_mut().unwrap().selection = (0, target.text.encode_utf16().count());
+        }
+        let selected_target = CURRENT_TARGET.lock().unwrap().clone();
         WRITES.fetch_add(1, Ordering::SeqCst);
-        insert(text)
+        if let Some(prepared) = TARGET_PREPARED.lock().unwrap().take() {
+            prepared.add_permits(1);
+        }
+        insert(text, &mut || {
+            *CURRENT_TARGET.lock().unwrap() == selected_target
+        })
     }
 }
 
@@ -217,6 +296,8 @@ fn fixture_with_transcript(transcript: &str) -> (tempfile::TempDir, Arc<Inner>, 
     let directory = tempfile::tempdir().unwrap();
     let mut preferences = openless_core::shared_types::UserPreferences::default();
     preferences.voice_edit_enabled = true;
+    // This fixture supplies a fixed history timestamp; retention must not depend on today's date.
+    preferences.history_retention_days = 0;
     openless_core::PreferencesStore::open(directory.path().join("preferences.json"))
         .unwrap()
         .set(preferences)
@@ -253,7 +334,7 @@ fn fixture_with_transcript(transcript: &str) -> (tempfile::TempDir, Arc<Inner>, 
             backend: Arc::new(backend),
             voice_edit_host: HostLock(Mutex::new(Default::default())),
             host: FakeHost::default(),
-            inserter: FakeInserter,
+            inserter: FakeInserter::default(),
         }),
         engine,
     )
@@ -285,6 +366,81 @@ async fn invalid_commit_never_writes_and_completed_commit_only_writes_once() {
     assert!(voice_edit_session::commit(&inner, id).await.is_err());
     assert_eq!(WRITES.load(Ordering::SeqCst), 1);
     inner.backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn commit_revalidates_prepared_native_target_after_waiting_for_clipboard_delivery() {
+    let _serial = SERIAL.lock().await;
+    for change in ["control", "selection", "text", "unchanged"] {
+        let (_directory, inner, _) = fixture();
+        let id = voice_edit_session::start(&inner).await.unwrap().session_id;
+        voice_edit_session::finish_dictation(&inner, id)
+            .await
+            .unwrap();
+        let before = voice_edit_session::snapshot(&inner).unwrap();
+        let history_before = inner.backend.list_history().unwrap().len();
+        let prepared = Arc::new(Semaphore::new(0));
+        *TARGET_PREPARED.lock().unwrap() = Some(Arc::clone(&prepared));
+        let gate_entered = Arc::new(Semaphore::new(0));
+        let notify = Arc::clone(&gate_entered);
+        let (release, wait) = std::sync::mpsc::channel();
+        // Another host delivery owns the shared gate while voice-edit prepares its target.
+        let holder = std::thread::spawn(move || {
+            let _gate = clipboard_delivery::lock();
+            notify.add_permits(1);
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        entered(&gate_entered).await;
+        let writer = Arc::clone(&inner);
+        let commit = tokio::spawn(async move { voice_edit_session::commit(&writer, id).await });
+        entered(&prepared).await;
+        let changed_target = {
+            let mut current = CURRENT_TARGET.lock().unwrap();
+            let current = current.as_mut().unwrap();
+            match change {
+                "control" => current.control += 1,
+                "selection" => current.selection = (1, 1),
+                "text" => current.text.push_str(" user edit"),
+                "unchanged" => {}
+                _ => unreachable!(),
+            }
+            current.clone()
+        };
+        // Commit reservation continues to reject cancellation, as before this fix.
+        assert!(voice_edit_session::cancel(&inner, Some(id)).await.is_err());
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        let outcome = commit.await.unwrap();
+        let snapshot = voice_edit_session::snapshot(&inner).unwrap();
+        {
+            let clipboard = inner.inserter.0.lock().unwrap();
+            if change == "unchanged" {
+                assert_eq!(outcome.unwrap().phase, VoiceEditPhase::Completed);
+                assert_eq!(clipboard.dispatched, [before.context.unwrap().preview]);
+                assert_eq!(
+                    inner.backend.list_history().unwrap().len(),
+                    history_before
+                );
+            } else {
+                assert!(
+                    outcome.is_err(),
+                    "{change} while waiting must reject the commit"
+                );
+                assert!(clipboard.dispatched.is_empty());
+                assert_eq!(
+                    clipboard.sequence, 0,
+                    "rejection must not even borrow the clipboard"
+                );
+                assert_eq!(snapshot, before, "keep the complete draft retryable");
+                assert_eq!(inner.backend.list_history().unwrap().len(), history_before);
+                assert!(
+                    CURRENT_TARGET.lock().unwrap().as_ref() == Some(&changed_target),
+                    "never reset the user's changed control, text or range"
+                );
+            }
+        }
+        inner.backend.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -344,7 +500,11 @@ async fn overlay_handoff_reuses_recording_and_preserves_audio_without_native_ins
         .fixture
         .actions()
         .contains(&FixtureEngineAction::Finish(recording)));
-    assert!(inner.backend.list_history().unwrap().is_empty());
+    let history = inner.backend.list_history().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].raw_transcript, "originalspoken");
+    assert_eq!(history[0].final_text, "originalspoken");
+    assert_eq!(history[0].insert_status, openless_core::HistoryInsertStatus::NotRequested);
     assert_eq!(WRITES.load(Ordering::SeqCst), 0);
     assert!(inner.voice_edit_host.lock().dictation_session_id.is_none());
     voice_edit_session::cancel(&inner, Some(draft.session_id))
@@ -476,6 +636,40 @@ async fn cancelling_during_initial_or_instruction_asr_releases_the_backend() {
         voice_edit_session::cancel(&inner, Some(next.session_id))
             .await
             .unwrap();
+        inner.backend.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn frozen_selection_history_survives_cancel_and_commit_without_instruction_text() {
+    let _serial = SERIAL.lock().await;
+    for commit in [false, true] {
+        let original = format!(" \t{} UNIQUE_MIDDLE {}\n ", "😀".repeat(9000), "中".repeat(9000));
+        *CAPTURE_TEXT.lock().unwrap() = Some(format!("prefix{original}suffix"));
+        *CAPTURE_SELECTION.lock().unwrap() = Some(openless_core::TextSelection {
+            start: 6, end: 6 + original.chars().count() as u32,
+        });
+        let (_directory, inner, _) = fixture();
+        let id = voice_edit_session::start(&inner).await.unwrap().session_id;
+        let before = inner.backend.list_history().unwrap().into_iter().filter(|entry| entry.id == id.to_string()).collect::<Vec<_>>();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].raw_transcript, original);
+        assert!(before[0].final_text.is_empty());
+        voice_edit_session::finish_dictation(&inner, id).await.unwrap();
+        let draft = voice_edit_session::snapshot(&inner).unwrap().context.unwrap().preview;
+        assert_eq!(draft, original);
+        // Model instructions are stored in turns, never in rawTranscript.
+        if commit {
+            voice_edit_session::commit(&inner, id).await.unwrap();
+        } else {
+            voice_edit_session::cancel(&inner, Some(id)).await.unwrap();
+        }
+        let history = inner.backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, id.to_string());
+        assert_eq!(history[0].raw_transcript, original);
+        assert_eq!(history[0].final_text, draft);
+        assert_eq!(history[0].insert_status, if commit { openless_core::HistoryInsertStatus::PasteSent } else { openless_core::HistoryInsertStatus::NotRequested });
         inner.backend.shutdown().await.unwrap();
     }
 }
