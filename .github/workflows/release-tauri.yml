@@ -154,6 +154,9 @@ jobs:
             ${{ runner.temp }}/openless-dev-evidence/targeted-tests.log
             ${{ runner.temp }}/openless-dev-evidence/timeline.txt
             ${{ runner.temp }}/openless-dev-evidence/*.png
+            ${{ runner.temp }}/openless-dev-evidence/ui-results.json
+            ${{ runner.temp }}/openless-dev-evidence/ui/**/*.png
+            ${{ runner.temp }}/openless-dev-evidence/ui/**/error-context.md
           if-no-files-found: ignore
           retention-days: 14
       - name: Remove owned keychain sentinels

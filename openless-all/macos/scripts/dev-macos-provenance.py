@@ -56,6 +56,8 @@ elif sys.argv[1] == "verify":
     dmg = Path(sys.argv[2])
     result = (evidence / "result.txt").read_text()
     assert "status=PASS\n" in result
+    ui = json.loads((evidence / "ui-results.json").read_text())["stats"]
+    assert ui["expected"] == 3 and ui["unexpected"] == 0 and ui["skipped"] == 0, "three UI cases must pass"
     report = {
         "source_sha": os.environ["OPENLESS_BUILD_ID"],
         "run_url": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
@@ -66,6 +68,7 @@ elif sys.argv[1] == "verify":
         "formal_data_sentinels": "unchanged",
         "formal_keychain_sentinels": "unchanged (verified by build script)",
         "smoke": result.splitlines(),
+        "chromium_ui": ui,
         "validation_scope": "bounded synthetic tests; see targeted-tests.log; no full suite or live models",
     }
     (evidence / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")

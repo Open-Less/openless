@@ -41,6 +41,8 @@ for filter in \
 done
 # Do not run a second frontend build or a debug Tauri host build.
 npm run tauri -- build --ci --features dev-build --bundles dmg --config src-tauri/tauri.dev.conf.json -- --locked --timings
+npx --no-install playwright install chromium
+npx --no-install playwright test --config playwright.dev.config.ts
 app=src-tauri/target/release/bundle/macos/'OpenLess Dev.app'
 lipo "$app/Contents/MacOS/openless" -verify_arch arm64
 codesign --verify --deep --strict "$app"
