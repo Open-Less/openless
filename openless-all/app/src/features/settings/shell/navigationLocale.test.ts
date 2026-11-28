@@ -12,6 +12,7 @@ import {
   ADVANCED_PAGES,
   GENERAL_PAGES,
   SETTINGS_SECTIONS,
+  advancedPageDescriptionKey,
   searchSettingsSections,
 } from './navigation';
 
@@ -51,13 +52,12 @@ for (const [locale, translation] of Object.entries({
     'modal.backToAdvanced',
     'shiftTranslation.count',
     'shiftTranslation.scope',
-    ...ADVANCED_PAGES.flatMap((page) => [
-      page.titleKey,
-      // The references entry intentionally has no description (tabs.tsx).
-      ...(page.id === 'dictationReferences' ? [] : [
-        page.id === 'intentRouting' ? 'askEntrySettings.routingHint' : `modal.advancedPages.${page.id}`,
-      ]),
-    ]),
+    ...ADVANCED_PAGES.flatMap((page) => {
+      const descriptionKey = advancedPageDescriptionKey(page.id);
+      if (page.id === 'dictationReferences') return [page.titleKey];
+      if (!descriptionKey) throw new Error(`${locale}: missing description key for ${page.id}`);
+      return [page.titleKey, descriptionKey];
+    }),
   ]) {
     if (!i18n.exists(key)) throw new Error(`${locale}: missing advanced navigation label ${key}`);
   }

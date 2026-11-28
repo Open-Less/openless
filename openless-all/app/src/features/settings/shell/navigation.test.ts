@@ -1,6 +1,7 @@
 import {
   ADVANCED_PAGES,
   SETTINGS_SECTIONS,
+  advancedPageDescriptionKey,
   searchSettingsSections,
   showsCursorContextControl,
   visibleSettingsSections,
@@ -161,10 +162,17 @@ for (const pages of [
 ]) {
   assert.equal(pages.some(({ id }) => id === 'dictationReferences'), false, 'attachments require desktop support');
 }
+for (const os of ['mac', 'win'] as const) {
+  assert.equal(
+    visibleAdvancedPages('desktop', os, true).some(({ id }) => id === 'dictationReferences'),
+    true,
+    `${os}: attachments are available when the desktop host reports support`,
+  );
+}
 assert.equal(
-  visibleAdvancedPages('desktop', 'mac', true).some(({ id }) => id === 'dictationReferences'),
-  true,
-  'attachments are available when the desktop host reports support',
+  advancedPageDescriptionKey('dictationReferences'),
+  undefined,
+  'the attachments entry shows only its title and experimental marker',
 );
 assert.equal(
   advancedIds.includes('vocabularyLearning'),

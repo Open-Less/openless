@@ -352,7 +352,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const { t } = useTranslation();
   const environment = getRuntimeEnvironment();
   const os = forcedOs ?? environment.os;
-  const canShowReferences = os === 'mac' && !environment.isMobile;
+  const canShowReferences = !environment.isMobile && (os === 'mac' || os === 'win');
   const isTauri = isTauriHost();
   const [publishInputRegions] = useState(createCapsuleRegionPublisher);
   const [pickerController] = useState(() => new CapsulePickerMenu());

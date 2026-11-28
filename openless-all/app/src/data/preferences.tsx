@@ -30,7 +30,6 @@ interface HotkeySettingsContextValue {
   refresh: () => Promise<void>;
   updatePrefs: (
     next: UserPreferences | ((current: UserPreferences) => UserPreferences),
-    options?: { reportFailure?: boolean },
   ) => Promise<void>;
 }
 
@@ -120,10 +119,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
   }, [refresh, reloadPreferences]);
 
   const updatePrefs = useCallback(
-    async (
-      next: UserPreferences | ((current: UserPreferences) => UserPreferences),
-      { reportFailure = true }: { reportFailure?: boolean } = {},
-    ) => {
+    async (next: UserPreferences | ((current: UserPreferences) => UserPreferences)) => {
       const previous = latestPrefsRef.current;
       if (!previous) return;
       const resolved = typeof next === 'function' ? next(previous) : next;
@@ -141,7 +137,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
             applyPrefs(gate.current.finishWrite(write.id, saved));
           } catch (error) {
             applyPrefs(gate.current.finishWrite(write.id));
-            if (reportFailure) emitSaved('failed', errorMessage(error));
+            emitSaved('failed', errorMessage(error));
             throw error;
           }
         });

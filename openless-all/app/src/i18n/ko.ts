@@ -332,7 +332,6 @@ export const ko: typeof zhCN = {
   capsule: {
     references: '첨부 {{count}}개',
     referenceNotice: {
-      screenPermission: '화면 기록 권한 필요',
       tooLarge: '항목이 너무 큼',
       captureFailed: '항목을 가져오지 못함',
     },
@@ -1259,12 +1258,7 @@ export const ko: typeof zhCN = {
     },
     dictationReferences: {
       enabledLabel: '받아쓰는 중에 첨부',
-      enabledDesc: '스크린샷과 복사한 항목이 해당 문장 옆에 추가됩니다',
-      keyLabel: '스크린샷 키',
-      keyDesc: '녹음 중에 녹음 키와 이 키를 눌러 캡처',
-      keyConflict: '이미 사용 중인 키입니다',
-      permissionNote: '화면 기록 권한 필요',
-      openSettings: '시스템 설정 열기',
+      enabledDesc: '녹음 중 시스템 클립보드를 읽어 새로 복사한 내용을 해당 문장 옆에 추가합니다',
     },
     advancedPages: {
       polishStrategyTitle: '다듬기 전략',

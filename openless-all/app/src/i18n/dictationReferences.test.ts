@@ -8,11 +8,8 @@ import { ja } from './ja';
 import { ko } from './ko';
 
 const locales = { 'zh-CN': zhCN, 'zh-TW': zhTW, en, de, es, fr, ja, ko };
-const settingsKeys = [
-  'enabledLabel', 'enabledDesc', 'keyLabel', 'keyDesc', 'keyConflict',
-  'permissionNote', 'openSettings',
-].sort();
-const noticeKeys = ['screenPermission', 'tooLarge', 'captureFailed'].sort();
+const settingsKeys = ['enabledDesc', 'enabledLabel'];
+const noticeKeys = ['captureFailed', 'tooLarge'];
 
 for (const [locale, resource] of Object.entries(locales)) {
   const settings = resource.settings.dictationReferences;
@@ -29,8 +26,9 @@ for (const [locale, resource] of Object.entries(locales)) {
   ]) {
     if (typeof text !== 'string' || !text.trim()) throw new Error(`${locale}: missing reference label`);
   }
-  if (!resource.capsule.references.includes('{{count}}')) {
-    throw new Error(`${locale}: attached count interpolation missing`);
+  const countPlaceholders = resource.capsule.references.match(/\{\{[^{}]+\}\}/g);
+  if (JSON.stringify(countPlaceholders) !== '["{{count}}"]') {
+    throw new Error(`${locale}: attachment count must interpolate count exactly once`);
   }
-  console.log(`dictation references i18n ${locale}: 12 keys passed`);
+  console.log(`dictation references i18n ${locale}: 6 keys passed`);
 }

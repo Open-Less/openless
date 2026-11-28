@@ -7,8 +7,8 @@ if (mockSettings.useSystemProxy !== true) {
   );
 }
 
-if (mockSettings.dictationReferencesEnabled !== false || mockSettings.dictationReferenceKey !== 'S') {
-  throw new Error('Mock dictation attachments must default to off with screenshot key S');
+if (mockSettings.dictationReferencesEnabled !== false) {
+  throw new Error('Mock dictation attachments must default to off');
 }
 
 console.log('mock-data.test.ts passed');

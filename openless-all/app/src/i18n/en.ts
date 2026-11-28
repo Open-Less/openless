@@ -349,7 +349,6 @@ export const en: typeof zhCN = {
   capsule: {
     references: '{{count}} attached',
     referenceNotice: {
-      screenPermission: 'Screen Recording permission needed',
       tooLarge: 'Item too large',
       captureFailed: 'Item not captured',
     },
@@ -1337,12 +1336,7 @@ export const en: typeof zhCN = {
     },
     dictationReferences: {
       enabledLabel: 'Insert attachments while dictating',
-      enabledDesc: 'Screenshots and copied items go next to the sentence you were saying',
-      keyLabel: 'Screenshot key',
-      keyDesc: 'While recording, press the recording key plus this key',
-      keyConflict: 'That key is already in use',
-      permissionNote: 'Screen Recording permission needed',
-      openSettings: 'Open System Settings',
+      enabledDesc: 'While recording, reads the system clipboard and places newly copied items next to the sentence you were saying',
     },
     advancedPages: {
       polishStrategyTitle: 'Polish strategy',

@@ -45,7 +45,6 @@ import { AskEntrySettingsSection, IntentRoutingSection } from '../sections/AskEn
 import { PolishStrategySection } from '../sections/PolishStrategySection';
 import { AskHistorySection } from '../sections/AskHistorySection';
 import { DictationReferencesSection } from '../sections/DictationReferencesSection';
-import type { DictationReferencesStatus } from '../../../api/dictationReferences';
 import { getPlatformCapabilities, getCachedPlatformCapabilities } from '../../../runtime/platform';
 import { listChannels, listenCredentialsChanges } from '../../../api/providers';
 import type { PipelineMode, PlatformCapabilities, PlatformKind } from '../../../api/contracts';
@@ -62,6 +61,7 @@ import {
   isServiceViewInactive,
   resolveServiceView,
   showsCursorContextControl,
+  advancedPageDescriptionKey,
   visibleGeneralPages,
   type GeneralPageId,
   type ServiceViewId,
@@ -679,16 +679,12 @@ export function PrivacyTab() {
 export function AdvancedTab({
   pages,
   page,
-  referenceScreenCapture,
-  onReferencePermissionSettingsUnavailable,
   onOpenPage,
   experimentalAsr,
   onOpenAsr,
 }: {
   pages: AdvancedPage[];
   page: AdvancedPageId | null;
-  referenceScreenCapture?: DictationReferencesStatus['screenCapture'];
-  onReferencePermissionSettingsUnavailable: () => void;
   onOpenPage: (page: AdvancedPageId) => void;
   experimentalAsr: ExperimentalAsrController;
   onOpenAsr: () => Promise<void>;
@@ -705,13 +701,7 @@ export function AdvancedTab({
           icon={item.icon}
           title={item.titleKey}
           beta={'beta' in item && item.beta}
-          description={
-            item.id === 'dictationReferences'
-              ? undefined
-              : item.id === 'intentRouting'
-                ? 'askEntrySettings.routingHint'
-                : `modal.advancedPages.${item.id}`
-          }
+          description={advancedPageDescriptionKey(item.id)}
           onClick={() => onOpenPage(item.id)}
         />
       ))}
@@ -735,12 +725,7 @@ export function AdvancedTab({
             )}
             {item.id === 'voiceEnhancement' && <VoiceEnhancementSection />}
             {item.id === 'liveInput' && <LiveInputSection />}
-            {item.id === 'dictationReferences' && (
-              <DictationReferencesSection
-                screenCapture={referenceScreenCapture}
-                onPermissionSettingsUnavailable={onReferencePermissionSettingsUnavailable}
-              />
-            )}
+            {item.id === 'dictationReferences' && <DictationReferencesSection />}
             {item.id === 'cursorContext' && (
               <div
                 className="ol-awareness-sections"

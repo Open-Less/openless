@@ -16,6 +16,10 @@ assert.equal(referenceBadgeView(updateReferenceBadge(null, session, 0), 0), null
 
 const counted = updateReferenceBadge(null, { ...session, referenceCount: 2 }, 0);
 assert.deepEqual(referenceBadgeView(counted, 0), { kind: 'count', count: 2 });
+const unknownNotice = updateReferenceBadge(counted, {
+  ...session, referenceCount: 2, referenceNotice: 'unknownNotice',
+}, 10);
+assert.deepEqual(referenceBadgeView(unknownNotice, 10), { kind: 'count', count: 2 });
 const processing = updateReferenceBadge(counted, { ...session, state: 'polishing', referenceCount: 2 }, 20);
 assert.deepEqual(referenceBadgeView(processing, 20), { kind: 'count', count: 2 });
 
