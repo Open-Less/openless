@@ -11,6 +11,8 @@ use crate::types::{InsertStatus, PasteShortcut};
 pub(crate) mod clipboard_delivery;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) mod material_delivery;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) mod owned_clipboard;
 
 /// Put a text into the clipboard; used by the "Copy" button on the insertion-failure fallback card.
 ///
@@ -63,10 +65,10 @@ impl TextInserter {
         parts: &[openless_core::dictation_references::DeliveryPart],
         restore: bool,
         shortcut: PasteShortcut,
-        still_current: impl FnMut(bool) -> bool,
+        target: impl material_delivery::MaterialTarget,
     ) -> InsertStatus {
         let Ok(mut clipboard) = NativeClipboardDelivery::new(shortcut) else { return InsertStatus::Failed; };
-        material_delivery::deliver(&mut clipboard, parts, restore, still_current)
+        material_delivery::deliver(&mut clipboard, parts, restore, target)
     }
     pub fn new() -> Self {
         Self
@@ -275,47 +277,18 @@ fn map_sendinput_type_result(
 struct NativeClipboardDelivery {
     clipboard: arboard::Clipboard,
     shortcut: PasteShortcut,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    receipt: Option<owned_clipboard::Receipt>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl material_delivery::MaterialClipboard for NativeClipboardDelivery {
     fn set_image(&mut self, path: &std::path::Path) -> Result<(), String> {
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        std::fs::File::open(path).and_then(|f| f.take(openless_core::dictation_references::MAX_BYTES + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > openless_core::dictation_references::MAX_BYTES { return Err("image too large".into()); }
         let own_write = crate::dictation_references::self_write();
-        #[cfg(target_os = "macos")]
-        {
-            use objc2::{msg_send, runtime::{AnyClass, AnyObject}, rc::autoreleasepool};
-            use objc2_foundation::NSString;
-            autoreleasepool(|_| unsafe {
-                let class = AnyClass::get("NSPasteboard").ok_or("pasteboard unavailable")?;
-                let board: *mut AnyObject = msg_send![class, generalPasteboard];
-                let data_class = AnyClass::get("NSData").ok_or("data unavailable")?;
-                let data: *mut AnyObject = msg_send![data_class, dataWithBytes: bytes.as_ptr().cast::<std::ffi::c_void>(), length: bytes.len()];
-                if board.is_null() || data.is_null() { return Err("image clipboard unavailable".into()); }
-                let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-                let ty = match extension.as_str() { "tif" | "tiff" => "public.tiff", "jpg" | "jpeg" => "public.jpeg", _ => "public.png" };
-                let _: isize = msg_send![board, clearContents];
-                own_write.commit();
-                let written: bool = msg_send![board, setData: data, forType: &*NSString::from_str(ty)];
-                if written { own_write.commit(); Ok(()) } else { Err("image clipboard write failed".into()) }
-            })
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
-            let mut limits = image::Limits::default();
-            limits.max_alloc = Some(openless_core::dictation_references::MAX_SESSION_BYTES);
-            reader.limits(limits);
-            let image = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
-            let (width, height) = image.dimensions();
-            self.clipboard.set_image(arboard::ImageData { width: width as usize, height: height as usize,
-                bytes: std::borrow::Cow::Owned(image.into_raw()) }).map_err(|e| e.to_string())?;
-            own_write.commit();
-            Ok(())
-        }
+        let receipt = owned_clipboard::write_image(path)?;
+        own_write.commit_revision(Some(receipt.revision));
+        self.receipt = Some(receipt);
+        Ok(())
     }
 }
 
@@ -325,6 +298,8 @@ impl NativeClipboardDelivery {
         Ok(Self {
             clipboard: arboard::Clipboard::new().map_err(|error| error.to_string())?,
             shortcut,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            receipt: None,
         })
     }
 }
@@ -340,12 +315,36 @@ impl clipboard_delivery::ClipboardDelivery for NativeClipboardDelivery {
     }
 
     fn set_text(&mut self, text: &str) -> Result<(), String> {
+        clipboard_delivery::ClipboardDelivery::set_text_if_revision(self, text, None)?.then_some(()).ok_or_else(|| "clipboard ownership changed".into())
+    }
+    fn set_text_if_revision(&mut self, text: &str, expected: Option<u64>) -> Result<bool, String> {
         let own_write = crate::dictation_references::self_write();
-        self.clipboard
-            .set_text(text.to_string())
-            .map_err(|error| error.to_string())?;
-        own_write.commit();
-        Ok(())
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let receipt = match owned_clipboard::write_text(text, expected) {
+                Ok(receipt) => receipt,
+                Err(_) if expected.is_some() && expected != clipboard_sequence() => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            own_write.commit_revision(Some(receipt.revision));
+            self.receipt = Some(receipt);
+            Ok(true)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        { let _ = own_write; if expected.is_some() && expected != clipboard_sequence() { return Ok(false); } self.clipboard.set_text(text.to_string()).map(|()| true).map_err(|e| e.to_string()) }
+    }
+
+    fn owned_sequence(&self) -> Option<u64> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        { self.receipt.as_ref().map(|r| r.revision) }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        { None }
+    }
+    fn owns_write(&mut self, revision: Option<u64>) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        { self.receipt.as_ref().is_some_and(|r| Some(r.revision) == revision && owned_clipboard::owns(r)) }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        { let _ = revision; false }
     }
 
     fn sequence(&self) -> Option<u64> {

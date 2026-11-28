@@ -18,6 +18,10 @@ pub(super) trait ClipboardCapture {
     fn copy_selection(&mut self) -> (bool, ClipboardPollOutcome, u64);
     fn sequence(&self) -> u64;
     fn restore_text(&mut self, text: &str);
+    fn restore_text_if_current(&mut self, text: &str, expected: u64) -> bool {
+        if self.sequence() != expected { return false; }
+        self.restore_text(text); true
+    }
 }
 
 pub(super) fn capture_with_restore<C: ClipboardCapture>(
@@ -34,7 +38,7 @@ pub(super) fn capture_with_restore<C: ClipboardCapture>(
     if !matches!(&outcome, ClipboardPollOutcome::Unchanged)
         && clipboard.sequence() == copied_sequence
     {
-        clipboard.restore_text(original.as_deref().unwrap_or(""));
+        clipboard.restore_text_if_current(original.as_deref().unwrap_or(""), copied_sequence);
     }
 
     Ok((post_ok, outcome))

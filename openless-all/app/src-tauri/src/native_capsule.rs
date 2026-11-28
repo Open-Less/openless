@@ -335,6 +335,8 @@ impl NativeCapsule {
             session_id: payload.session_id.clone().unwrap_or_default(),
             sequence,
             state: CapsulePopupState {
+                reference_count: payload.reference_count,
+                reference_notice: payload.reference_notice.clone(),
                 phase: phase.into(),
                 text: payload.message.clone().unwrap_or_default(),
                 audio_level: (!payload.warming).then_some(payload.level),

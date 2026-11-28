@@ -594,7 +594,7 @@ impl DefaultCapsule {
             time(if layer_visible { 0.0 } else { 0.12 }),
             LINEAR,
         );
-        let badge_visible = (state.translation_active && matches!(phase, "recording" | "transcribing" | "polishing")
+        let badge_visible = ((state.translation_active || state.reference_count > 0 || state.reference_notice.is_some()) && matches!(phase, "recording" | "transcribing" | "polishing")
             || state.qa
                 && matches!(
                     state.phase.as_str(),
@@ -744,7 +744,7 @@ impl DefaultCapsule {
         }
         let badge_bottom = body_top
             - STACK_GAP
-            - if rail_visible && (state.translation_active || state.qa) {
+            - if rail_visible && (state.translation_active || state.qa || state.reference_count > 0 || state.reference_notice.is_some()) {
                 RAIL_HEIGHT + 8.0
             } else {
                 0.0
@@ -935,11 +935,15 @@ fn badge(
     opacity: f32,
     pixels_per_point: f32,
 ) -> Vec<Shape> {
+    let material = frame.labels.reference_label(frame.state.reference_count, frame.state.reference_notice.as_deref());
+    let max_width = (painter.clip_rect().width() - 32.0).max(160.0);
     if frame.state.qa || frame.state.phase != "recording" || !frame.state.translation_active {
-        let label = painter.layout_job(LayoutJob::single_section(
-            if frame.state.qa { frame.labels.asking.clone() } else { frame.labels.translating.clone() },
+        let context = if frame.state.qa { frame.labels.asking.as_str() } else if frame.state.translation_active { frame.labels.translating.as_str() } else { "" };
+        let label = line(painter,
+            &if material.is_empty() { context.into() } else if context.is_empty() { material.clone() } else { format!("{material} · {context}") },
             format(11.0, 500.0, 16.5, tokens.pill.ink),
-        ));
+            max_width - 20.0,
+        );
         let size = label.size();
         let rect = Rect::from_min_size(
             pos2(
@@ -959,10 +963,6 @@ fn badge(
         ];
     }
     let fade = |color: Color32| color.gamma_multiply(opacity);
-    let label = painter.layout_job(LayoutJob::single_section(
-        frame.labels.translating.clone(),
-        format(11.0, 400.0, 16.5, tokens.pill.ink),
-    ));
     let target = frame
         .state
         .translation_target
@@ -977,7 +977,13 @@ fn badge(
         ))
         .size()
         .x;
-    let chip_width = (value_width.ceil() + 34.0).clamp(92.0, 174.0);
+    let max_chip_width = (max_width - 96.0).clamp(56.0, 174.0);
+    let chip_width = (value_width.ceil() + 34.0).clamp(56.0, max_chip_width);
+    let label = line(painter,
+        &if material.is_empty() { frame.labels.translating.clone() } else { format!("{material} · {}", frame.labels.translating) },
+        format(11.0, 400.0, 16.5, tokens.pill.ink),
+        (max_width - chip_width - 24.0).max(16.0),
+    );
     let value = line(
         painter,
         target,

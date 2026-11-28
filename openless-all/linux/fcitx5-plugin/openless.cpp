@@ -323,6 +323,8 @@ public:
                     }
                     for (auto it = dictationTargets_.begin(); it != dictationTargets_.end();) {
                         if (it->second == icEvent.inputContext()) {
+                            dictationInitial_.erase(it->first);
+                            materialTargets_.erase(it->first);
                             it = dictationTargets_.erase(it);
                         } else {
                             ++it;
@@ -406,7 +408,9 @@ public:
         // A session keeps its own native target even when later key events
         // update savedIc_. Destruction invalidates the ticket instead of
         // redirecting the remaining transcript to a different application.
-        return dictationTargets_.emplace(ticket, savedIc_).second;
+        if (!dictationTargets_.emplace(ticket, savedIc_).second) return false;
+        dictationInitial_[ticket] = materialPosition(savedIc_);
+        return true;
     }
 
     bool commitDictationTarget(const std::string &ticket, const std::string &text) {
@@ -417,12 +421,55 @@ public:
     }
 
     bool cancelDictationTarget(const std::string &ticket) {
+        dictationInitial_.erase(ticket);
+        materialTargets_.erase(ticket);
         return dictationTargets_.erase(ticket) > 0;
+    }
+
+    bool beginMaterialDelivery(const std::string &ticket) {
+        const auto target = dictationTargets_.find(ticket);
+        const auto captured = dictationInitial_.find(ticket);
+        if (target == dictationTargets_.end() || captured == dictationInitial_.end() ||
+            !target->second->hasFocus() || !sameMaterialPosition(captured->second, materialPosition(target->second))) return false;
+        materialTargets_[ticket] = {captured->second, captured->second, 0};
+        return true;
+    }
+
+    // 1 = verified expected range, 0 = prior state awaiting a text receipt,
+    // -1 = invalid/changed. Merely reusing the same InputContext is insufficient.
+    int32_t materialTargetStatus(const std::string &ticket) {
+        const auto target = dictationTargets_.find(ticket);
+        const auto found = materialTargets_.find(ticket);
+        if (target == dictationTargets_.end() || found == materialTargets_.end() || !target->second->hasFocus()) return -1;
+        auto &state = found->second;
+        const auto current = materialPosition(target->second);
+        if (sameMaterialPosition(state.expected, current)) { state.pending = 0; return 1; }
+        if (state.pending == 1 && sameMaterialPosition(state.before, current)) return 0;
+        if (state.pending == 2 && sameMaterialPosition(state.before, current)) {
+            // The image may have been ignored. This preserves the verified
+            // range, without claiming that image content was consumed.
+            state.expected = current; state.pending = 0; return 1;
+        }
+        return -1;
+    }
+
+    bool commitDictationMaterial(const std::string &ticket, const std::string &text) {
+        if (materialTargetStatus(ticket) != 1) return false;
+        auto &state = materialTargets_.at(ticket);
+        MaterialPosition next;
+        if (!replaceMaterialPosition(state.expected, text, next)) return false;
+        state.before = state.expected; state.expected = std::move(next); state.pending = 1;
+        dictationTargets_.at(ticket)->commitString(text);
+        return true;
     }
 
     bool pasteDictationTarget(const std::string &ticket) {
         const auto found = dictationTargets_.find(ticket);
-        if (found == dictationTargets_.end() || !found->second->hasFocus()) return false;
+        if (found == dictationTargets_.end() || materialTargetStatus(ticket) != 1) return false;
+        auto &state = materialTargets_.at(ticket);
+        MaterialPosition next;
+        if (!replaceMaterialPosition(state.expected, "\xef\xbf\xbc", next)) return false;
+        state.before = state.expected; state.expected = std::move(next); state.pending = 2;
         // Forward only to the exact captured InputContext. This acknowledges
         // dispatch; the host always appends a path because consumption is unknown.
         const Key paste(FcitxKey_v, KeyState::Ctrl);
@@ -733,6 +780,9 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(commitDictationTarget, "CommitDictationTarget", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(cancelDictationTarget, "CancelDictationTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(pasteDictationTarget, "PasteDictationTarget", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(beginMaterialDelivery, "BeginMaterialDelivery", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(materialTargetStatus, "MaterialTargetStatus", "s", "i");
+    FCITX_OBJECT_VTABLE_METHOD(commitDictationMaterial, "CommitDictationMaterial", "ss", "b");
     FCITX_OBJECT_VTABLE_METHOD(captureSelectionTarget, "CaptureSelectionTarget", "s", "s");
     FCITX_OBJECT_VTABLE_METHOD(applySelectionTarget, "ApplySelectionTarget", "sss", "b");
     FCITX_OBJECT_VTABLE_METHOD(revertSelectionTarget, "RevertSelectionTarget", "s", "b");
@@ -922,6 +972,26 @@ private:
         unsigned int anchor;
         bool surroundingValid;
     };
+    struct MaterialPosition { std::string text; unsigned cursor = 0; unsigned anchor = 0; bool valid = false; };
+    struct MaterialState { MaterialPosition expected; MaterialPosition before; int pending = 0; };
+    static MaterialPosition materialPosition(InputContext *context) {
+        const auto &s = context->surroundingText();
+        return {s.text(), s.cursor(), s.anchor(), s.isValid()};
+    }
+    static bool sameMaterialPosition(const MaterialPosition &a, const MaterialPosition &b) {
+        return a.valid && b.valid && a.text == b.text && a.cursor == b.cursor && a.anchor == b.anchor;
+    }
+    static bool replaceMaterialPosition(const MaterialPosition &before, const std::string &text, MaterialPosition &after) {
+        const auto length = utf8::lengthValidated(before.text);
+        const auto added = utf8::lengthValidated(text);
+        if (!before.valid || length == utf8::INVALID_LENGTH || added == utf8::INVALID_LENGTH || before.cursor > length || before.anchor > length) return false;
+        const auto start = std::min(before.cursor, before.anchor);
+        const auto end = std::max(before.cursor, before.anchor);
+        const auto first = utf8::nextNChar(before.text.begin(), start);
+        const auto last = utf8::nextNChar(before.text.begin(), end);
+        after = {std::string(before.text.begin(), first) + text + std::string(last, before.text.end()), static_cast<unsigned>(start + added), static_cast<unsigned>(start + added), true};
+        return true;
+    }
 
     static constexpr const char *configFile() {
         return "conf/openless.conf";
@@ -1100,6 +1170,8 @@ private:
     /// Preview/Apply/Completed/Cancelled 状态仍由 Core 独占。
     std::unordered_map<std::string, SelectionTarget> selectionTargets_;
     std::unordered_map<std::string, InputContext *> dictationTargets_;
+    std::unordered_map<std::string, MaterialPosition> dictationInitial_;
+    std::unordered_map<std::string, MaterialState> materialTargets_;
     std::vector<std::unique_ptr<HandlerTableEntry<EventHandler>>>
         eventHandlers_;
 };

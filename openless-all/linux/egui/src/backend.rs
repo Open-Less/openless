@@ -309,6 +309,7 @@ impl LinuxBackendBuilder {
             repositories,
         )?);
         crate::qa::bind_backend(&backend_slot, &backend);
+        crate::dictation_references::bind_backend(&backend);
         Ok(LinuxBackendRuntime {
             backend,
             host_actions,
@@ -511,8 +512,11 @@ mod tests {
             std::process::id(),
             uuid::Uuid::new_v4().simple()
         ));
-        let recorder = FixtureAudioRecorder::new(vec![vec![1, 0, 2, 0]], vec![(20, 0.5)]);
-        let transcription = FixtureTranscriptionEngine::successful("fixture raw", 20);
+        // The shared engine now rejects captures below 100ms. Keep this
+        // pipeline fixture valid while preserving the exact PCM assertion.
+        let fixture_pcm = [1, 0, 2, 0].repeat(1600);
+        let recorder = FixtureAudioRecorder::new(vec![fixture_pcm.clone()], vec![(200, 0.5)]);
+        let transcription = FixtureTranscriptionEngine::successful("fixture raw", 200);
         let credentials = Arc::new(InMemoryCredentialStore::default());
         credentials
             .write(
@@ -547,7 +551,7 @@ mod tests {
         let result = runtime.backend.stop_dictation().await.unwrap();
         assert_eq!(result.raw_text, "fixture raw");
         assert_eq!(result.polished_text, "fixture polished");
-        assert_eq!(transcription.pcm(), vec![1, 0, 2, 0]);
+        assert_eq!(transcription.pcm(), fixture_pcm);
         assert_eq!(recorder.stop_count(), 1);
         runtime.backend.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(data_dir);

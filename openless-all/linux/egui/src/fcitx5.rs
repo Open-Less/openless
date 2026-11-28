@@ -546,6 +546,7 @@ impl TextInserter for Fcitx5TextInserter {
                 clipboard_fallback,
                 ticket,
                 references_enabled: context.dictation_references_enabled,
+                restore_clipboard: context.insertion.restore_clipboard_after_paste,
                 closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }) as std::sync::Arc<dyn TextInsertionSession>)
         })
@@ -557,6 +558,7 @@ struct Fcitx5InsertionSession {
     clipboard_fallback: bool,
     ticket: String,
     references_enabled: bool,
+    restore_clipboard: bool,
     closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -606,13 +608,12 @@ impl Fcitx5InsertionSession {
             {
                 let insertion_text = text.clone();
                 let ticket = self.ticket.clone();
+                let restore = self.restore_clipboard;
+                let plan = uuid::Uuid::parse_str(&ticket).ok().map(|id| crate::dictation_references::delivery_plan(openless_core::SessionId::from_uuid(id), &insertion_text))
+                    .filter(|parts| parts.iter().any(|p| matches!(p, openless_core::dictation_references::DeliveryPart::Image(_))));
+                let material_delivery = plan.is_some();
                 let result = tokio::task::spawn_blocking(move || {
-                    if let Ok(id) = uuid::Uuid::parse_str(&ticket) {
-                        let parts = crate::dictation_references::delivery_plan(openless_core::SessionId::from_uuid(id), &insertion_text);
-                        if parts.iter().any(|p| matches!(p, openless_core::dictation_references::DeliveryPart::Image(_))) {
-                            return deliver_materials(&ticket, &parts);
-                        }
-                    }
+                    if let Some(parts) = plan { return deliver_materials(&ticket, &parts, restore); }
                     commit_dictation_target(&ticket, &insertion_text)
                         .map(|()| InsertOutcome::Inserted)
                 })
@@ -623,9 +624,8 @@ impl Fcitx5InsertionSession {
                         format!("fcitx5 insertion task failed: {error}"),
                     )
                 })?;
-                if let Ok(outcome) = result {
-                    return Ok(outcome);
-                }
+                let error = match result { Ok(outcome) => return Ok(outcome), Err(error) => error };
+                if material_delivery && matches!(error.code, BackendErrorCode::Cancelled | BackendErrorCode::OutcomeUnknown) { return Err(error); }
                 if clipboard_fallback {
                     tokio::task::spawn_blocking(move || copy_to_clipboard(&text))
                         .await
@@ -637,8 +637,7 @@ impl Fcitx5InsertionSession {
                         })??;
                     return Ok(InsertOutcome::CopiedFallback);
                 }
-                result?;
-                unreachable!()
+                Err(error)
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -768,30 +767,66 @@ fn clipboard_delivery_gate() -> &'static std::sync::Mutex<()> {
     &GATE
 }
 #[cfg(target_os = "linux")]
-fn deliver_materials(ticket: &str, parts: &[openless_core::dictation_references::DeliveryPart]) -> Result<InsertOutcome, BackendError> {
+fn material_target_status(ticket: &str) -> Result<i32, BackendError> {
+    use dbus::blocking::BlockingSender;
+    let connection = dbus::blocking::Connection::new_session().map_err(dbus_error)?;
+    let message = dbus::Message::new_method_call(DESTINATION, OBJECT_PATH, INTERFACE, "MaterialTargetStatus").map_err(dbus_error)?.append1(ticket.to_owned());
+    connection.send_with_reply_and_block(message, TIMEOUT).map_err(dbus_error)?.read1::<i32>().map_err(dbus_error)
+}
+#[cfg(target_os = "linux")]
+fn wait_material_target(ticket: &str) -> bool {
+    for _ in 0..20 {
+        match material_target_status(ticket) { Ok(1) => return true, Ok(0) => std::thread::sleep(Duration::from_millis(10)), _ => return false }
+    }
+    false
+}
+#[cfg(target_os = "linux")]
+fn deliver_materials(ticket: &str, parts: &[openless_core::dictation_references::DeliveryPart], restore: bool) -> Result<InsertOutcome, BackendError> {
     use openless_core::dictation_references::DeliveryPart;
     let _delivery = clipboard_delivery_gate().lock().unwrap();
+    if !send_bool_message("BeginMaterialDelivery", |message| message.append1(ticket.to_owned()))? {
+        return Err(platform_error("original material target range is unavailable".into()));
+    }
+    let previous = crate::clipboard::snapshot().and_then(|snapshot| match snapshot.content { Some(openless_core::dictation_references::ClipboardContent::Text(text)) => Some(text), _ => None });
+    let full_text = parts.iter().filter_map(|part| match part { DeliveryPart::Text(text) => Some(text.as_str()), _ => None }).collect::<String>();
+    let Some(mut receipt) = crate::clipboard::write_text_receipt(&full_text) else { return Err(platform_error("material clipboard offer unavailable".into())); };
     let mut dispatched = false;
     let mut image_attempt = false;
-    for part in parts {
+    let recover = |from: usize, receipt: &crate::clipboard::Receipt| {
+        let remaining = parts[from..].iter().filter_map(|part| match part { DeliveryPart::Text(text) => Some(text.as_str()), _ => None }).collect::<String>();
+        !remaining.is_empty() && crate::clipboard::owns(receipt) && crate::clipboard::write_text_receipt(&remaining).is_some()
+    };
+    for (index, part) in parts.iter().enumerate() {
+        if !wait_material_target(ticket) || !crate::clipboard::owns(&receipt) {
+            let copied = recover(index, &receipt);
+            return if dispatched { Ok(InsertOutcome::PasteSent) } else if copied { Ok(InsertOutcome::CopiedFallback) }
+                else { Err(BackendError::new(BackendErrorCode::Cancelled, "material target or offer changed")) };
+        }
         match part {
             DeliveryPart::Text(text) => {
-                if let Err(error) = commit_dictation_target(ticket, text) {
-                    // Never replay the whole transcript after a partial write.
-                    return if dispatched { Ok(InsertOutcome::PasteSent) } else { Err(error) };
+                match send_bool_message("CommitDictationMaterial", |message| message.append2(ticket.to_owned(), text.clone())) {
+                    Ok(true) => {}
+                    Ok(false) => { let copied = recover(index, &receipt); return if dispatched { Ok(InsertOutcome::PasteSent) } else if copied { Ok(InsertOutcome::CopiedFallback) } else { Err(BackendError::new(BackendErrorCode::Cancelled, "original material range changed")) }; }
+                    Err(_) => { recover(index, &receipt); return Ok(InsertOutcome::PasteSent); }
                 }
                 dispatched = true;
+                if !wait_material_target(ticket) { recover(index + 1, &receipt); return Ok(InsertOutcome::PasteSent); }
             }
             DeliveryPart::Image(path) => {
-                if !crate::clipboard::write_image(path) { continue; }
+                let Some(image_receipt) = crate::clipboard::write_image(path) else { continue; };
+                receipt = image_receipt;
+                // The attributable offer must still be current immediately
+                // before asking the plugin to dispatch to its checked range.
+                if !crate::clipboard::owns(&receipt) { recover(index + 1, &receipt); return Ok(InsertOutcome::PasteSent); }
                 match send_bool_message("PasteDictationTarget", |message| message.append1(ticket.to_owned())) {
                     Ok(true) => { dispatched = true; image_attempt = true; std::thread::sleep(Duration::from_millis(750)); }
                     Ok(false) => {} // The path in the next text part remains usable.
-                    Err(_) => return Ok(InsertOutcome::PasteSent), // Unknown dispatch: no retry.
+                    Err(_) => { recover(index + 1, &receipt); return Ok(InsertOutcome::PasteSent); } // Unknown dispatch: no retry.
                 }
             }
         }
     }
+    if restore && crate::clipboard::owns(&receipt) { if let Some(previous) = previous { let _ = crate::clipboard::write_text_receipt(&previous); } }
     Ok(if image_attempt { InsertOutcome::PasteSent } else { InsertOutcome::Inserted })
 }
 

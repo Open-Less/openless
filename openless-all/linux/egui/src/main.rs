@@ -1684,6 +1684,15 @@ mod linux_app {
                     suggestions: Vec::new(),
                 },
             );
+            self.sync_reference_feedback(session_id);
+        }
+
+        fn sync_reference_feedback(&mut self, session_id: openless_core::SessionId) {
+            let (count, notice) = openless_linux_egui::dictation_references::feedback(session_id);
+            self.send_popup(PopupKind::Capsule, HostToPopup::References {
+                version: POPUP_PROTOCOL_VERSION, session_id: session_id.to_string(),
+                sequence: self.last_event_sequence.saturating_mul(2).saturating_add(1), count, notice,
+            });
         }
 
         fn show_capsule_popup(&mut self) {
@@ -3738,6 +3747,7 @@ mod linux_app {
                             },
                         );
                         // 终态：按 Tauri 时序安排自动收起，否则药丸会一直贴在屏幕上。
+                        self.sync_reference_feedback(session_id);
                         self.schedule_capsule_dismissal(&session_id.to_string(), state.phase);
                     }
                 }

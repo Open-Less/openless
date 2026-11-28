@@ -35,6 +35,7 @@ thiserror = "2"
 # Compile the production system recognizer without starting Tauri or a model runtime.
 block2 = "0.5"
 objc2 = { version = "0.5", features = ["exception"] }
+objc2-foundation = "0.2"
 parking_lot = "0.12"
 futures-util = "0.3"
 dispatch2 = "0.3"

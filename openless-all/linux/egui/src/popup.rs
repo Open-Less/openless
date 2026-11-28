@@ -115,6 +115,13 @@ pub enum HostToPopup {
         #[serde(default)]
         suggestions: Vec<CapsuleSuggestion>,
     },
+    References {
+        version: u16,
+        session_id: String,
+        sequence: u64,
+        count: u32,
+        notice: Option<String>,
+    },
     Hide {
         version: u16,
         session_id: String,
@@ -145,6 +152,7 @@ impl HostToPopup {
             Self::PolishPreview { sequence, .. }
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
+            | Self::References { sequence, .. }
             | Self::Hotkeys { sequence, .. }
             | Self::Hide { sequence, .. }
             | Self::Shutdown { sequence, .. } => *sequence = value,
@@ -156,6 +164,7 @@ impl HostToPopup {
             Self::PolishPreview { version, .. }
             | Self::QaSnapshot { version, .. }
             | Self::Capsule { version, .. }
+            | Self::References { version, .. }
             | Self::Hotkeys { version, .. }
             | Self::Hide { version, .. }
             | Self::Shutdown { version, .. } => *version,
@@ -167,6 +176,7 @@ impl HostToPopup {
             Self::PolishPreview { session_id, .. }
             | Self::QaSnapshot { session_id, .. }
             | Self::Capsule { session_id, .. }
+            | Self::References { session_id, .. }
             | Self::Hotkeys { session_id, .. }
             | Self::Hide { session_id, .. }
             | Self::Shutdown { session_id, .. } => session_id,
@@ -178,6 +188,7 @@ impl HostToPopup {
             Self::PolishPreview { sequence, .. }
             | Self::QaSnapshot { sequence, .. }
             | Self::Capsule { sequence, .. }
+            | Self::References { sequence, .. }
             | Self::Hotkeys { sequence, .. }
             | Self::Hide { sequence, .. }
             | Self::Shutdown { sequence, .. } => *sequence,
@@ -189,7 +200,7 @@ impl HostToPopup {
             // 润色结果现在由选区助手面板承载。
             Self::PolishPreview { .. } => Some(PopupKind::Qa),
             Self::QaSnapshot { .. } => Some(PopupKind::Qa),
-            Self::Capsule { .. } => Some(PopupKind::Capsule),
+            Self::Capsule { .. } | Self::References { .. } => Some(PopupKind::Capsule),
             // 配置不属于任何一种面板内容，
             // 不能拿它当“这个帧是给谁的”。
             Self::Hotkeys { .. } => None,
@@ -589,6 +600,29 @@ where
     Ok(message)
 }
 
+#[cfg(test)]
+mod reference_feedback_tests {
+    use super::*;
+    #[test]
+    fn reference_feedback_reaches_native_popup_and_rejects_retired_sessions() {
+        let mut state = PopupState::default();
+        let capsule = |id: &str, sequence| HostToPopup::Capsule { version: POPUP_PROTOCOL_VERSION, session_id: id.into(), sequence,
+            phase: "Recording".into(), text: String::new(), transcript: String::new(), transcript_font_size: 14,
+            audio_level: Some(0.3), translation_active: false, style: "siri".into(), suggestions: Vec::new() };
+        assert_eq!(state.apply(capsule("first", 1)), ApplyOutcome::Applied);
+        let message = HostToPopup::References { version: POPUP_PROTOCOL_VERSION, session_id: "first".into(), sequence: 2, count: 4, notice: Some("captureFailed".into()) };
+        let message: HostToPopup = serde_json::from_slice(&serde_json::to_vec(&message).unwrap()).unwrap();
+        assert_eq!(state.apply(message), ApplyOutcome::Applied);
+        assert_eq!(state.capsule.reference_count, 4);
+        assert_eq!(state.capsule.reference_notice.as_deref(), Some("captureFailed"));
+        assert_eq!(state.apply(capsule("second", 3)), ApplyOutcome::Applied);
+        assert_eq!(state.capsule.reference_count, 0);
+        assert_eq!(state.capsule.reference_notice, None);
+        assert_eq!(state.apply(HostToPopup::References { version: POPUP_PROTOCOL_VERSION, session_id: "first".into(), sequence: 4, count: 99, notice: None }), ApplyOutcome::Stale);
+        assert_eq!(state.capsule.reference_count, 0);
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QaPolishState {
     pub text: String,
@@ -617,6 +651,8 @@ fn default_transcript_font_size() -> u8 {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapsulePopupState {
+    pub reference_count: u32,
+    pub reference_notice: Option<String>,
     pub phase: String,
     pub text: String,
     pub audio_level: Option<f32>,
@@ -633,6 +669,8 @@ pub struct CapsulePopupState {
 impl Default for CapsulePopupState {
     fn default() -> Self {
         Self {
+            reference_count: 0,
+            reference_notice: None,
             phase: String::new(),
             text: String::new(),
             audio_level: None,
@@ -687,6 +725,8 @@ impl PopupState {
             return ApplyOutcome::Applied;
         }
         let session_id = message.session_id().to_owned();
+        let new_session = self.session_id.as_deref() != Some(session_id.as_str());
+        if new_session && matches!(message, HostToPopup::References { .. }) { return ApplyOutcome::Stale; }
         let sequence = message.sequence();
         if let Some(current) = self.session_id.as_deref() {
             if current == session_id {
@@ -758,6 +798,8 @@ impl PopupState {
                 ..
             } => {
                 self.capsule = CapsulePopupState {
+                    reference_count: if new_session { 0 } else { self.capsule.reference_count },
+                    reference_notice: if new_session { None } else { self.capsule.reference_notice.clone() },
                     phase,
                     text,
                     transcript,
@@ -768,6 +810,10 @@ impl PopupState {
                     suggestions,
                 };
                 self.visible = true;
+            }
+            HostToPopup::References { count, notice, .. } => {
+                self.capsule.reference_count = count;
+                self.capsule.reference_notice = notice;
             }
             HostToPopup::Hide { .. } => self.visible = false,
             HostToPopup::Shutdown { .. } => {

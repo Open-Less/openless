@@ -1208,18 +1208,23 @@ pub fn dictation_capsule(
             );
             let _ = ui.allocate_rect(rect, egui::Sense::hover());
             let transcript_visible = paint_capsule_transcript(ui, available, rect, state);
-            if state.translation_active {
+            let material = if state.reference_count > 0 { fmt_l10n(lang, "capsule.materials", &[&state.reference_count]) } else { String::new() };
+            let notice = state.reference_notice.as_deref().map(|notice| tr_l10n(lang, if notice == "tooLarge" { "capsule.material_too_large" } else { "capsule.material_capture_failed" }));
+            let reference_label = match (material.is_empty(), notice) { (false, Some(notice)) => format!("{material} · {notice}"), (true, Some(notice)) => notice.into(), _ => material };
+            if state.translation_active || !reference_label.is_empty() {
                 let badge_anchor = if transcript_visible && !siri {
                     rect.translate(egui::vec2(0.0, -60.0))
                 } else {
                     rect
                 };
-                translating_badge(
-                    ui,
-                    badge_anchor,
-                    lang,
-                    if typeless { TYPELESS_SCALE } else { 1.0 },
-                );
+                if reference_label.is_empty() { translating_badge(ui, badge_anchor, lang, if typeless { TYPELESS_SCALE } else { 1.0 }); }
+                else {
+                    let label = if state.translation_active { format!("{reference_label} · {}", tr_l10n(lang, "capsule.translating")) } else { reference_label };
+                    let galley = layout::text_galley(ui, &label, theme::INK_2, 11.0, (available.width() - 40.0).max(80.0), 1);
+                    let badge = egui::Rect::from_center_size(egui::pos2(badge_anchor.center().x, badge_anchor.top() - 18.0), egui::vec2(galley.size().x + 20.0, 22.0));
+                    ui.painter().rect_filled(badge, egui::CornerRadius::same(8), theme::SURFACE);
+                    ui.painter().galley(egui::pos2(badge.left() + 10.0, badge.center().y - galley.size().y / 2.0), galley, theme::INK_2);
+                }
             }
             // The capsule footprint is invariant across recording, thinking and
             // terminal frames. The old volume scale made the pill visibly jump
@@ -2983,6 +2988,8 @@ mod tests {
                 phase: phase.to_string(),
                 text: String::new(),
                 audio_level: Some(0.6),
+                reference_count: 0,
+                reference_notice: None,
                 transcript: String::new(),
                 transcript_font_size: 14,
                 translation_active: false,
@@ -3010,6 +3017,8 @@ mod tests {
             phase: "Recording".to_string(),
             text: String::new(),
             audio_level: Some(0.6),
+            reference_count: 0,
+            reference_notice: None,
             transcript: String::new(),
             transcript_font_size: 14,
             translation_active: false,
@@ -3166,6 +3175,8 @@ mod tests {
             phase: "Recording".to_string(),
             text: String::new(),
             audio_level: Some(0.4),
+            reference_count: 0,
+            reference_notice: None,
             transcript: String::new(),
             transcript_font_size: 14,
             translation_active: false,
@@ -3222,6 +3233,8 @@ mod tests {
         let done = CapsulePopupState {
             phase: "Completed".to_string(),
             text: inserted_message(Lang::ZhCn, 12),
+            reference_count: 0,
+            reference_notice: None,
             transcript: String::new(),
             transcript_font_size: 14,
             audio_level: None,
@@ -3253,6 +3266,8 @@ mod tests {
             text: String::new(),
             transcript: String::new(),
             transcript_font_size: 14,
+            reference_count: 0,
+            reference_notice: None,
             audio_level: None,
             translation_active: false,
             style: "siri".to_string(),

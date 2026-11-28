@@ -30,10 +30,11 @@ public:
     ~RecordingInputContext() override { destroy(); }
     const char *frontend() const override { return "contract"; }
     std::vector<std::string> committed;
+    unsigned forwarded = 0;
 protected:
     void commitStringImpl(const std::string &text) override { committed.push_back(text); }
     void deleteSurroundingTextImpl(int, unsigned int) override {}
-    void forwardKeyImpl(const fcitx::ForwardKeyEvent &) override {}
+    void forwardKeyImpl(const fcitx::ForwardKeyEvent &) override { ++forwarded; }
     void updatePreeditImpl() override {}
 };
 
@@ -110,6 +111,39 @@ int main() {
         assert(second.committed.empty());
         assert(plugin.cancelDictationTarget("dictation"));
         assert(!plugin.commitDictationTarget("dictation", "late write"));
+        // Material segments share an actual captured surrounding-text range,
+        // not merely the same InputContext/window. Reselection must stop before
+        // an image/path could replace unrelated text in this very same editor.
+        first.focusIn();
+        first.surroundingText().setText("hello", 5, 5);
+        fcitx::OpenLessInputTargetContract::type(plugin, first);
+        assert(plugin.captureDictationTarget("material"));
+        assert(plugin.beginMaterialDelivery("material"));
+        assert(plugin.commitDictationMaterial("material", " A"));
+        first.surroundingText().setText("hello A", 7, 7);
+        assert(plugin.materialTargetStatus("material") == 1);
+        const auto committed = first.committed.size();
+        const auto forwarded = first.forwarded;
+        first.surroundingText().setCursor(2, 0);
+        assert(plugin.materialTargetStatus("material") == -1);
+        assert(!plugin.pasteDictationTarget("material"));
+        assert(!plugin.commitDictationMaterial("material", "must not replace the new selection"));
+        assert(first.committed.size() == committed);
+        assert(first.forwarded == forwarded);
+        assert(plugin.cancelDictationTarget("material"));
+        // A valid image dispatch may leave the range unchanged when a client
+        // cannot consume images. The following path still has its own checked
+        // range and is never an automatic replay of an earlier segment.
+        first.surroundingText().setText("hello", 5, 5);
+        assert(plugin.captureDictationTarget("material-path"));
+        assert(plugin.beginMaterialDelivery("material-path"));
+        assert(plugin.pasteDictationTarget("material-path"));
+        assert(plugin.materialTargetStatus("material-path") == 1);
+        assert(plugin.commitDictationMaterial("material-path", " /owned/image.png"));
+        first.surroundingText().setText("hello /owned/image.png", 22, 22);
+        assert(plugin.materialTargetStatus("material-path") == 1);
+        assert(plugin.cancelDictationTarget("material-path"));
+        first.focusOut();
 
         {
             RecordingInputContext destroyed(instance.inputContextManager());

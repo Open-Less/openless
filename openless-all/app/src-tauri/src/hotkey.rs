@@ -909,6 +909,8 @@ pub(crate) mod platform {
             | (1u64 << 2)
             | (1u64 << 3)
             | (1u64 << 4)
+            | (1u64 << 6)
+            | (1u64 << 7)
             | (1u64 << 22)
             | (1u64 << 25)
             | (1u64 << 26)
@@ -950,6 +952,7 @@ pub(crate) mod platform {
                 return;
             }
             *handles.tap.lock().unwrap() = Some(tap);
+            let _activity_monitor = openless_core::dictation_references::InputMonitorLease::new();
 
             let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
             let runloop = CFRunLoopGetCurrent();
@@ -1000,6 +1003,7 @@ pub(crate) mod platform {
         observe_shift_event(ctx, event_type, event);
         match event_type {
             TAP_DISABLED_BY_TIMEOUT | TAP_DISABLED_BY_USER_INPUT => {
+                openless_core::dictation_references::invalidate_input_monitor();
                 crate::host_document::macos::record_learning_key(-1, 0, false);
                 crate::capsule_style_menu::invalidate();
                 reset_shared_held_state(&ctx.shared);
@@ -1032,6 +1036,10 @@ pub(crate) mod platform {
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         let flags = unsafe { CGEventGetFlags(event) };
         let hardware = unsafe { CGEventGetIntegerValueField(event, SOURCE_PID_FIELD) } == 0;
+        if hardware && matches!(event_type, KEY_DOWN | 1 | 3 | 6 | 7 | 22 | 25 | 27) {
+            openless_core::dictation_references::note_input_activity();
+        }
+        if matches!(event_type, 6 | 7) { return event; }
         if hardware && matches!(event_type, KEY_DOWN | KEY_UP) {
             let key = match keycode {
                 126 => Some(crate::capsule_style_menu::Key::ArrowUp),
@@ -2605,6 +2613,7 @@ mod platform {
                 }
             }
 
+            let _activity_monitor = openless_core::dictation_references::InputMonitorLease::new();
             let mut message = MSG::default();
             loop {
                 let result = GetMessageW(&mut message, None, 0, 0).0;
@@ -2641,6 +2650,13 @@ mod platform {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if code == HC_ACTION as i32 && lparam.0 != 0 {
+            let mouse = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::MSLLHOOKSTRUCT);
+            let dragging = wparam.0 == 0x0200 && [0x01, 0x02].iter().any(|key| windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(*key) < 0);
+            if mouse.flags & 1 == 0 && (dragging || matches!(wparam.0, 0x0201 | 0x0204 | 0x0207 | 0x020B | 0x020A | 0x020E)) {
+                openless_core::dictation_references::note_input_activity();
+            }
+        }
         if code == HC_ACTION as i32 {
             if let Some(ctx) = callback_context() {
                 let (key, down) = match wparam.0 {
@@ -2682,6 +2698,7 @@ mod platform {
                 );
                 const INJECTED: u32 = 0x10;
                 if keyboard.flags.0 & INJECTED == 0 {
+                    if matches!(wparam.0, WM_KEYDOWN | WM_SYSKEYDOWN) { openless_core::dictation_references::note_input_activity(); }
                     use crate::ask_window::hotkey::{keyboard_edge, Disposition};
                     let down = matches!(wparam.0, WM_KEYDOWN | WM_SYSKEYDOWN);
                     let disabled = ctx.shared.recording_active.load(Ordering::SeqCst);

@@ -18,7 +18,8 @@ const CAPSULE_BOTTOM_INSET: f32 = 16.0;
 const CAPSULE_BADGE_GAP: f32 = 8.0;
 
 fn context_badge(ui: &mut egui::Ui, pill: egui::Rect, label: &str) {
-    let text_width = layout::text_width(ui, label, 10.5);
+    let label = layout::text_galley(ui, label, theme::BLUE, 10.5, (ui.max_rect().width() - 50.0).max(80.0), 1);
+    let text_width = label.size().x;
     let width = text_width + 5.0 + 5.0 + 20.0;
     let height = 19.0;
     let rect = egui::Rect::from_center_size(
@@ -42,11 +43,9 @@ fn context_badge(ui: &mut egui::Ui, pill: egui::Rect, label: &str) {
     );
     let dot = egui::pos2(rect.left() + 10.0, rect.center().y);
     painter.circle_filled(dot, 2.5, theme::BLUE);
-    painter.text(
-        egui::pos2(dot.x + 5.0 + 2.5, rect.center().y),
-        egui::Align2::LEFT_CENTER,
+    painter.galley(
+        egui::pos2(dot.x + 5.0 + 2.5, rect.center().y - label.size().y / 2.0),
         label,
-        egui::FontId::proportional(10.5),
         theme::BLUE,
     );
 }
@@ -71,15 +70,14 @@ pub fn dictation_capsule(
                 egui::vec2(PILL_WIDTH, PILL_HEIGHT),
             );
             let _ = ui.allocate_rect(rect, egui::Sense::hover());
-            if state.translation_active || state.qa {
+            let materials = labels.reference_label(state.reference_count, state.reference_notice.as_deref());
+            if state.translation_active || state.qa || !materials.is_empty() {
+                let context = if state.qa { labels.asking.as_str() } else if state.translation_active { labels.translating.as_str() } else { "" };
+                let label = if materials.is_empty() { context.into() } else if context.is_empty() { materials } else { format!("{materials} · {context}") };
                 context_badge(
                     ui,
                     rect,
-                    if state.qa {
-                        &labels.asking
-                    } else {
-                        &labels.translating
-                    },
+                    &label,
                 );
             }
             let center = rect.shrink(3.0);

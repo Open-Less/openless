@@ -7,6 +7,7 @@ pub(super) struct Clipboard {
     selection: u32, property: u32, targets: u32, timestamp: u32, utf8: u32,
     own: u32, mime: u32, bytes: Arc<Vec<u8>>, revision: u64, incr: u32,
     transfers: HashMap<(u32, u32), Transfer>,
+    token: String,
 }
 struct Transfer { bytes: Arc<Vec<u8>>, offset: usize, target: u32 }
 impl Clipboard {
@@ -25,7 +26,7 @@ impl Clipboard {
         connection.xfixes_select_selection_input(window, selection, SelectionEventMask::SET_SELECTION_OWNER
             | SelectionEventMask::SELECTION_WINDOW_DESTROY | SelectionEventMask::SELECTION_CLIENT_CLOSE).ok()?.check().ok()?;
         Some(Self { connection, window, selection, property, targets, timestamp, utf8, own,
-            mime: utf8, bytes: Arc::new(Vec::new()), revision: 1, incr, transfers: HashMap::new() })
+            mime: utf8, bytes: Arc::new(Vec::new()), revision: 1, incr, transfers: HashMap::new(), token: String::new() })
     }
     fn event(&mut self, event: Event) {
         if let Event::XfixesSelectionNotify(notify) = &event {
@@ -71,7 +72,9 @@ impl Clipboard {
             let _ = self.connection.flush();
         }
     }
-    pub fn pump(&mut self) { while let Ok(Some(event)) = self.connection.poll_for_event() { self.event(event); } }
+    pub fn pump(&mut self) -> bool {
+        loop { match self.connection.poll_for_event() { Ok(Some(event)) => self.event(event), Ok(None) => return true, Err(_) => return false } }
+    }
     fn receive(&mut self, target: u32) -> Option<Vec<u8>> {
         self.connection.delete_property(self.window, self.property).ok()?;
         self.connection.convert_selection(self.window, self.selection, target, self.property, x11rb::CURRENT_TIME).ok()?;
@@ -140,15 +143,25 @@ impl Clipboard {
         if self.revision != revision { return None; }
         Some(Snapshot { revision, own: false, content: super::content(mime, bytes) })
     }
-    pub fn write(&mut self, text: String) -> bool {
+    pub fn write(&mut self, text: String) -> Option<Receipt> {
         self.write_bytes("UTF8_STRING", text.into_bytes())
     }
-    pub fn write_bytes(&mut self, mime: &str, bytes: Vec<u8>) -> bool {
-        let Ok(cookie) = self.connection.intern_atom(false, mime.as_bytes()) else { return false; };
-        let Ok(reply) = cookie.reply() else { return false; };
+    pub fn write_bytes(&mut self, mime: &str, bytes: Vec<u8>) -> Option<Receipt> {
+        let cookie = self.connection.intern_atom(false, mime.as_bytes()).ok()?;
+        let reply = cookie.reply().ok()?;
         self.mime = reply.atom;
         self.bytes = Arc::new(bytes);
-        self.connection.set_selection_owner(self.window, self.selection, x11rb::CURRENT_TIME).is_ok() && self.connection.flush().is_ok()
+        self.token = uuid::Uuid::new_v4().to_string();
+        self.connection.set_selection_owner(self.window, self.selection, x11rb::CURRENT_TIME).ok()?.check().ok()?;
+        self.connection.flush().ok()?;
+        if !self.pump() { return None; }
+        let receipt = Receipt { revision: self.revision, token: self.token.clone() };
+        self.owns(&receipt).then_some(receipt)
+    }
+    pub fn owns(&mut self, receipt: &Receipt) -> bool {
+        if !self.pump() || self.token != receipt.token { return false; }
+        let owner = self.connection.get_selection_owner(self.selection).ok().and_then(|cookie| cookie.reply().ok()).map(|reply| reply.owner);
+        self.pump() && owner == Some(self.window) && self.revision == receipt.revision
     }
 }
 
@@ -181,7 +194,8 @@ mod tests {
         let user = user_copy("UTF8_STRING", text.as_bytes());
         let first = wait_external(&mut board);
         assert!(matches!(first.content, Some(ClipboardContent::Text(ref body)) if body == &text));
-        assert!(board.write(text.clone()));
+        let own = board.write(text.clone()).unwrap();
+        assert!(board.owns(&own));
         board.pump();
         assert!(board.read().unwrap().own);
         drop(user);
@@ -189,13 +203,14 @@ mod tests {
         // and is never excluded merely because its bytes equal an app write.
         let user_again = user_copy("UTF8_STRING", text.as_bytes());
         let second = wait_external(&mut board);
+        assert!(!board.owns(&own), "external B replaced the app offer before native dispatch");
         assert_ne!(second.revision, first.revision);
         assert!(matches!(second.content, Some(ClipboardContent::Text(ref body)) if body == &text));
         drop(user_again);
         // Exercise native image output, including INCR serving to a separate
         // X11 client, rather than only verifying a mocked paste command.
         let image = (0..1_000_000u32).map(|n| n.wrapping_mul(113).wrapping_add(n >> 8) as u8).collect::<Vec<_>>();
-        assert!(board.write_bytes("image/png", image.clone()));
+        assert!(board.write_bytes("image/png", image.clone()).is_some());
         let (send, receive) = mpsc::channel();
         std::thread::spawn(move || {
             let output = Command::new("xclip").args(["-selection", "clipboard", "-out", "-t", "image/png"]).output().unwrap();

@@ -3794,6 +3794,12 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "capsule.materials",
+        text: row("素材 {}", "素材 {}", "Materials {}", "素材 {}", "자료 {}"),
+    },
+    Msg { key: "capsule.material_too_large", text: row("素材过大", "素材過大", "Material too large", "素材が大きすぎます", "자료가 너무 큽니다") },
+    Msg { key: "capsule.material_capture_failed", text: row("采集失败", "擷取失敗", "Capture failed", "取得に失敗", "수집 실패") },
+    Msg {
         key: "settings.recording.references_label",
         text: row("听写素材", "聽寫素材", "Dictation materials", "音声入力の素材", "받아쓰기 자료"),
     },

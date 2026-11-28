@@ -873,6 +873,7 @@ pub(crate) fn capture_capsule_menu_input_target() -> Option<SelectionInsertionTa
 pub(crate) fn capsule_menu_input_target_is_current(target: &SelectionInsertionTarget) -> bool {
     native_input_target_is_current(target)
 }
+pub(crate) fn captured_insertion_position(target: &SelectionInsertionTarget) -> Option<(u64, u64)> { *target.dictation_position.lock() }
 
 fn native_input_target_is_current(target: &SelectionInsertionTarget) -> bool {
     if target.cancelled.load(std::sync::atomic::Ordering::Acquire) { return false; }
@@ -1330,9 +1331,6 @@ impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
         }
         let (outcome, sequence) =
             windows_poll_clipboard_after_copy(self, baseline_sequence, &mut post_ok);
-        if post_ok && sequence != baseline_sequence as u64 && matches!(outcome, ClipboardPollOutcome::Captured(_)) {
-            crate::dictation_references::self_write().commit_revision(Some(sequence));
-        }
         (post_ok, outcome, sequence)
     }
 
@@ -1341,10 +1339,19 @@ impl clipboard_capture::ClipboardCapture for arboard::Clipboard {
     }
 
     fn restore_text(&mut self, text: &str) {
+        let expected = clipboard_capture::ClipboardCapture::sequence(self);
+        clipboard_capture::ClipboardCapture::restore_text_if_current(self, text, expected);
+    }
+    fn restore_text_if_current(&mut self, text: &str, expected: u64) -> bool {
         let own_write = crate::dictation_references::self_write();
-        if let Err(error) = self.set_text(text) {
-            log::warn!("[selection] clipboard restore failed: {error}");
-        } else { own_write.commit(); }
+        match crate::insertion::owned_clipboard::write_text(text, Some(expected)) {
+            Ok(receipt) => { own_write.commit_revision(Some(receipt.revision)); true }
+            Err(error) => {
+                log::warn!("[selection] clipboard restore failed: {error}");
+                if crate::insertion::clipboard_sequence() == Some(expected) { crate::dictation_references::discard_capture_revision(expected); }
+                false
+            }
+        }
     }
 }
 
@@ -1377,11 +1384,9 @@ fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissRea
     //    copy actually overwrote it (if it is still the sentinel, Cmd+C did not take effect or
     //    the target app has no selection).
     let sentinel = format!("__openless_qa_sentinel_{}__", uuid_like_token());
-    if let Err(e) = clipboard.set_text(sentinel.clone()) {
-        log::warn!("[selection] clipboard set_text(sentinel) failed: {e}");
-        return Err(SelectionCaptureMissReason::ClipboardSentinelWriteFailed);
-    }
-    own_write.commit();
+    let receipt = crate::insertion::owned_clipboard::write_text(&sentinel, None)
+        .map_err(|e| { log::warn!("[selection] clipboard set_text(sentinel) failed: {e}"); SelectionCaptureMissReason::ClipboardSentinelWriteFailed })?;
+    own_write.commit_revision(Some(receipt.revision));
 
     // c) Simulate Cmd+C
     let mut post_ok = post_copy_shortcut();
@@ -1407,18 +1412,13 @@ fn macos_simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissRea
     ) {
         return Err(SelectionCaptureMissReason::ClipboardReadFailed);
     }
-    if post_ok && captured.as_deref().is_some_and(|text| text != sentinel) { own_write.commit_revision(copied_sequence); }
     // d) Restore the original clipboard
-    if let Some(ref prev) = original {
-        if let Err(e) = clipboard.set_text(prev) {
+    match crate::insertion::owned_clipboard::write_text(original.as_deref().unwrap_or(""), copied_sequence) {
+        Ok(receipt) => own_write.commit_revision(Some(receipt.revision)),
+        Err(e) => {
             log::warn!("[selection] clipboard restore failed: {e}");
-        } else { own_write.commit(); }
-    } else {
-        // The user's original clipboard was empty → clear the sentinel / selection to avoid
-        // polluting it.
-        if let Err(e) = clipboard.set_text("") {
-            log::warn!("[selection] clipboard clear failed: {e}");
-        } else { own_write.commit(); }
+            if let Some(revision) = copied_sequence.filter(|r| crate::insertion::clipboard_sequence() == Some(*r)) { crate::dictation_references::discard_capture_revision(revision); }
+        }
     }
 
     classify_simulated_copy_result(post_ok, captured, &sentinel)

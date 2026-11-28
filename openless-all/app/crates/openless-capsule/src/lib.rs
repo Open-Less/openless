@@ -29,6 +29,10 @@ mod theme;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CapsulePopupState {
+    #[serde(default)]
+    pub reference_count: u32,
+    #[serde(default)]
+    pub reference_notice: Option<String>,
     pub phase: String,
     pub text: String,
     pub audio_level: Option<f32>,
@@ -63,6 +67,9 @@ pub struct CapsulePopupState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CapsuleLabels {
+    pub materials: String,
+    pub material_too_large: String,
+    pub material_capture_failed: String,
     pub thinking: String,
     pub transcribing: String,
     pub empty_transcript: String,
@@ -86,7 +93,20 @@ impl Default for CapsuleLabels {
 }
 
 impl CapsuleLabels {
+    pub fn reference_label(&self, count: u32, notice: Option<&str>) -> String {
+        let count = (count > 0).then(|| self.materials.replace("{{count}}", &count.to_string()));
+        let notice = notice.map(|notice| if notice == "tooLarge" { self.material_too_large.as_str() } else { self.material_capture_failed.as_str() });
+        match (count, notice) { (Some(count), Some(notice)) => format!("{count} · {notice}"), (Some(count), None) => count, (None, Some(notice)) => notice.into(), _ => String::new() }
+    }
     pub fn for_locale(locale: &str) -> Self {
+        let material_labels = if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") { ["素材 {{count}}", "素材過大", "擷取失敗"] }
+            else if locale.starts_with("zh") { ["素材 {{count}}", "素材过大", "采集失败"] }
+            else if locale.starts_with("ja") { ["素材 {{count}}", "素材が大きすぎます", "取得に失敗"] }
+            else if locale.starts_with("ko") { ["자료 {{count}}", "자료가 너무 큽니다", "수집 실패"] }
+            else if locale.starts_with("de") { ["Materialien {{count}}", "Material zu groß", "Erfassung fehlgeschlagen"] }
+            else if locale.starts_with("fr") { ["Documents {{count}}", "Document trop volumineux", "Échec de collecte"] }
+            else if locale.starts_with("es") { ["Materiales {{count}}", "Material demasiado grande", "Error de captura"] }
+            else { ["Materials {{count}}", "Material too large", "Capture failed"] };
         let labels: [&str; 11] = if locale.starts_with("zh-TW") || locale.starts_with("zh-HK") {
             [
                 "thinking",
@@ -203,6 +223,9 @@ impl CapsuleLabels {
         let [thinking, using, cancelled, error, inserted, translate_to, translating, polishing, replaced, no_selection, polish_failed] =
             labels.map(String::from);
         Self {
+            materials: material_labels[0].into(),
+            material_too_large: material_labels[1].into(),
+            material_capture_failed: material_labels[2].into(),
             thinking,
             empty_transcript: match locale {
                 _ if locale.starts_with("zh") && !locale.starts_with("zh-TW") && !locale.starts_with("zh-HK") => "空稿 · 未识别到语音",
@@ -239,6 +262,27 @@ impl CapsuleLabels {
             replaced,
             no_selection,
             polish_failed,
+        }
+    }
+}
+
+#[cfg(test)]
+mod material_feedback_tests {
+    use super::*;
+    #[test]
+    fn native_material_feedback_roundtrips_and_has_all_eight_locales() {
+        let state = CapsulePopupState { reference_count: 3, reference_notice: Some("tooLarge".into()), phase: "recording".into(), ..Default::default() };
+        let restored: CapsulePopupState = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.reference_count, 3);
+        assert_eq!(restored.reference_notice.as_deref(), Some("tooLarge"));
+        for locale in ["zh-CN", "zh-TW", "en", "ja", "ko", "de", "fr", "es"] {
+            let labels = CapsuleLabels::for_locale(locale);
+            let label = labels.reference_label(restored.reference_count, restored.reference_notice.as_deref());
+            assert!(label.contains('3'), "{locale}: {label}");
+            assert!(label.contains(&labels.material_too_large));
+            assert!(!label.contains("tooLarge"));
+            assert!(!labels.material_capture_failed.is_empty());
+            assert!(labels.reference_label(0, None).is_empty());
         }
     }
 }

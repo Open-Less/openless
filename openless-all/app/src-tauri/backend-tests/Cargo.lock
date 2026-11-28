@@ -1973,6 +1973,7 @@ dependencies = [
  "libc",
  "log",
  "objc2 0.5.3",
+ "objc2-foundation",
  "openless-core",
  "parking_lot",
  "rcgen",

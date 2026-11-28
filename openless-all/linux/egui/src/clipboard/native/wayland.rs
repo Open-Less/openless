@@ -29,13 +29,17 @@ impl Clipboard {
         if state.finished { return None; }
         Some(Self { connection, queue, state, manager, device, source: None })
     }
-    pub fn pump(&mut self) {
+    pub fn pump(&mut self) -> bool {
         if let Some(reader) = self.queue.prepare_read() {
             let mut fd = libc::pollfd { fd: reader.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 };
-            if unsafe { libc::poll(&mut fd, 1, 0) } > 0 { let _ = reader.read(); }
+            if unsafe { libc::poll(&mut fd, 1, 0) } > 0 {
+                if let Err(error) = reader.read() {
+                    if !matches!(error, wayland_client::backend::WaylandError::Io(ref e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted)) { self.state.finished = true; }
+                }
+            }
         }
-        let _ = self.queue.dispatch_pending(&mut self.state);
-        let _ = self.connection.flush();
+        if self.queue.dispatch_pending(&mut self.state).is_err() || self.connection.flush().is_err() { self.state.finished = true; }
+        !self.state.finished
     }
     pub fn read(&mut self) -> Option<Snapshot> {
         self.queue.roundtrip(&mut self.state).ok()?;
@@ -70,19 +74,28 @@ impl Clipboard {
         if self.state.revision != revision { return None; }
         Some(Snapshot { revision, own: false, content: super::content(mime, bytes) })
     }
-    pub fn write(&mut self, text: String) -> bool {
+    pub fn write(&mut self, text: String) -> Option<Receipt> {
         self.write_bytes(TEXT, text.into_bytes())
     }
-    pub fn write_bytes(&mut self, mime: &str, bytes: Vec<u8>) -> bool {
-        if self.state.finished { return false; }
+    pub fn write_bytes(&mut self, mime: &str, bytes: Vec<u8>) -> Option<Receipt> {
+        if self.state.finished { return None; }
         let qh = self.queue.handle();
         let source = self.manager.create_data_source(&qh, Arc::new(bytes));
         source.offer(mime.into());
         if mime == TEXT { source.offer("text/plain".into()); }
         source.offer(OWN.into());
+        let token = format!("{OWN};id={}", uuid::Uuid::new_v4());
+        source.offer(token.clone());
         self.device.set_selection(Some(&source));
         if let Some(old) = self.source.replace(source) { old.destroy(); }
-        self.queue.roundtrip(&mut self.state).is_ok()
+        self.queue.roundtrip(&mut self.state).ok()?;
+        let receipt = Receipt { revision: self.state.revision, token };
+        self.owns(&receipt).then_some(receipt)
+    }
+    pub fn owns(&mut self, receipt: &Receipt) -> bool {
+        if self.queue.roundtrip(&mut self.state).is_err() || self.state.finished || self.state.revision != receipt.revision { return false; }
+        self.state.selected.as_ref().and_then(|offer| self.state.mimes.get(&offer.id()))
+            .is_some_and(|mimes| mimes.contains(&receipt.token) && mimes.iter().any(|mime| mime == OWN))
     }
 }
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {

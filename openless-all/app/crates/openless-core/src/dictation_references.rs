@@ -7,6 +7,32 @@ pub const MAX_BYTES: u64 = 20 * 1024 * 1024;
 pub const MAX_SESSION_BYTES: u64 = 100 * 1024 * 1024;
 pub const MAX_REFERENCES: usize = 64;
 pub const INLINE_CHARS: usize = 80;
+static INPUT_ACTIVITY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static INPUT_MONITORS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static INPUT_MONITOR_PAUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub struct InputMonitorLease { _private: () }
+impl InputMonitorLease {
+    pub fn new() -> Self {
+        INPUT_MONITORS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        note_input_activity(); Self { _private: () }
+    }
+}
+impl Default for InputMonitorLease { fn default() -> Self { Self::new() } }
+impl Drop for InputMonitorLease { fn drop(&mut self) { INPUT_MONITORS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel); note_input_activity(); } }
+pub fn note_input_activity() { INPUT_ACTIVITY.fetch_add(1, std::sync::atomic::Ordering::AcqRel); INPUT_MONITOR_PAUSED.store(false, std::sync::atomic::Ordering::Release); }
+pub fn invalidate_input_monitor() { INPUT_ACTIVITY.fetch_add(1, std::sync::atomic::Ordering::AcqRel); INPUT_MONITOR_PAUSED.store(true, std::sync::atomic::Ordering::Release); }
+pub fn observed_input_epoch() -> Option<u64> {
+    (INPUT_MONITORS.load(std::sync::atomic::Ordering::Acquire) > 0 && !INPUT_MONITOR_PAUSED.load(std::sync::atomic::Ordering::Acquire)).then(|| INPUT_ACTIVITY.load(std::sync::atomic::Ordering::Acquire))
+}
+#[derive(Default)]
+pub struct NoticeTimer { notice: Option<String>, since: Option<std::time::Instant> }
+impl NoticeTimer {
+    pub fn project(&mut self, notice: Option<&str>) -> Option<String> { self.at(notice, std::time::Instant::now()) }
+    fn at(&mut self, notice: Option<&str>, now: std::time::Instant) -> Option<String> {
+        if self.notice.as_deref() != notice { self.notice = notice.map(str::to_owned); self.since = notice.map(|_| now); }
+        self.since.filter(|since| now.saturating_duration_since(*since).as_millis() < 3000).and(self.notice.clone())
+    }
+}
 const MARKER: &str = ".openless-references.json";
 const OWNER: &str = "openless.dictation-references.v1";
 const PROCESS_MARKER: &str = ".openless-process.json";
@@ -345,6 +371,17 @@ pub fn place(text: &str, references: &[Reference], duration_ms: u64, cues: &[&st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn references_notices_expire_without_cross_session_or_repaint_resets() {
+        let now = std::time::Instant::now();
+        let mut old = NoticeTimer::default();
+        assert_eq!(old.at(Some("tooLarge"), now).as_deref(), Some("tooLarge"));
+        assert_eq!(old.at(Some("tooLarge"), now + std::time::Duration::from_millis(2999)).as_deref(), Some("tooLarge"));
+        assert_eq!(old.at(Some("tooLarge"), now + std::time::Duration::from_secs(3)), None);
+        assert_eq!(NoticeTimer::default().at(Some("tooLarge"), now + std::time::Duration::from_secs(3)).as_deref(), Some("tooLarge"));
+        assert_eq!(old.at(None, now), None);
+        assert_eq!(old.at(Some("captureFailed"), now).as_deref(), Some("captureFailed"));
+    }
     fn reference(sequence: u32, ms: u64) -> Reference {
         Reference { kind: ReferenceKind::File, elapsed_ms: ms, sequence, path: PathBuf::from("/original.log"), source: "user".into(), size: 2, name: format!("file-{sequence}"), original_url: None, inline: None, transcript_chars: None, original_only: true }
     }

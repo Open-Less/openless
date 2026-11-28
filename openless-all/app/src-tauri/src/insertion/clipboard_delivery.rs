@@ -18,7 +18,15 @@ pub(crate) fn try_lock() -> Option<parking_lot::MutexGuard<'static, ()>> {
 pub(crate) trait ClipboardDelivery {
     fn text(&mut self) -> Result<Option<String>, String>;
     fn set_text(&mut self, text: &str) -> Result<(), String>;
+    fn set_text_if_revision(&mut self, text: &str, expected: Option<u64>) -> Result<bool, String> {
+        if expected.is_some() && !revision_matches(expected, self.sequence()) { return Ok(false); }
+        self.set_text(text)?; Ok(true)
+    }
     fn sequence(&self) -> Option<u64>;
+    /// The native write returns this receipt under its own write authority.
+    /// Controlled fixtures issue a receipt as part of their simulated write.
+    fn owned_sequence(&self) -> Option<u64> { self.sequence() }
+    fn owns_write(&mut self, receipt: Option<u64>) -> bool { revision_matches(receipt, self.sequence()) }
     fn paste(&mut self) -> Result<(), DispatchError>;
     fn wait_for_consumption(&mut self);
 }
@@ -51,7 +59,9 @@ pub(crate) fn copy_with(
     if clipboard.text()?.as_deref() != Some(text) {
         return Err("clipboard write was not retained".into());
     }
-    Ok(clipboard.sequence())
+    let receipt = clipboard.owned_sequence();
+    if !clipboard.owns_write(receipt) { return Err("clipboard ownership changed".into()); }
+    Ok(receipt)
 }
 
 pub(crate) fn copy_if_current_with(
@@ -64,16 +74,17 @@ pub(crate) fn copy_if_current_with(
     if !still_current() || !revision_matches(expected, clipboard.sequence()) {
         return Ok(false);
     }
-    clipboard.set_text(text)?;
+    if !clipboard.set_text_if_revision(text, expected)? { return Ok(false); }
     if clipboard.text()?.as_deref() != Some(text) {
         return Err("clipboard write was not retained".into());
     }
-    Ok(true)
+    let receipt = clipboard.owned_sequence();
+    Ok(clipboard.owns_write(receipt))
 }
 
 fn owns(clipboard: &mut impl ClipboardDelivery, plan: &ClipboardRestorePlan) -> bool {
     let same_text = clipboard.text().ok().flatten().as_deref() == Some(&plan.inserted_text);
-    same_text
+    same_text && clipboard.owns_write(plan.sequence)
         && plan
             .sequence
             .is_none_or(|sequence| clipboard.sequence() == Some(sequence))
@@ -82,7 +93,7 @@ fn owns(clipboard: &mut impl ClipboardDelivery, plan: &ClipboardRestorePlan) -> 
 fn restore(clipboard: &mut impl ClipboardDelivery, plan: &ClipboardRestorePlan) {
     if owns(clipboard, plan) {
         if let Some(previous) = &plan.previous_text {
-            if let Err(error) = clipboard.set_text(previous) {
+            if let Err(error) = clipboard.set_text_if_revision(previous, plan.sequence) {
                 log::warn!("[insertion] clipboard restore failed: {error}");
             }
         }
@@ -136,14 +147,15 @@ pub(crate) fn insert_with_confirmation(
     if expected.is_some() && !revision_matches(expected, clipboard.sequence()) {
         return InsertStatus::NotRequested;
     }
-    if let Err(error) = clipboard.set_text(text) {
-        log::warn!("[insertion] clipboard write failed: {error}");
-        return InsertStatus::Failed;
+    match clipboard.set_text_if_revision(text, expected) {
+        Ok(true) => {}
+        Ok(false) => return InsertStatus::NotRequested,
+        Err(error) => { log::warn!("[insertion] clipboard write failed: {error}"); return InsertStatus::Failed; }
     }
     let plan = ClipboardRestorePlan {
         inserted_text: text.to_string(),
         previous_text,
-        sequence: clipboard.sequence(),
+        sequence: clipboard.owned_sequence(),
     };
     if !still_current() {
         if owns(clipboard, &plan) {

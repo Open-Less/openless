@@ -5263,13 +5263,14 @@ impl TauriTextInsertionSession {
                 let restore = self.context.insertion.restore_clipboard_after_paste;
                 let shortcut = self.context.insertion.paste_shortcut;
                 return tauri::async_runtime::spawn_blocking(move || {
-                    map_insert_status(crate::insertion::TextInserter::new().insert_materials(&parts, restore, shortcut, |dispatched| {
-                        // The first dispatch validates the frozen range. Later
-                        // parts retain the original native window/control;
-                        // successful paste may itself move the caret.
-                        if !dispatched { crate::selection::selection_insertion_target_is_current(&target) }
-                            else { crate::selection::capsule_menu_input_target_is_current(&target) }
-                    }))
+                    if !crate::selection::selection_insertion_target_is_current(&target) { return Err(BackendError::new(BackendErrorCode::Cancelled, "original material target changed")); }
+                    let continuity = crate::insertion::material_delivery::TargetContinuity::new(
+                        crate::selection::captured_insertion_position(&target),
+                        || crate::selection::capsule_menu_input_target_is_current(&target),
+                        crate::host_document::focused_input_position,
+                        openless_core::dictation_references::observed_input_epoch,
+                    );
+                    map_insert_status(crate::insertion::TextInserter::new().insert_materials(&parts, restore, shortcut, continuity))
                 }).await.map_err(|error| BackendError::new(BackendErrorCode::Internal, error.to_string()))?;
             }
         }

@@ -23,7 +23,6 @@ impl SelfWrite {
             while writes.revisions.len() > 256 { writes.revisions.pop_front(); }
         }
     }
-    pub(crate) fn commit(&self) { self.commit_revision(crate::insertion::clipboard_sequence()); }
 }
 pub(crate) fn self_write() -> SelfWrite {
     // Also track writes that overlap recording startup (before a session exists).
@@ -38,6 +37,8 @@ impl Drop for SelfWrite {
 }
 fn now_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 }
 struct Session {
+    backend: std::sync::Weak<openless_core::OpenLessBackend>,
+    notice_clock: Mutex<NoticeTimer>,
     collecting: AtomicBool,
     feedback: Mutex<(u32, Option<String>)>,
     data: Mutex<Collection>,
@@ -80,18 +81,20 @@ fn freeze_clipboard(session: &Session, mut sequence: impl FnMut() -> Option<u64>
     let elapsed_ms = session.data.lock().started.elapsed().as_millis() as u64;
     {
         let own = writes().lock();
-        if own.depth > 0 || own.revisions.contains(&revision) { return None; }
+        if own.depth > 0 { return None; }
     }
     let content = read();
     let own = writes().lock();
-    if own.depth > 0 || own.revisions.contains(&revision) || sequence() != Some(revision) { return None; }
+    if own.depth > 0 || sequence() != Some(revision) { return None; }
     Some(FrozenClipboard { revision, elapsed_ms, content })
 }
 impl RecordingLease {
     pub(crate) fn stop(self) -> Option<StoppedCollection> {
         let session = session(self.id)?;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let snapshot = freeze_clipboard(&session, crate::insertion::clipboard_sequence, clipboard_content);
+        let snapshot = if session.backend.upgrade().is_some_and(|backend| backend.get_preferences().dictation_references_enabled) {
+            freeze_clipboard(&session, crate::insertion::clipboard_sequence, clipboard_content)
+        } else { session.collecting.store(false, Ordering::Release); None };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let snapshot = { session.collecting.store(false, Ordering::Release); None };
         Some(StoppedCollection { session, snapshot })
@@ -123,7 +126,7 @@ pub(crate) fn start(id: SessionId, backend: &Arc<openless_core::OpenLessBackend>
     if !cfg!(any(target_os = "macos", target_os = "windows")) || !bound || !backend.get_preferences().dictation_references_enabled { return None; }
     let baseline = crate::insertion::clipboard_sequence()?;
     let dir = store()?.begin(&id.to_string(), now_ms()).ok()?;
-    let s = Arc::new(Session { collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(Collection {
+    let s = Arc::new(Session { backend: Arc::downgrade(backend), notice_clock: Mutex::new(NoticeTimer::default()), collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(Collection {
         dir, started: Instant::now(), collector: Collector::default(), filter: ClipboardFilter::new(baseline), notice: None,
     }) });
     sessions().lock().insert(id, Arc::clone(&s));
@@ -143,6 +146,18 @@ pub(crate) fn start(id: SessionId, backend: &Arc<openless_core::OpenLessBackend>
     Some(RecordingLease { id })
 }
 pub(crate) fn active(id: SessionId) -> bool { session(id).is_some_and(|s| !s.data.lock().collector.references.is_empty()) }
+pub(crate) fn discard_capture_revision(revision: u64) {
+    // Synthetic Ctrl/Cmd+C is a request to another process, not an attributable
+    // OpenLess write. If its conditional restoration failed, drop that ambiguous
+    // capture with visible failure feedback; never register a user revision as own.
+    let live = sessions().lock().values().cloned().collect::<Vec<_>>();
+    for session in live.into_iter().filter(|s| s.collecting.load(Ordering::Acquire)) {
+        let mut data = session.data.lock();
+        data.filter.observe(revision, 0, 0, false);
+        data.notice = Some("captureFailed".into());
+        *session.feedback.lock() = (data.collector.references.len() as u32, data.notice.clone());
+    }
+}
 pub(crate) fn retire(id: SessionId) {
     targets().lock().retain(|target| *target != id);
     if let Some(s) = sessions().lock().remove(&id) { s.collecting.store(false, Ordering::Release); }
@@ -166,7 +181,7 @@ pub(crate) fn project(payload: &mut crate::types::CapsulePayload) {
         // Feedback must not wait on native reads / a slow filesystem.
         let feedback = s.feedback.lock();
         payload.reference_count = feedback.0;
-        payload.reference_notice = feedback.1.clone();
+        payload.reference_notice = s.notice_clock.lock().project(feedback.1.as_deref());
     }
 }
 #[derive(serde::Serialize)]
@@ -178,6 +193,7 @@ use openless_core::dictation_references::ClipboardContent as Content;
 
 #[cfg(target_os = "macos")]
 fn clipboard_content() -> Result<Option<Content>, &'static str> {
+    if crate::insertion::owned_clipboard::is_own_offer() { return Ok(None); }
     use objc2::{msg_send, runtime::{AnyClass, AnyObject}, rc::autoreleasepool};
     use objc2_foundation::NSString;
     autoreleasepool(|_| unsafe {
@@ -218,7 +234,10 @@ fn clipboard_content() -> Result<Option<Content>, &'static str> {
     })
 }
 #[cfg(target_os = "windows")]
-fn clipboard_content() -> Result<Option<Content>, &'static str> { windows::read() }
+fn clipboard_content() -> Result<Option<Content>, &'static str> {
+    if crate::insertion::owned_clipboard::is_own_offer() { return Ok(None); }
+    windows::read()
+}
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn poll(session: &Session) {
@@ -232,15 +251,12 @@ fn poll_revision(session: &Session, revision: u64, stopped: bool) {
     if crate::insertion::clipboard_sequence() != Some(revision) { return; }
     let own = writes().lock();
     if own.depth > 0 { return; }
-    if own.revisions.contains(&revision) {
-        s.filter.observe(revision, 0, 0, true);
-        return;
-    }
     drop(own);
+    if crate::insertion::owned_clipboard::is_own_offer() { s.filter.observe(revision, 0, 0, true); return; }
     let content = clipboard_content();
     // Ownership may have changed during a delayed clipboard render/read.
     let own = writes().lock();
-    if own.depth > 0 || own.revisions.contains(&revision) || crate::insertion::clipboard_sequence() != Some(revision) { return; }
+    if own.depth > 0 || crate::insertion::clipboard_sequence() != Some(revision) { return; }
     drop(own);
     if !stopped && !session.collecting.load(Ordering::Acquire) { return; }
     let elapsed_ms = s.started.elapsed().as_millis() as u64;
@@ -283,7 +299,7 @@ mod tests {
     fn references_stop_freezes_last_copy_before_recorder_teardown_and_next_session() {
         let root = std::env::temp_dir().join(format!("references-stop-{}", uuid::Uuid::new_v4()));
         let store = ReferenceStore::new(root.clone()).unwrap();
-        let old = Arc::new(Session { collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(collection(store.begin("old", 0).unwrap())) });
+        let old = Arc::new(Session { backend: Default::default(), notice_clock: Mutex::new(NoticeTimer::default()), collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(collection(store.begin("old", 0).unwrap())) });
         let revision = std::sync::atomic::AtomicU64::new(12345671);
         let snapshot = freeze_clipboard(&old, || Some(revision.load(Ordering::Acquire)), || Ok(Some(Content::Text("last pre-stop copy\nkept in full".into()))));
         assert!(!old.collecting.load(Ordering::Acquire));
@@ -316,6 +332,23 @@ mod tests {
         drop(guard);
         assert_eq!(filter.observe(app_revision, 43, 2, writes().lock().revisions.contains(&app_revision)), FilterResult::SelfWrite);
         assert_eq!(filter.observe(app_revision + 1, 43, 2, false), FilterResult::Accept);
+    }
+    #[test]
+    fn references_revoked_recording_never_flushes_a_new_clipboard_value() {
+        let root = std::env::temp_dir().join(format!("references-revoked-{}", uuid::Uuid::new_v4()));
+        let backend = Arc::new(openless_core::OpenLessBackend::new(openless_core::BackendConfig { data_dir: root.clone(), ..Default::default() }, openless_core::BackendDependencies::unsupported()).unwrap());
+        assert!(!backend.get_preferences().dictation_references_enabled);
+        let id = SessionId::new();
+        let s = Arc::new(Session { backend: Arc::downgrade(&backend), notice_clock: Mutex::new(NoticeTimer::default()), collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(collection(PathBuf::new())) });
+        sessions().lock().insert(id, s.clone());
+        let stopped = RecordingLease { id }.stop().unwrap();
+        assert!(stopped.snapshot.is_none());
+        assert!(!s.collecting.load(Ordering::Acquire));
+        stopped.finish();
+        assert!(s.data.lock().collector.references.is_empty());
+        sessions().lock().remove(&id);
+        drop(backend);
+        let _ = std::fs::remove_dir_all(root);
     }
     #[test]
     fn reference_self_write_ownership_is_revision_not_text() {
@@ -370,8 +403,8 @@ mod tests {
         old.collector.push(Reference { kind: ReferenceKind::File, elapsed_ms: 1, sequence: 0,
             path: PathBuf::from("/original-A.log"), source: "clipboard".into(), size: 2, name: "A".into(),
             original_url: None, inline: None, transcript_chars: None, original_only: true }).unwrap();
-        sessions().lock().insert(a, Arc::new(Session { collecting: AtomicBool::new(false), feedback: Mutex::new((1, None)), data: Mutex::new(old) }));
-        sessions().lock().insert(b, Arc::new(Session { collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(collection(PathBuf::new())) }));
+        sessions().lock().insert(a, Arc::new(Session { backend: Default::default(), notice_clock: Mutex::new(NoticeTimer::default()), collecting: AtomicBool::new(false), feedback: Mutex::new((1, None)), data: Mutex::new(old) }));
+        sessions().lock().insert(b, Arc::new(Session { backend: Default::default(), notice_clock: Mutex::new(NoticeTimer::default()), collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(collection(PathBuf::new())) }));
         assert!(active(a)); assert!(!active(b));
         assert_eq!(enrich(b, "  exact\r\n🙂".into(), 20).as_bytes(), b"  exact\r\n\xf0\x9f\x99\x82");
         assert_eq!(enrich(SessionId::new(), "disabled\r\n".into(), 20), "disabled\r\n");
