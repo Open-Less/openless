@@ -347,6 +347,12 @@ export const en: typeof zhCN = {
     durationMinutes: '{{value}}m',
   },
   capsule: {
+    references: '{{count}} attached',
+    referenceNotice: {
+      screenPermission: 'Screen Recording permission needed',
+      tooLarge: 'Item too large',
+      captureFailed: 'Item not captured',
+    },
     emptyTranscript: 'Empty · No speech',
     transcribing: 'Transcribing',
     asking: 'Ask anything',
@@ -1329,6 +1335,15 @@ export const en: typeof zhCN = {
       phoneTitle: 'Phone and remote input',
       phoneDesc: 'Connect a phone or another device for remote input.',
     },
+    dictationReferences: {
+      enabledLabel: 'Insert attachments while dictating',
+      enabledDesc: 'Screenshots and copied items go next to the sentence you were saying',
+      keyLabel: 'Screenshot key',
+      keyDesc: 'While recording, press the recording key plus this key',
+      keyConflict: 'That key is already in use',
+      permissionNote: 'Screen Recording permission needed',
+      openSettings: 'Open System Settings',
+    },
     advancedPages: {
       polishStrategyTitle: 'Polish strategy',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
@@ -1336,6 +1351,7 @@ export const en: typeof zhCN = {
       liveInputTitle: 'Text insertion',
       experiments: 'Configure experimental features and extensions.',
       voiceEnhancementTitle: 'Voice enhancement and playback suppression',
+      dictationReferencesTitle: 'Dictation attachments',
       cursorContextTitle: 'Awareness',
       startupDiagnosticsTitle: 'Startup diagnostics',
       cursorContextHint:

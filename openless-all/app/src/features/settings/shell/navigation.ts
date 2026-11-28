@@ -22,6 +22,12 @@ export const ADVANCED_PAGES = [
     beta: true,
   },
   {
+    id: 'dictationReferences',
+    icon: 'paperclip',
+    titleKey: 'settings.advancedPages.dictationReferencesTitle',
+    beta: true,
+  },
+  {
     id: 'voiceEnhancement',
     icon: 'mic',
     titleKey: 'settings.advancedPages.voiceEnhancementTitle',
@@ -116,8 +122,14 @@ export function visibleGeneralPages(
   });
 }
 
-export function visibleAdvancedPages(platform: PlatformKind | undefined, os: OS): AdvancedPage[] {
+export function visibleAdvancedPages(
+  platform: PlatformKind | undefined,
+  os: OS,
+  dictationReferencesSupported = false,
+): AdvancedPage[] {
   return ADVANCED_PAGES.filter((page) => {
+    if (page.id === 'dictationReferences')
+      return platform === 'desktop' && dictationReferencesSupported;
     if (page.id === 'intentRouting') return platform === 'desktop' && (os === 'mac' || os === 'win');
     if (page.id === 'liveInput') return platform === 'desktop' && os === 'win';
     if (page.id === 'localModels') return platform === 'desktop' && os === 'mac';

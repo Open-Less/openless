@@ -512,6 +512,8 @@ export interface UserPreferences {
   /** Selection voice Q&A hotkey. null = not enabled. See issue #118. */
   qaHotkey: QaHotkeyBinding | null;
   qaCompanionKey: string;
+  dictationReferencesEnabled?: boolean;
+  dictationReferenceKey?: string;
   qaShortcutBehavior?: QaShortcutBehavior;
   /** Standalone quick-note hotkey. null = not configured. */
   quickNoteHotkey: ShortcutBinding | null;
@@ -882,6 +884,8 @@ export interface CapsulePayload {
   qa?: boolean;
   /** Session generation that owns this capsule frame. */
   sessionId?: string | null;
+  referenceCount?: number;
+  referenceNotice?: 'screenPermission' | 'tooLarge' | 'captureFailed' | null;
   state: CapsuleState;
   level: number; // 0..1 RMS
   elapsedMs: number;

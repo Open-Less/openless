@@ -319,6 +319,12 @@ export const zhTW: typeof zhCN = {
     durationMinutes: '{{value}} 分鐘',
   },
   capsule: {
+    references: '素材 {{count}}',
+    referenceNotice: {
+      screenPermission: '需要螢幕錄製權限',
+      tooLarge: '素材過大',
+      captureFailed: '未收集素材',
+    },
     emptyTranscript: '空稿 · 未辨識到語音',
     transcribing: '處理中',
     asking: '隨便問',
@@ -1223,6 +1229,15 @@ export const zhTW: typeof zhCN = {
       phoneTitle: '手機與遠端輸入',
       phoneDesc: '連接手機或其他裝置進行遠端輸入。',
     },
+    dictationReferences: {
+      enabledLabel: '聽寫時插入素材',
+      enabledDesc: '錄音時截圖或拷貝，引用會放在對應句子旁',
+      keyLabel: '截圖鍵',
+      keyDesc: '錄音時，按錄音鍵加此鍵截圖',
+      keyConflict: '此鍵已被佔用',
+      permissionNote: '需要螢幕錄製權限',
+      openSettings: '打開系統設定',
+    },
     advancedPages: {
       polishStrategyTitle: '潤飾策略',
       webSearch: '配置追问联网、免费搜索和搜索 API。',
@@ -1230,6 +1245,7 @@ export const zhTW: typeof zhCN = {
       liveInputTitle: '文字插入',
       experiments: '設定實驗功能與擴充選項。',
       voiceEnhancementTitle: '語音增強與播放抑制',
+      dictationReferencesTitle: '聽寫素材',
       cursorContextTitle: '感知',
       startupDiagnosticsTitle: '啟動診斷',
       cursorContextHint: '預設開啟。',

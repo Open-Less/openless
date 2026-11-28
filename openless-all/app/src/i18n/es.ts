@@ -347,6 +347,12 @@ export const es: typeof zhCN = {
     durationMinutes: '{{value}}min',
   },
   capsule: {
+    references: 'Adjuntos: {{count}}',
+    referenceNotice: {
+      screenPermission: 'Permiso de grabación de pantalla necesario',
+      tooLarge: 'Elemento demasiado grande',
+      captureFailed: 'No se capturó el elemento',
+    },
     emptyTranscript: 'Vacío · Sin voz',
     transcribing: 'Transcribiendo',
     asking: 'Pregunta lo que quieras',
@@ -1290,6 +1296,15 @@ export const es: typeof zhCN = {
       phoneTitle: 'Teléfono y entrada remota',
       phoneDesc: 'Conecta un teléfono u otro dispositivo para la entrada remota.',
     },
+    dictationReferences: {
+      enabledLabel: 'Insertar adjuntos al dictar',
+      enabledDesc: 'Las capturas y los elementos copiados se añaden junto a la frase dictada',
+      keyLabel: 'Tecla de captura de pantalla',
+      keyDesc: 'Al grabar, pulsa la tecla de grabación junto con esta tecla',
+      keyConflict: 'Esa tecla ya está en uso',
+      permissionNote: 'Permiso de grabación de pantalla necesario',
+      openSettings: 'Abrir Ajustes del Sistema',
+    },
     advancedPages: {
       polishStrategyTitle: 'Estrategia de mejora',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
@@ -1297,6 +1312,7 @@ export const es: typeof zhCN = {
       liveInputTitle: 'Inserción de texto',
       experiments: 'Configura funciones experimentales y extensiones.',
       voiceEnhancementTitle: 'Mejora de voz y supresión de reproducción',
+      dictationReferencesTitle: 'Adjuntos del dictado',
       cursorContextTitle: 'Percepción',
       startupDiagnosticsTitle: 'Diagnóstico de inicio',
       cursorContextHint:

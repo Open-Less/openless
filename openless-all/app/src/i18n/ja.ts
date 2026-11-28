@@ -336,6 +336,12 @@ export const ja: typeof zhCN = {
     durationMinutes: '{{value}} 分',
   },
   capsule: {
+    references: '添付 {{count}} 件',
+    referenceNotice: {
+      screenPermission: '画面収録の許可が必要',
+      tooLarge: '添付項目が大きすぎます',
+      captureFailed: '添付項目を取得できませんでした',
+    },
     emptyTranscript: '空の原稿・音声なし',
     transcribing: '文字起こし中',
     asking: 'なんでも質問',
@@ -1259,6 +1265,15 @@ export const ja: typeof zhCN = {
       phoneTitle: 'スマホとリモート入力',
       phoneDesc: 'スマホや別の端末を接続してリモート入力します。',
     },
+    dictationReferences: {
+      enabledLabel: '音声入力中に添付',
+      enabledDesc: 'スクリーンショットやコピーした項目は、該当する文の横に追加されます',
+      keyLabel: 'スクリーンショットキー',
+      keyDesc: '録音中に録音キーとこのキーを押して撮影',
+      keyConflict: 'このキーはすでに使用されています',
+      permissionNote: '画面収録の許可が必要',
+      openSettings: 'システム設定を開く',
+    },
     advancedPages: {
       polishStrategyTitle: '推敲ルール',
       webSearch: 'Configure Q&A web search, free search and search APIs.',
@@ -1266,6 +1281,7 @@ export const ja: typeof zhCN = {
       liveInputTitle: '文字入力',
       experiments: '実験的な機能と拡張オプションを設定します。',
       voiceEnhancementTitle: '音声強調と再生抑制',
+      dictationReferencesTitle: '音声入力の添付',
       cursorContextTitle: '認識',
       startupDiagnosticsTitle: '起動診断',
       cursorContextHint:
