@@ -3,6 +3,33 @@ use std::cell::Cell;
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[ignore = "requires controlled HTTP browser-scene.html with an explicit selection and Accessibility permission"]
+async fn public_original_selection_reaches_the_real_browser_reader_once() {
+    use openless_core::{ask::AskTurnKey, assistant_api::AssistantContextResult, browser_scene::SceneAuthorization};
+    let pid: u32 = std::env::var("OPENLESS_BROWSER_FIXTURE_PID").unwrap().parse().unwrap();
+    let expected = std::env::var("OPENLESS_BROWSER_EXPECTED_SELECTION").unwrap();
+    let tracker = Arc::new(TargetTracker::new());
+    tracker.start().unwrap();
+    let grant = SceneAuthorization { app_metadata: true, browser_metadata: true, selected_text: true, epoch: 1 };
+    let authorization = CaptureAuthorization::new(grant, Arc::new(|| true));
+    tracker.capture_before_focus(Some(pid), 72, ContextAccess::default(), Some(authorization.clone())).await;
+    let source = tracker.browser_source(72, authorization).await.expect("public selection provider required for positive compatibility case");
+    assert!(source.is_current());
+    assert_eq!(source.selected_text().as_deref(), Some(expected.as_str()));
+    let key = AskTurnKey { conversation_id: uuid::Uuid::new_v4(), turn_id: uuid::Uuid::new_v4() };
+    let AssistantContextResult::Available { data, .. } = source.read(key, grant, openless_core::ask::AskCancellation::default()).await
+        else { panic!("controlled selection unavailable") };
+    assert_eq!(data["reference"]["selectedText"], expected);
+    assert!(!data.to_string().contains("UNSELECTED_BODY_CANARY"));
+    assert!(matches!(source.read(key, grant, openless_core::ask::AskCancellation::default()).await,
+        AssistantContextResult::Unavailable { .. }));
+    tracker.clear_capture();
+    assert!(!source.is_current());
+    tracker.stop();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 #[ignore = "requires a foreground controlled browser-scene.html fixture and Accessibility permission"]
 async fn real_browser_scene_uses_the_frozen_input_and_rejects_sensitive_or_native_chrome_page_reads() {
     use openless_core::{ask::AskTurnKey, assistant_api::AssistantContextResult, browser_scene::SceneAuthorization};

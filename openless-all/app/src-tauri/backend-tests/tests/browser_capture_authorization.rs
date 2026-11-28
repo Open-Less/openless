@@ -33,7 +33,7 @@ fn allow(provider: &context::DesktopContext) {
         app_metadata: true,
         usage: false,
     });
-    provider.set_read_permissions(context::ReadPermissions {
+    provider.set_read_permissions(context::ReadPermissions { browser_selection: false,
         browser_tab: true,
         voice_history: false,
     });

@@ -294,7 +294,7 @@ impl browser_context::BrowserReader for InvocationPage {
 async fn real_submit_binds_desktop_browser_only_after_successful_admission_and_once_on_retry() {
     let f = Fixture::new();
     let id = f.service.current().unwrap();
-    f.context.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+    f.context.set_read_permissions(context::ReadPermissions { browser_selection: false, browser_tab: true, voice_history: false });
     let authorization = f.context.capture_browser_authorization().unwrap();
     let captured = authorization.freeze(|_| Some(())).unwrap().finish().unwrap();
     let reads = Arc::new(AtomicUsize::new(0));
@@ -345,7 +345,7 @@ async fn failed_submit_then_regrant_cannot_resurrect_the_original_desktop_invoca
     for revoke_app in [false, true] {
         let f = Fixture::new();
         let id = f.service.current().unwrap();
-        f.context.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+        f.context.set_read_permissions(context::ReadPermissions { browser_selection: false, browser_tab: true, voice_history: false });
         let authorization = f.context.capture_browser_authorization().unwrap();
         let reads = Arc::new(AtomicUsize::new(0));
         f.context.bind_browser_reference(id, authorization.grant(), Arc::new(InvocationPage(reads.clone())));
@@ -356,7 +356,7 @@ async fn failed_submit_then_regrant_cannot_resurrect_the_original_desktop_invoca
         if revoke_app { f.context.set_authorization(ContextAuthorization::default()); }
         else { f.context.set_read_permissions(context::ReadPermissions::default()); }
         f.context.set_authorization(ContextAuthorization { app_metadata: true, usage: false });
-        f.context.set_read_permissions(context::ReadPermissions { browser_tab: true, voice_history: false });
+        f.context.set_read_permissions(context::ReadPermissions { browser_selection: false, browser_tab: true, voice_history: false });
         let mut events = f.service.subscribe();
         let turn_id = bounded(f.service.submit_prepared(input, || async {
             Ok(AskPreparation::default())
