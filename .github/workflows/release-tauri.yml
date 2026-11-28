@@ -35,6 +35,11 @@ on:
         type: boolean
         required: false
         default: false
+      official_identity:
+        description: With dev_build, package under the official OpenLess name, identifier and data (replaces the installed app)
+        type: boolean
+        required: false
+        default: false
       artifact_validation:
         description: Validate existing Beta.2 desktop artifacts only (no builds or publishing)
         type: boolean
@@ -94,14 +99,20 @@ jobs:
           targets: aarch64-apple-darwin
       - name: Compile and package Dev
         working-directory: openless-all/app
+        env:
+          OFFICIAL_IDENTITY: ${{ inputs.official_identity }}
         run: |
           npm ci
           source ../macos/scripts/macos-build-env.sh
-          npm run tauri -- build --ci --features dev-build --bundles dmg --config src-tauri/tauri.dev.conf.json -- --locked
+          if [ "$OFFICIAL_IDENTITY" = "true" ]; then
+            npm run tauri -- build --ci --bundles dmg --config src-tauri/tauri.trial.conf.json -- --locked
+          else
+            npm run tauri -- build --ci --features dev-build --bundles dmg --config src-tauri/tauri.dev.conf.json -- --locked
+          fi
       - name: Upload Dev package
         uses: actions/upload-artifact@v4
         with:
-          name: openless-dev-macos-aarch64
+          name: ${{ inputs.official_identity && 'openless-trial-macos-aarch64' || 'openless-dev-macos-aarch64' }}
           path: openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 14
