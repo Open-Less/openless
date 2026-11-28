@@ -54,6 +54,11 @@ mod dictation_references {
     pub fn capture_in_progress() -> bool { false }
     pub fn collecting() -> bool { false }
 }
+mod host_document {
+    pub mod macos {
+        pub fn record_learning_key(_: i64, _: u64, _: bool) {}
+    }
+}
 #[path = "../../src/mobile_stubs/combo_hotkey.rs"]
 mod combo_hotkey;
 #[path = "../../src/hotkey.rs"]

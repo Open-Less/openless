@@ -3305,6 +3305,9 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
             let warm_hub_for_join = Arc::clone(&warm_hub);
             let backend_for_recording = Arc::clone(&backend);
             let joined = tauri::async_runtime::spawn_blocking(move || {
+                let reference_lease = backend_for_recording.lock().as_ref().and_then(std::sync::Weak::upgrade)
+                    .filter(|_| matches!(context.output_target, openless_core::DictationOutputTarget::ForegroundApp | openless_core::DictationOutputTarget::Undecided))
+                    .and_then(|backend| crate::dictation_references::start(session_id, &backend));
                 let mut cold_capture_reservation = cold_capture_reservation;
                 let archive_path = archive_path
                     .map_err(|error| {
@@ -3488,7 +3491,7 @@ impl PendingAudioCapture for TauriPendingAudioCapture {
                     }
                 }
                 let recording = Box::new(TauriActiveRecording {
-                    reference_lease: None,
+                    reference_lease,
                     recorder,
                     warm_capture,
                     cold_capture_hub,

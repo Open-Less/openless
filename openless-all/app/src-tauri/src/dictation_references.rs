@@ -137,6 +137,7 @@ fn capture() {
                             let n = s.collector.references.len() + 1;
                             let r = Reference { kind: ReferenceKind::Screenshot, elapsed_ms, sequence: 0, path: path.clone(), source: "screencapture".into(), size: meta.len(), name: format!("Screenshot {n}"), original_url: None, inline: None, transcript_chars: None, original_only: false };
                             s.notice = s.collector.push(r).err().map(|_| "tooLarge".into());
+                            if ReferenceStore::save_references(&s.dir, &s.collector.references).is_err() { s.notice = Some("captureFailed".into()); }
                         } else { s.notice = Some("tooLarge".into()); }
                     } else if result.is_err() { s.notice = Some("captureFailed".into()); }
                     // A completed interactive capture without a file is Esc/cancel, not material.
@@ -234,15 +235,21 @@ fn poll(id: SessionId) {
     let result = s.filter.observe(revision, hash.finish(), size, false, true);
     if result == FilterResult::TooLarge { s.notice = Some("tooLarge".into()); return; }
     if result != FilterResult::Accept { return; }
-    s.copy_intent = None;
-    let elapsed_ms = s.started.elapsed().as_millis() as u64;
+    let captured_at = s.copy_intent.take().unwrap_or_else(Instant::now);
+    let owned_bytes: u64 = s.collector.references.iter().filter(|r| !r.original_only).map(|r| r.size).sum();
+    if s.collector.references.len() >= MAX_REFERENCES || owned_bytes.saturating_add(size) > MAX_SESSION_BYTES {
+        s.notice = Some("tooLarge".into()); return;
+    }
+    let elapsed_ms = captured_at.saturating_duration_since(s.started).as_millis() as u64;
     let materials = match content {
         Content::Files(paths) => paths.into_iter().enumerate().map(|(offset, path)| {
             let meta = std::fs::symlink_metadata(&path);
             let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
             let directory = meta.as_ref().is_ok_and(|m| m.is_dir());
             let n = s.collector.references.len() as u32 + offset as u32 + 1;
-            let copied = ReferenceStore::copy_file(&s.dir, n, &path).ok();
+            let copied = if n as usize > MAX_REFERENCES || owned_bytes.saturating_add(size) > MAX_SESSION_BYTES {
+                None
+            } else { ReferenceStore::copy_file(&s.dir, n, &path).ok() };
             let original_only = copied.is_none();
             if original_only { s.notice = Some(if size > MAX_BYTES { "tooLarge" } else { "captureFailed" }.into()); }
             Reference { kind: if directory { ReferenceKind::Directory } else { ReferenceKind::File }, elapsed_ms, sequence: 0,
@@ -270,6 +277,7 @@ fn poll(id: SessionId) {
         if s.collector.push(reference).is_err() { s.notice = Some("tooLarge".into()); }
     }
     if s.notice.is_none() { s.notice = failure; }
+    if ReferenceStore::save_references(&s.dir, &s.collector.references).is_err() { s.notice = Some("captureFailed".into()); }
 }
 
 #[cfg(test)]
@@ -283,5 +291,26 @@ mod tests {
         let mut filter = ClipboardFilter::new(10);
         assert_eq!(filter.observe(12, 42, 2, own.revisions.contains(&12), true), FilterResult::SelfWrite);
         assert_eq!(filter.observe(13, 42, 2, own.revisions.contains(&13), true), FilterResult::Accept);
+    }
+    #[test]
+    fn references_host_overlapping_sessions_keep_owned_results_and_empty_identity() {
+        let a = SessionId::new();
+        let b = SessionId::new();
+        let session = |collecting| Session { dir: PathBuf::new(), started: Instant::now(), collecting,
+            collector: Collector::default(), filter: ClipboardFilter::new(10), notice: None,
+            copy_intent: None, capture_busy: false };
+        let mut old = session(false);
+        old.collector.push(Reference { kind: ReferenceKind::File, elapsed_ms: 1, sequence: 0,
+            path: PathBuf::from("/original-A.log"), source: "user-copy".into(), size: 2, name: "A".into(),
+            original_url: None, inline: None, transcript_chars: None, original_only: true }).expect("test material");
+        sessions().lock().insert(a, old);
+        sessions().lock().insert(b, session(true));
+        assert!(active(a));
+        assert!(!active(b));
+        assert_eq!(enrich(b, "  exact\r\n🙂".into(), 20), "  exact\r\n🙂");
+        assert!(enrich(a, "First.".into(), 20).contains("original-A.log"));
+        sessions().lock().remove(&a);
+        assert!(sessions().lock().get(&b).is_some_and(|s| s.collecting));
+        sessions().lock().remove(&b);
     }
 }

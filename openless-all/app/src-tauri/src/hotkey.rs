@@ -1623,8 +1623,7 @@ pub(crate) mod platform {
     /// keys count. OS auto-repeat and "several keys pressed while holding the trigger" are
     /// collapsed into one abort by the companion latch.
     fn note_companion_key_down(ctx: &CallbackContext) {
-        if ctx.shared.recording_active.load(Ordering::SeqCst)
-            && crate::dictation_references::collecting() { return; }
+        if crate::dictation_references::collecting() { return; }
         if !ctx.shared.trigger_held.load(Ordering::SeqCst) {
             return;
         }

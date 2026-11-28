@@ -104,7 +104,7 @@ assert.match(windows, /match \(vk_code, extended\)/);
 assert.match(windows, /\(0x26, true\)/);
 assert.match(windows, /\(0x28, true\)/);
 assert.match(windows, /\(0x0D, false\)/);
-assert.match(hotkeys, /TAP_DISABLED_BY_TIMEOUT \| TAP_DISABLED_BY_USER_INPUT => \{\s*crate::capsule_style_menu::invalidate\(\)/);
+assert.match(hotkeys, /TAP_DISABLED_BY_TIMEOUT \| TAP_DISABLED_BY_USER_INPUT => \{[^}]*crate::capsule_style_menu::invalidate\(\)/);
 for (const key of ['VK_LCONTROL', 'VK_RCONTROL', 'VK_LMENU', 'VK_RMENU', 'VK_LWIN', 'VK_RWIN', 'VK_LSHIFT', 'VK_RSHIFT']) {
   assert.ok(windows.includes(key), `Windows modified input must include ${key}`);
 }

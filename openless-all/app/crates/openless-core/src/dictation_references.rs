@@ -115,6 +115,14 @@ impl ReferenceStore {
         let ext = source.extension().and_then(|v| v.to_str()).filter(|v| v.bytes().all(|c| c.is_ascii_alphanumeric())).unwrap_or("bin");
         Self::write_bytes(dir, sequence, ext, &bytes)
     }
+    pub fn save_references(dir: &Path, references: &[Reference]) -> io::Result<()> {
+        let marker: Manifest = serde_json::from_slice(&fs::read(dir.join(MARKER))?)?;
+        if marker.owner != OWNER { return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not an OpenLess reference directory")); }
+        let next = dir.join("references.json.next");
+        let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).open(&next)?;
+        file.write_all(&serde_json::to_vec(references)?)?;
+        fs::rename(next, dir.join("references.json"))
+    }
     pub fn cleanup(&self, now_ms: u64, retention_ms: u64, active: &HashSet<String>) -> io::Result<usize> {
         let mut removed = 0;
         for entry in fs::read_dir(&self.root)? {
@@ -133,7 +141,7 @@ impl ReferenceStore {
     }
 }
 
-pub fn expired(reference: &Reference) -> bool { !reference.original_only && !reference.path.exists() }
+pub fn expired(reference: &Reference) -> bool { reference.original_url.is_none() && !reference.original_only && !reference.path.exists() }
 fn escaped(value: &str) -> String {
     value.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]").replace(['\n', '\r'], " ")
 }
@@ -256,6 +264,9 @@ mod tests {
         fs::write(foreign.join("user.txt"), b"user original").unwrap();
         let path = ReferenceStore::write_bytes(&old, 1, "txt", b"copy").unwrap();
         let mut r = reference(1, 0); r.path = path; r.original_only = false;
+        ReferenceStore::save_references(&old, &[r.clone()]).unwrap();
+        let restored: Vec<Reference> = serde_json::from_slice(&fs::read(old.join("references.json")).unwrap()).unwrap();
+        assert_eq!(restored[0].path, r.path);
         assert!(!expired(&r));
         assert_eq!(store.cleanup(RETENTION_MS - 1, RETENTION_MS, &HashSet::new()).unwrap(), 0);
         assert_eq!(store.cleanup(RETENTION_MS, RETENTION_MS, &HashSet::from(["busy".into()])).unwrap(), 1);
