@@ -1,5 +1,15 @@
-import assert from 'node:assert/strict';
 import { referenceBadgeView, updateReferenceBadge } from './referenceBadgeView';
+
+const assert = {
+  deepEqual(actual: unknown, expected: unknown) {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+    }
+  },
+  equal(actual: unknown, expected: unknown) {
+    if (actual !== expected) throw new Error(`Expected ${expected}, got ${actual}`);
+  },
+};
 
 const session = { state: 'recording', sessionId: 'first' } as const;
 assert.equal(referenceBadgeView(updateReferenceBadge(null, session, 0), 0), null);
