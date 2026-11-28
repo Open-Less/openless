@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict';
 import { createInstance } from 'i18next';
 import type { PolishMode, StylePack } from '../../api/contracts';
 import { zhCN } from '../../i18n/zh-CN';
@@ -10,6 +9,19 @@ import { de } from '../../i18n/de';
 import { fr } from '../../i18n/fr';
 import { es } from '../../i18n/es';
 import { styleLabelFor } from './presentation';
+
+// Tests live in the browser TypeScript project, which deliberately has no Node typings.
+const assert = {
+  equal(actual: unknown, expected: unknown, message = 'values must be equal') {
+    if (!Object.is(actual, expected)) throw new Error(`${message}: ${String(actual)} !== ${String(expected)}`);
+  },
+  notEqual(actual: unknown, expected: unknown) {
+    if (Object.is(actual, expected)) throw new Error('values must differ');
+  },
+  ok(condition: unknown) {
+    if (!condition) throw new Error('condition must be true');
+  },
+};
 
 const locales = { 'zh-CN': zhCN, 'zh-TW': zhTW, en, ja, ko, de, fr, es };
 const packs: StylePack[] = [
