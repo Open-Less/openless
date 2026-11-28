@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenLess",
-  "version": "2.0.3-Beta.3+build.noask.20261123",
+  "version": "2.0.3-Dev.1",
   "identifier": "com.openless.app",
   "build": {
     "beforeDevCommand": "npm run dev",
