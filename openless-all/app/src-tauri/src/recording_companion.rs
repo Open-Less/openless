@@ -40,7 +40,7 @@ fn key(value: &str) -> String {
         other => other.into(),
     }
 }
-    fn matches(required: &str, physical: &str) -> bool {
+fn matches(required: &str, physical: &str) -> bool {
     required == physical
         || matches!(required, "cmd" | "ctrl" | "alt" | "shift") && physical.starts_with(required)
 }

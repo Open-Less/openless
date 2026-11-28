@@ -47,6 +47,8 @@ pub(crate) fn cleanup() {
 pub(crate) struct RecordingLease { id: SessionId }
 impl Drop for RecordingLease {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        poll(self.id);
         if let Some(session) = sessions().lock().get_mut(&self.id) { session.collecting = false; }
         cleanup();
     }
@@ -241,15 +243,17 @@ fn poll(id: SessionId) {
         s.notice = Some("tooLarge".into()); return;
     }
     let elapsed_ms = captured_at.saturating_duration_since(s.started).as_millis() as u64;
+    let mut reserved_bytes = owned_bytes;
     let materials = match content {
         Content::Files(paths) => paths.into_iter().enumerate().map(|(offset, path)| {
             let meta = std::fs::symlink_metadata(&path);
             let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
             let directory = meta.as_ref().is_ok_and(|m| m.is_dir());
             let n = s.collector.references.len() as u32 + offset as u32 + 1;
-            let copied = if n as usize > MAX_REFERENCES || owned_bytes.saturating_add(size) > MAX_SESSION_BYTES {
+            let copied = if n as usize > MAX_REFERENCES || reserved_bytes.saturating_add(size) > MAX_SESSION_BYTES {
                 None
             } else { ReferenceStore::copy_file(&s.dir, n, &path).ok() };
+            if copied.is_some() { reserved_bytes = reserved_bytes.saturating_add(size); }
             let original_only = copied.is_none();
             if original_only { s.notice = Some(if size > MAX_BYTES { "tooLarge" } else { "captureFailed" }.into()); }
             Reference { kind: if directory { ReferenceKind::Directory } else { ReferenceKind::File }, elapsed_ms, sequence: 0,
@@ -274,7 +278,11 @@ fn poll(id: SessionId) {
     let failure = if materials.iter().any(|r| r.original_only) { s.notice.take() } else { None };
     s.notice = None;
     for reference in materials {
-        if s.collector.push(reference).is_err() { s.notice = Some("tooLarge".into()); }
+        let owned_path = (!reference.original_only).then(|| reference.path.clone());
+        if s.collector.push(reference).is_err() {
+            if let Some(path) = owned_path { let _ = std::fs::remove_file(path); }
+            s.notice = Some("tooLarge".into());
+        }
     }
     if s.notice.is_none() { s.notice = failure; }
     if ReferenceStore::save_references(&s.dir, &s.collector.references).is_err() { s.notice = Some("captureFailed".into()); }

@@ -4696,7 +4696,8 @@ impl CoreTextInserter for TauriTextInserter {
             let _ = app;
             #[cfg(target_os = "macos")]
             let live_composition =
-                if context.insertion.composition_input && context.insertion.enabled {
+                if context.insertion.composition_input && context.insertion.enabled
+                    && !crate::dictation_references::active(session_id) {
                     let capture = live_capture.and_then(|capture| capture.lock().take());
                     match capture {
                         Some(capture) => capture.await.ok().and_then(Result::ok),

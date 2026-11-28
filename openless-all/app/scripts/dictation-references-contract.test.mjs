@@ -20,4 +20,8 @@ assert.ok(host.includes('own.revisions.contains(&revision)'));
 assert.ok(host.includes('capture_busy'));
 assert.ok(read('src-tauri/src/insertion.rs').includes('dictation_references::self_write()'));
 assert.ok(read('src-tauri/src/selection.rs').includes('dictation_references::self_write()'));
+const adapters = read('src-tauri/src/core_adapters.rs');
+assert.match(adapters, /prepare_streaming_input_source\(\s*context\.insertion\.streaming\s*&& !crate::dictation_references::active\(session_id\)/);
+assert.match(adapters, /context\.insertion\.composition_input && context\.insertion\.enabled\s*&& !crate::dictation_references::active\(session_id\)/);
+assert.ok(host.includes('poll(self.id)'));
 console.log('dictation references backend contracts passed');
