@@ -1,6 +1,7 @@
 //! Explicit user feedback, separate from external control observation.
 use super::*;
 use chrono::Datelike;
+use serde::Serialize;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,7 +106,9 @@ impl OpenLessBackend {
         let mut state = self.history_learning.lock().map_err(storage)?;
         let feedback = state.tokens.get_mut(token).ok_or_else(invalid)?;
         let request = (corrected_text, request_vocabulary, request_expression);
-        self.history.with_learning_source(&feedback.source.history_id, Some(feedback.revision), |entry, _| {
+        let history_id = feedback.source.history_id.clone();
+        let revision = feedback.revision;
+        self.history.with_learning_source(&history_id, Some(revision), |entry, _| {
             self.validate_learning_feedback(feedback, entry)?;
             if feedback.request.as_ref().is_some_and(|previous| previous != &request) {
                 return Err(failure("learningPayloadConflict"));
@@ -156,7 +159,9 @@ impl OpenLessBackend {
         if !self.get_preferences().vocabulary_learning_enabled { return Err(failure("learningPermissionOff")); }
         let mut state = self.history_learning.lock().map_err(storage)?;
         let feedback = state.tokens.get_mut(token).ok_or_else(invalid)?;
-        self.history.with_learning_source(&feedback.source.history_id, Some(feedback.revision), |entry, _| {
+        let history_id = feedback.source.history_id.clone();
+        let revision = feedback.revision;
+        self.history.with_learning_source(&history_id, Some(revision), |entry, _| {
             self.validate_learning_feedback(feedback, entry)?;
             if feedback.accepted.iter().any(|id| id == candidate_id) { return Ok(false); }
             let candidate = feedback.result.as_ref().and_then(|result|
