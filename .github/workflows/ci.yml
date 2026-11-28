@@ -42,7 +42,7 @@ on:
       platform:
         description: Platforms to check (macos runs only macOS gates)
         type: choice
-        options: [all, macos]
+        options: [all, macos, windows, linux]
         default: all
       macos_runner:
         description: macOS runner (Intel fallback when hosted ARM capacity is unavailable)
@@ -112,7 +112,7 @@ jobs:
     # Keep existing check-run names for branch protection compatibility.
     name: test
     needs: [changes]
-    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all') && needs.changes.outputs.ios != 'false'
     runs-on: xcode-27
     timeout-minutes: 30
     env:
@@ -174,7 +174,7 @@ jobs:
     # same two VMs instead of adding ~8 minutes of tests before a ~15 minute build.
     # Both checks still have to pass; this workflow does not publish the IPA.
     needs: [changes]
-    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.ios != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all') && needs.changes.outputs.ios != 'false'
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -251,7 +251,7 @@ jobs:
     needs: [changes]
     # One worker per VM keeps timing-sensitive tests isolated; each engine's
     # two shards run on independent runners.
-    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.frontend != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all') && needs.changes.outputs.frontend != 'false'
     runs-on: ubuntu-24.04
     # A hung Chromium/WebKit process must not hold the runner after the step cap.
     # Includes cold browser setup and leaves time to upload a failed trace.
@@ -343,7 +343,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           FRONTEND: ${{ needs.changes.outputs.frontend }}
           BROWSERS_RESULT: ${{ needs.ui-motion-browsers.result }}
-          MACOS_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' }}
+          MACOS_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'all' }}
         run: |
           test "$CHANGES_RESULT" = success
           if [ "$MACOS_ONLY" = true ] || [ "$FRONTEND" = false ]; then
@@ -355,7 +355,7 @@ jobs:
   android-check:
     needs: [changes]
     # Android compiles its own Rust graph: a bundle-only change cannot break it.
-    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.android != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all') && needs.changes.outputs.android != 'false'
     name: Android cargo check
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -698,7 +698,7 @@ jobs:
   #     real HAP, which is what actually type-checks the ArkTS sources.
   harmony-check:
     needs: [changes]
-    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
+    if: needs.changes.outputs.desktop-only != 'true' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all') && needs.changes.outputs.harmony != 'false'
     name: Harmony (ArkTS contracts, Rust host, HAP)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -770,7 +770,7 @@ jobs:
 
   # Linux automation stays paused by default; this label enables validation only.
   linux-validation:
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')
+    if: (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-linux')) || (github.event_name == 'workflow_dispatch' && inputs.platform == 'linux')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -799,16 +799,24 @@ jobs:
           cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path Cargo.toml >/dev/null
           cargo metadata --no-deps --locked --offline --format-version 1 --manifest-path ../linux/egui/Cargo.toml >/dev/null
       - name: Test, lint and build the Linux host
+        if: github.event_name != 'workflow_dispatch'
         run: |
           cargo test --locked -p openless-linux-egui
           cargo clippy --locked -p openless-linux-egui --all-targets -- -D warnings
           cargo build --locked --release -p openless-linux-egui
+      - name: Check recording materials on the Linux host
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          cargo test --locked -p openless-core --lib references_
+          cargo test --locked -p openless-linux-egui --lib
+          cargo check --locked -p openless-linux-egui --bins
       - name: Build and test the Fcitx5 plugin
         run: |
           cmake -S ../linux/fcitx5-plugin -B ../linux/fcitx5-plugin/build
           cmake --build ../linux/fcitx5-plugin/build -j
           ctest --test-dir ../linux/fcitx5-plugin/build --output-on-failure
       - name: Package and verify locally
+        if: github.event_name != 'workflow_dispatch'
         run: |
           set -euo pipefail
           APP_VERSION=$(node -p "require('./package.json').version")
@@ -825,12 +833,12 @@ jobs:
     # moving these three commands into `cross-platform` cost 117 s on the critical-path Windows
     # job, which is more than the two runners it saved.
     needs: [changes]
-    if: needs.changes.outputs.capsule != 'false'
+    if: needs.changes.outputs.capsule != 'false' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'linux')
     name: Native capsule (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-latest"]' || '["macos-latest","windows-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-latest"]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '["windows-latest"]' || '["macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     defaults:
@@ -860,13 +868,13 @@ jobs:
   cross-platform:
     needs: [changes]
     # 失败即运行：只有判定脚本明确说“够不到”才跳过。
-    if: needs.changes.outputs.tauri != 'false'
+    if: needs.changes.outputs.tauri != 'false' && (github.event_name != 'workflow_dispatch' || inputs.platform != 'linux')
     name: ${{ matrix.label == 'Windows' && 'Windows stable checks' || 'macOS checks' }}
     strategy:
       # One platform failing must not block other platforms from getting verification results.
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '[{"os":"macos-latest","label":"macOS","preflight":false}]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'windows' && '[{"os":"windows-latest","label":"Windows","preflight":true}]' || '[{"os":"macos-latest","label":"macOS","preflight":false},{"os":"windows-latest","label":"Windows","preflight":true}]') }}
     # Dispatch-only fallback; push/PR runs keep the default matrix and all test gates.
     runs-on: ${{ matrix.label == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.macos_runner || matrix.os }}
     # Step caps below are shorter than this job cap. A hung Rust, recorder, IME,
@@ -1068,6 +1076,7 @@ jobs:
           cargo test --locked -p openless-core --target-dir src-tauri/target --test settings_field_updates
           cargo test --locked -p openless-core --target-dir src-tauri/target --lib long_recording
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test clipboard_delivery
+          cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test material_delivery
           cargo test --locked -p openless-core --target-dir src-tauri/target --lib selection_prompt_preserves_explicit_and_legacy_imported_authorship
           cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --target-dir src-tauri/target --test selection_bound_native --test selection_direct_delivery --test selection_recovery_notice --test selection_value_outcome
 
@@ -1198,7 +1207,7 @@ jobs:
   macos-msrv:
     needs: [changes]
     # Run the declared minimum toolchain even when stable has the same version.
-    if: needs.changes.outputs.msrv != 'false'
+    if: needs.changes.outputs.msrv != 'false' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos')
     name: macOS Rust 1.99 MSRV
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.macos_runner || 'macos-latest' }}
     timeout-minutes: 60
@@ -1254,7 +1263,7 @@ jobs:
     # Measured 347–425 seconds when serialised behind Windows stable checks.
     # Keep the pinned compiler and its fingerprints out of the stable job.
     needs: [changes]
-    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.msrv != 'false'
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows') && needs.changes.outputs.msrv != 'false'
     name: Windows Rust 1.99 MSRV
     runs-on: windows-latest
     timeout-minutes: 60
@@ -1313,7 +1322,7 @@ jobs:
     # Keep the existing Windows required check dependent on both compilers.
     name: Windows checks
     needs: [changes, cross-platform, windows-msrv]
-    if: (github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos')
+    if: (github.event_name != 'workflow_dispatch' || inputs.live_acceptance == 'off') && always() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows')
     runs-on: ${{ needs.changes.outputs.desktop-only == 'false' && 'ubuntu-latest' || 'macos-latest' }}
     timeout-minutes: 5
     steps:

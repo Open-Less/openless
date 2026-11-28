@@ -5590,6 +5590,8 @@ mod linux_app {
                     _ => 0,
                 };
                 s.restore_clipboard = prefs.restore_clipboard_after_paste;
+                s.dictation_references = prefs.dictation_references_enabled;
+                s.references_supported = openless_linux_egui::dictation_references::supported();
                 s.silence_auto_stop = prefs.silence_auto_stop_enabled;
                 s.silence_seconds =
                     prefs.silence_auto_stop_seconds.round().clamp(1.0, 5.0) as usize;
@@ -10000,6 +10002,7 @@ Internal flags (set by OpenLess itself, not for regular use):
         let tray_available = tray.is_some();
         let native = (|| {
             let mut config = backend_config()?;
+            openless_linux_egui::dictation_references::initialize(&config.data_dir);
             match openless_linux_egui::init_file_logger(&config.data_dir) {
                 Ok(_) => log::info!("[startup] single-instance lock acquired; running as primary"),
                 Err(error) => eprintln!("OpenLess file logger unavailable: {error}"),

@@ -536,6 +536,7 @@ pub enum SettingsField {
     StableTranscription,
     StreamingSaveClipboard,
     RestoreClipboard,
+    DictationReferences,
     StartMinimized,
     LaunchAtLogin,
     AutoUpdate,
@@ -1180,6 +1181,10 @@ pub struct SettingsFields {
     pub stable_transcription: bool,
     pub streaming_save_clipboard: bool,
     pub restore_clipboard: bool,
+    #[serde(default)]
+    pub dictation_references: bool,
+    #[serde(default)]
+    pub references_supported: bool,
     pub start_minimized: bool,
     pub launch_at_login: bool,
     pub auto_update: bool,
@@ -1257,6 +1262,8 @@ impl Default for SettingsFields {
             stable_transcription: false,
             streaming_save_clipboard: false,
             restore_clipboard: false,
+            dictation_references: false,
+            references_supported: false,
             start_minimized: false,
             launch_at_login: false,
             auto_update: false,

@@ -211,6 +211,8 @@ pub struct RecordingPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DictationContext {
+    /// Frozen opt-in consumed only by desktop clipboard adapters.
+    pub dictation_references_enabled: bool,
     /// Owned start-time alternatives. Later preference, routing and pack edits
     /// cannot change either side of the toggle or a submitted parallel segment.
     pub(crate) style_choices: DictationStyleChoices,
@@ -384,6 +386,7 @@ impl DictationContext {
             input_app: None,
             audio_source: options.audio_source,
             output_target: options.output_target,
+            dictation_references_enabled: preferences.dictation_references_enabled,
             normal_archive_successful_recording: preferences.record_audio_for_debug,
             recording: RecordingPlan {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),

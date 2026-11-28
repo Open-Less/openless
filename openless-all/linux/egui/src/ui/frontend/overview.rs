@@ -965,8 +965,7 @@ fn recent_row(
     )
     .clicked()
     {
-        ui.ctx().copy_text(text.to_string());
-        ui.ctx().data_mut(|data| data.insert_temp(copied_id, now));
+        if crate::fcitx5::copy_to_clipboard(text).is_ok() { ui.ctx().data_mut(|data| data.insert_temp(copied_id, now)); }
     }
 }
 

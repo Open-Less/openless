@@ -779,6 +779,11 @@ fn general(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fron
         ui,
         tr_l10n(lang, "settings.recording.insert_group_title"),
         |ui| {
+            ui.add_enabled_ui(vm.settings.references_supported, |ui| {
+                toggle_row(ui, tr_l10n(lang, "settings.recording.references_label"),
+                    tr_l10n(lang, if vm.settings.references_supported { "settings.recording.references_desc" } else { "settings.recording.references_unsupported" }),
+                    vm.settings.dictation_references, || actions.push(FrontendAction::SettingsToggle(SettingsField::DictationReferences)));
+            });
             toggle_row(
                 ui,
                 tr_l10n(lang, "settings.recording.restore_clipboard_label"),

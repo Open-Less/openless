@@ -181,6 +181,9 @@ impl OpenLessEguiApp {
                 preferences.restore_clipboard_after_paste =
                     !preferences.restore_clipboard_after_paste;
             }
+            frontend::view_model::SettingsField::DictationReferences => {
+                preferences.dictation_references_enabled = !preferences.dictation_references_enabled;
+            }
             frontend::view_model::SettingsField::SystemProxy => {
                 preferences.use_system_proxy = !preferences.use_system_proxy;
             }

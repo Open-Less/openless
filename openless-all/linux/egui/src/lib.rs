@@ -15,6 +15,8 @@ pub mod cloud_sync_ui;
 mod credentials;
 mod desktop;
 mod dictation_feedback;
+mod clipboard;
+pub mod dictation_references;
 mod fcitx5;
 pub mod frame_stats;
 mod host_actions;

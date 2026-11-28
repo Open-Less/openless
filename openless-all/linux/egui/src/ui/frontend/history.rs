@@ -1268,8 +1268,7 @@ fn text_card_with_action(
         )
         .clicked()
         {
-            ui.ctx().copy_text(text);
-            ui.ctx().data_mut(|data| data.insert_temp(id, now));
+            if crate::fcitx5::copy_to_clipboard(&text).is_ok() { ui.ctx().data_mut(|data| data.insert_temp(id, now)); }
         }
     }
     if let Some(label) = toggle {

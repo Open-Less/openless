@@ -34,7 +34,14 @@ assert.ok(read('src-tauri/src/selection.rs').includes('dictation_references::sel
 const adapters = read('src-tauri/src/core_adapters.rs');
 assert.match(adapters, /prepare_streaming_input_source\(\s*context\.insertion\.streaming\s*&& !crate::dictation_references::active\(session_id\)/);
 assert.match(adapters, /context\.insertion\.composition_input && context\.insertion\.enabled\s*&& !crate::dictation_references::active\(session_id\)/);
-assert.match(host, /poll_revision\(&self.session, revision, true\)/);
+// Stop now freezes native content before slow recorder teardown (R19 F5),
+// then persists that owned snapshot without rereading global CLIPBOARD.
+assert.match(host, /freeze_clipboard\(&session, crate::insertion::clipboard_sequence, clipboard_content\)/);
+const finish = host.slice(host.indexOf('impl StoppedCollection'), host.indexOf('impl Drop for RecordingLease'));
+assert.match(finish, /snapshot\.content/);
+assert.doesNotMatch(finish, /clipboard_sequence\(|clipboard_content\(|poll_revision\(/);
+const guardDrop = host.slice(host.indexOf('impl Drop for SelfWrite'), host.indexOf('fn now_ms'));
+assert.doesNotMatch(guardDrop, /revisions\.push|clipboard_sequence\(/);
 assert.match(adapters, /references\.finish\(\)/);
 assert.match(adapters, /selection_insertion_target_is_captured\(&insertion_target\)/);
 console.log('dictation references backend contracts passed');

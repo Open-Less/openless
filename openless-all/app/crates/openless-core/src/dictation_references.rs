@@ -58,8 +58,12 @@ impl ClipboardFilter {
 
 #[derive(Debug, Default)]
 pub struct Collector { pub references: Vec<Reference>, bytes: u64 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ClipboardContent { Text(String), Image(Vec<u8>, &'static str), Files(Vec<PathBuf>), TooLarge }
+pub fn clipboard_uri_paths(text: &str) -> Vec<PathBuf> {
+    text.lines().filter(|line| !line.starts_with('#')).filter_map(|line|
+        url::Url::parse(line.trim()).ok()?.to_file_path().ok()).collect()
+}
 impl ClipboardContent {
     pub fn fingerprint(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
@@ -270,6 +274,28 @@ pub fn render(reference: &Reference) -> String {
     format!("[{label}](<{url}>) (local: {}{note}; target may not have local-file access)", escaped(&reference.path.to_string_lossy()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryPart { Text(String), Image(PathBuf) }
+
+/// Split the final, already-polished text at owned image references. The path
+/// remains in the following text even when native paste is dispatched: a native
+/// paste receipt cannot establish that the recipient supports image content.
+pub fn delivery_plan(text: &str, references: &[Reference]) -> Vec<DeliveryPart> {
+    let mut images = references.iter().filter(|r| r.kind == ReferenceKind::ClipboardImage && !expired(r))
+        .filter_map(|r| text.find(&render(r)).map(|at| (at, &r.path))).collect::<Vec<_>>();
+    images.sort_by_key(|(at, _)| *at);
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    for (at, path) in images {
+        if at < cursor { continue; }
+        if at > cursor { out.push(DeliveryPart::Text(text[cursor..at].into())); }
+        out.push(DeliveryPart::Image(path.clone()));
+        cursor = at;
+    }
+    if cursor < text.len() { out.push(DeliveryPart::Text(text[cursor..].into())); }
+    out
+}
+
 /// Every reference is emitted exactly once. No references means byte-for-byte identity.
 /// Positions are monotonic: cue matching can never swap the spoken collection order.
 pub fn place(text: &str, references: &[Reference], duration_ms: u64, cues: &[&str]) -> String {
@@ -319,6 +345,25 @@ mod tests {
     use super::*;
     fn reference(sequence: u32, ms: u64) -> Reference {
         Reference { kind: ReferenceKind::File, elapsed_ms: ms, sequence, path: PathBuf::from("/original.log"), source: "user".into(), size: 2, name: format!("file-{sequence}"), original_url: None, inline: None, transcript_chars: None, original_only: true }
+    }
+    #[test]
+    fn references_full_copied_text_and_ordered_image_paths_survive_delivery() {
+        let root = std::env::temp_dir().join(format!("references-delivery-{}", uuid::Uuid::new_v4()));
+        let store = ReferenceStore::new(root.clone()).unwrap();
+        let dir = store.begin("recording", 0).unwrap();
+        let copied = format!("{}\r\nsecond line 🙂\n", "长".repeat(81));
+        let mut collector = Collector::default();
+        assert_eq!(collector.capture(&dir, 200, ClipboardContent::Text(copied.clone())), None);
+        assert_eq!(collector.capture(&dir, 500, ClipboardContent::Image(b"local image bytes".to_vec(), "png")), None);
+        let text = place("Start. This error is here. End.", &collector.references, 1000, CUES);
+        assert!(text.contains(&copied));
+        assert!(!text.contains("Copied text"));
+        let parts = delivery_plan(&text, &collector.references);
+        let image = parts.iter().position(|p| matches!(p, DeliveryPart::Image(_))).unwrap();
+        assert!(matches!(&parts[image + 1], DeliveryPart::Text(body) if body.contains(&collector.references[1].path.to_string_lossy().to_string())));
+        assert_eq!(parts.iter().filter_map(|part| match part { DeliveryPart::Text(body) => Some(body.as_str()), _ => None }).collect::<String>(), text);
+        assert_eq!(parts.iter().filter(|p| matches!(p, DeliveryPart::Image(_))).count(), 1);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn references_filter_baseline_self_writes_menu_context_screenshot_duplicates_and_limits() {

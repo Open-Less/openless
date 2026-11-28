@@ -9,6 +9,8 @@ use crate::types::{InsertStatus, PasteShortcut};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[path = "insertion/clipboard_delivery.rs"]
 pub(crate) mod clipboard_delivery;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) mod material_delivery;
 
 /// Put a text into the clipboard; used by the "Copy" button on the insertion-failure fallback card.
 ///
@@ -55,6 +57,17 @@ pub(crate) fn clipboard_sequence() -> Option<u64> {
 pub struct TextInserter;
 
 impl TextInserter {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    pub(crate) fn insert_materials(
+        &self,
+        parts: &[openless_core::dictation_references::DeliveryPart],
+        restore: bool,
+        shortcut: PasteShortcut,
+        still_current: impl FnMut(bool) -> bool,
+    ) -> InsertStatus {
+        let Ok(mut clipboard) = NativeClipboardDelivery::new(shortcut) else { return InsertStatus::Failed; };
+        material_delivery::deliver(&mut clipboard, parts, restore, still_current)
+    }
     pub fn new() -> Self {
         Self
     }
@@ -264,6 +277,46 @@ struct NativeClipboardDelivery {
     shortcut: PasteShortcut,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl material_delivery::MaterialClipboard for NativeClipboardDelivery {
+    fn set_image(&mut self, path: &std::path::Path) -> Result<(), String> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path).and_then(|f| f.take(openless_core::dictation_references::MAX_BYTES + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > openless_core::dictation_references::MAX_BYTES { return Err("image too large".into()); }
+        let own_write = crate::dictation_references::self_write();
+        #[cfg(target_os = "macos")]
+        {
+            use objc2::{msg_send, runtime::{AnyClass, AnyObject}, rc::autoreleasepool};
+            use objc2_foundation::NSString;
+            autoreleasepool(|_| unsafe {
+                let class = AnyClass::get("NSPasteboard").ok_or("pasteboard unavailable")?;
+                let board: *mut AnyObject = msg_send![class, generalPasteboard];
+                let data_class = AnyClass::get("NSData").ok_or("data unavailable")?;
+                let data: *mut AnyObject = msg_send![data_class, dataWithBytes: bytes.as_ptr().cast::<std::ffi::c_void>(), length: bytes.len()];
+                if board.is_null() || data.is_null() { return Err("image clipboard unavailable".into()); }
+                let ty = if path.extension().is_some_and(|e| e == "tiff") { "public.tiff" } else { "public.png" };
+                let _: isize = msg_send![board, clearContents];
+                let written: bool = msg_send![board, setData: data, forType: &*NSString::from_str(ty)];
+                if written { own_write.commit(); Ok(()) } else { Err("image clipboard write failed".into()) }
+            })
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+            let mut limits = image::Limits::default();
+            limits.max_alloc = Some(openless_core::dictation_references::MAX_SESSION_BYTES);
+            reader.limits(limits);
+            let image = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
+            let (width, height) = image.dimensions();
+            self.clipboard.set_image(arboard::ImageData { width: width as usize, height: height as usize,
+                bytes: std::borrow::Cow::Owned(image.into_raw()) }).map_err(|e| e.to_string())?;
+            own_write.commit();
+            Ok(())
+        }
+    }
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl NativeClipboardDelivery {
     fn new(shortcut: PasteShortcut) -> Result<Self, String> {
@@ -285,10 +338,12 @@ impl clipboard_delivery::ClipboardDelivery for NativeClipboardDelivery {
     }
 
     fn set_text(&mut self, text: &str) -> Result<(), String> {
-        let _own_write = crate::dictation_references::self_write();
+        let own_write = crate::dictation_references::self_write();
         self.clipboard
             .set_text(text.to_string())
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        own_write.commit();
+        Ok(())
     }
 
     fn sequence(&self) -> Option<u64> {

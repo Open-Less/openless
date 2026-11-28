@@ -519,10 +519,13 @@ impl Fcitx5TextInserter {
 }
 
 impl TextInserter for Fcitx5TextInserter {
+    fn enrich_dictation_text(&self, session_id: openless_core::SessionId, text: String, duration_ms: u64) -> String {
+        crate::dictation_references::enrich(session_id, text, duration_ms)
+    }
     fn begin(
         &self,
         session_id: openless_core::SessionId,
-        _context: std::sync::Arc<openless_core::DictationContext>,
+        context: std::sync::Arc<openless_core::DictationContext>,
     ) -> BoxFuture<'static, Result<std::sync::Arc<dyn TextInsertionSession>, BackendError>> {
         let clipboard_fallback = self.clipboard_fallback;
         Box::pin(async move {
@@ -542,6 +545,7 @@ impl TextInserter for Fcitx5TextInserter {
             Ok(std::sync::Arc::new(Fcitx5InsertionSession {
                 clipboard_fallback,
                 ticket,
+                references_enabled: context.dictation_references_enabled,
                 closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }) as std::sync::Arc<dyn TextInsertionSession>)
         })
@@ -552,6 +556,7 @@ impl TextInserter for Fcitx5TextInserter {
 struct Fcitx5InsertionSession {
     clipboard_fallback: bool,
     ticket: String,
+    references_enabled: bool,
     closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -602,7 +607,14 @@ impl Fcitx5InsertionSession {
                 let insertion_text = text.clone();
                 let ticket = self.ticket.clone();
                 let result = tokio::task::spawn_blocking(move || {
+                    if let Ok(id) = uuid::Uuid::parse_str(&ticket) {
+                        let parts = crate::dictation_references::delivery_plan(openless_core::SessionId::from_uuid(id), &insertion_text);
+                        if parts.iter().any(|p| matches!(p, openless_core::dictation_references::DeliveryPart::Image(_))) {
+                            return deliver_materials(&ticket, &parts);
+                        }
+                    }
                     commit_dictation_target(&ticket, &insertion_text)
+                        .map(|()| InsertOutcome::Inserted)
                 })
                 .await
                 .map_err(|error| {
@@ -611,8 +623,8 @@ impl Fcitx5InsertionSession {
                         format!("fcitx5 insertion task failed: {error}"),
                     )
                 })?;
-                if result.is_ok() {
-                    return Ok(InsertOutcome::Inserted);
+                if let Ok(outcome) = result {
+                    return Ok(outcome);
                 }
                 if clipboard_fallback {
                     tokio::task::spawn_blocking(move || copy_to_clipboard(&text))
@@ -665,6 +677,7 @@ impl Fcitx5InsertionSession {
 }
 
 impl TextInsertionSession for Fcitx5InsertionSession {
+    fn supports_streaming(&self) -> bool { !self.references_enabled }
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
         if self.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Box::pin(async {
@@ -721,6 +734,7 @@ impl TextInsertionSession for Fcitx5InsertionSession {
 
 impl Fcitx5InsertionSession {
     async fn release_target(&self) {
+        if let Ok(id) = uuid::Uuid::parse_str(&self.ticket) { crate::dictation_references::retire(openless_core::SessionId::from_uuid(id)); }
         #[cfg(target_os = "linux")]
         {
             let ticket = self.ticket.clone();
@@ -746,6 +760,39 @@ fn commit_dictation_target(ticket: &str, text: &str) -> Result<(), BackendError>
             "the captured dictation target is unavailable",
         ))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn clipboard_delivery_gate() -> &'static std::sync::Mutex<()> {
+    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &GATE
+}
+#[cfg(target_os = "linux")]
+fn deliver_materials(ticket: &str, parts: &[openless_core::dictation_references::DeliveryPart]) -> Result<InsertOutcome, BackendError> {
+    use openless_core::dictation_references::DeliveryPart;
+    let _delivery = clipboard_delivery_gate().lock().unwrap();
+    let mut dispatched = false;
+    let mut image_attempt = false;
+    for part in parts {
+        match part {
+            DeliveryPart::Text(text) => {
+                if let Err(error) = commit_dictation_target(ticket, text) {
+                    // Never replay the whole transcript after a partial write.
+                    return if dispatched { Ok(InsertOutcome::PasteSent) } else { Err(error) };
+                }
+                dispatched = true;
+            }
+            DeliveryPart::Image(path) => {
+                if !crate::clipboard::write_image(path) { continue; }
+                match send_bool_message("PasteDictationTarget", |message| message.append1(ticket.to_owned())) {
+                    Ok(true) => { dispatched = true; image_attempt = true; std::thread::sleep(Duration::from_millis(750)); }
+                    Ok(false) => {} // The path in the next text part remains usable.
+                    Err(_) => return Ok(InsertOutcome::PasteSent), // Unknown dispatch: no retry.
+                }
+            }
+        }
+    }
+    Ok(if image_attempt { InsertOutcome::PasteSent } else { InsertOutcome::Inserted })
 }
 
 #[cfg(target_os = "linux")]
@@ -1325,6 +1372,11 @@ fn fcitx5_name_has_owner() -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
+    let _delivery = clipboard_delivery_gate().lock().unwrap();
+    if crate::clipboard::write_text(text) { return Ok(()); }
+    if crate::clipboard::supported() { return Err(platform_error("native clipboard write failed".into())); }
+    // If native monitoring is unavailable, retain the existing Fcitx fallback.
+    // No unsupported clipboard source is advertised as collectable.
     use dbus::blocking::BlockingSender;
     let connection = dbus::blocking::Connection::new_session().map_err(dbus_error)?;
     let message =

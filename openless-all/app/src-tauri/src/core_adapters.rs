@@ -4745,7 +4745,7 @@ impl CoreTextInserter for TauriTextInserter {
                 live_composition: Arc::new(Mutex::new(live_composition)),
             });
             #[cfg(target_os = "windows")]
-            if session.context.insertion.composition_input {
+            if session.context.insertion.composition_input && !crate::dictation_references::active(session_id) {
                 log::info!(
                     "[core-adapter] TSF composition enabled mode={:?} target={:?} stable_transcription={}",
                     session.context.insertion.windows_insertion_mode,
@@ -5040,6 +5040,9 @@ impl TauriTextInsertionSession {
     /// Shows `text` as the live composition, replacing the previous update.
     #[cfg(target_os = "windows")]
     async fn update_composition_text(&self, text: String) -> Result<(), BackendError> {
+        if crate::dictation_references::active(self.session_id) {
+            return Err(BackendError::new(BackendErrorCode::Unsupported, "materials require ordered final delivery"));
+        }
         if self.finished.load(Ordering::Acquire) {
             return Err(BackendError::new(
                 BackendErrorCode::Cancelled,
@@ -5165,6 +5168,9 @@ impl TauriTextInsertionSession {
     }
 
     async fn write_chunk(&self, text: String) -> Result<InsertWriteResult, BackendError> {
+        if crate::dictation_references::active(self.session_id) {
+            return Err(BackendError::new(BackendErrorCode::Unsupported, "materials require ordered final delivery"));
+        }
         #[cfg(target_os = "macos")]
         {
             // A write future may have been created before a terminal caller
@@ -5248,6 +5254,25 @@ impl TauriTextInsertionSession {
     }
 
     async fn insert_final(&self, text: String) -> Result<InsertOutcome, BackendError> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let parts = crate::dictation_references::delivery_plan(self.session_id, &text);
+            if parts.iter().any(|part| matches!(part, openless_core::dictation_references::DeliveryPart::Image(_))) {
+                if self.restore_insertion_target().is_err() { return self.copy_fallback(text).await; }
+                let target = self.insertion_target.clone();
+                let restore = self.context.insertion.restore_clipboard_after_paste;
+                let shortcut = self.context.insertion.paste_shortcut;
+                return tauri::async_runtime::spawn_blocking(move || {
+                    map_insert_status(crate::insertion::TextInserter::new().insert_materials(&parts, restore, shortcut, |dispatched| {
+                        // The first dispatch validates the frozen range. Later
+                        // parts retain the original native window/control;
+                        // successful paste may itself move the caret.
+                        if !dispatched { crate::selection::selection_insertion_target_is_current(&target) }
+                            else { crate::selection::capsule_menu_input_target_is_current(&target) }
+                    }))
+                }).await.map_err(|error| BackendError::new(BackendErrorCode::Internal, error.to_string()))?;
+            }
+        }
         #[cfg(target_os = "windows")]
         {
             if self.composition_conflicted() {

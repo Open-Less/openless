@@ -231,7 +231,10 @@ impl AudioRecorder for LinuxCpalRecorder {
             #[cfg(target_os = "linux")]
             {
                 tokio::task::spawn_blocking(move || {
-                    start_linux_recording(
+                    let references = crate::dictation_references::Lease::start(session_id,
+                        context.dictation_references_enabled && context.insertion.enabled
+                            && context.output_target == openless_core::DictationOutputTarget::ForegroundApp);
+                    let recording = start_linux_recording(
                         session_id,
                         LinuxRecordingOptions {
                             preferred_device_name,
@@ -245,7 +248,8 @@ impl AudioRecorder for LinuxCpalRecorder {
                         },
                         consumer,
                         progress,
-                    )
+                    )?;
+                    Ok(Box::new(ReferenceRecording { recording: Some(recording), references }) as Box<dyn ActiveRecording>)
                 })
                 .await
                 .map_err(|error| {
@@ -263,6 +267,29 @@ impl AudioRecorder for LinuxCpalRecorder {
                     "Linux cpal recorder is unavailable on this target",
                 ))
             }
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct ReferenceRecording {
+    recording: Option<Box<dyn ActiveRecording>>,
+    references: Option<crate::dictation_references::Lease>,
+}
+#[cfg(target_os = "linux")]
+impl Drop for ReferenceRecording {
+    fn drop(&mut self) { self.references.take(); }
+}
+#[cfg(target_os = "linux")]
+impl ActiveRecording for ReferenceRecording {
+    fn archive(&self) -> Option<Arc<dyn openless_core::RecordingArchive>> { self.recording.as_ref()?.archive() }
+    fn stop(mut self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+        let recording = self.recording.take().expect("recording owned until stop");
+        let references = self.references.take();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || { if let Some(references) = references { references.stop(); } })
+                .await.map_err(|e| BackendError::new(BackendErrorCode::Internal, e.to_string()))?;
+            recording.stop().await
         })
     }
 }

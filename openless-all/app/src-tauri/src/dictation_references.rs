@@ -13,6 +13,18 @@ struct OwnWrites { depth: usize, revisions: VecDeque<u64> }
 static WRITES: OnceLock<Mutex<OwnWrites>> = OnceLock::new();
 fn writes() -> &'static Mutex<OwnWrites> { WRITES.get_or_init(Default::default) }
 pub(crate) struct SelfWrite;
+impl SelfWrite {
+    /// Call only after a successful actual write, or a stable observed synthetic
+    /// copy. Merely holding/dropping the suppression guard claims no revision.
+    pub(crate) fn commit_revision(&self, revision: Option<u64>) {
+        if let Some(revision) = revision {
+            let mut writes = writes().lock();
+            writes.revisions.push_back(revision);
+            while writes.revisions.len() > 256 { writes.revisions.pop_front(); }
+        }
+    }
+    pub(crate) fn commit(&self) { self.commit_revision(crate::insertion::clipboard_sequence()); }
+}
 pub(crate) fn self_write() -> SelfWrite {
     // Also track writes that overlap recording startup (before a session exists).
     writes().lock().depth += 1;
@@ -20,12 +32,7 @@ pub(crate) fn self_write() -> SelfWrite {
 }
 impl Drop for SelfWrite {
     fn drop(&mut self) {
-        let revision = crate::insertion::clipboard_sequence();
         let mut writes = writes().lock();
-        if let Some(revision) = revision {
-            writes.revisions.push_back(revision);
-            while writes.revisions.len() > 256 { writes.revisions.pop_front(); }
-        }
         writes.depth = writes.depth.saturating_sub(1);
     }
 }
@@ -65,20 +72,40 @@ pub(crate) fn cleanup() {
     let _ = store();
 }
 pub(crate) struct RecordingLease { id: SessionId }
-pub(crate) struct StoppedCollection { session: Arc<Session>, revision: Option<u64> }
+pub(crate) struct StoppedCollection { session: Arc<Session>, snapshot: Option<FrozenClipboard> }
+struct FrozenClipboard { revision: u64, elapsed_ms: u64, content: Result<Option<Content>, &'static str> }
+fn freeze_clipboard(session: &Session, mut sequence: impl FnMut() -> Option<u64>, read: impl FnOnce() -> Result<Option<Content>, &'static str>) -> Option<FrozenClipboard> {
+    session.collecting.store(false, Ordering::Release);
+    let revision = sequence()?;
+    let elapsed_ms = session.data.lock().started.elapsed().as_millis() as u64;
+    {
+        let own = writes().lock();
+        if own.depth > 0 || own.revisions.contains(&revision) { return None; }
+    }
+    let content = read();
+    let own = writes().lock();
+    if own.depth > 0 || own.revisions.contains(&revision) || sequence() != Some(revision) { return None; }
+    Some(FrozenClipboard { revision, elapsed_ms, content })
+}
 impl RecordingLease {
     pub(crate) fn stop(self) -> Option<StoppedCollection> {
         let session = session(self.id)?;
-        let revision = crate::insertion::clipboard_sequence();
-        session.collecting.store(false, Ordering::Release);
-        Some(StoppedCollection { session, revision })
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let snapshot = freeze_clipboard(&session, crate::insertion::clipboard_sequence, clipboard_content);
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let snapshot = { session.collecting.store(false, Ordering::Release); None };
+        Some(StoppedCollection { session, snapshot })
     }
 }
 impl StoppedCollection {
     pub(crate) fn finish(self) {
-        // Flush only the stop-time revision on the recorder's blocking worker.
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(revision) = self.revision { poll_revision(&self.session, revision, true); }
+        // Only persist the frozen value here. Recorder teardown and a new
+        // recording may already have changed the global clipboard.
+        if let Some(snapshot) = self.snapshot {
+            let mut data = self.session.data.lock();
+            apply_content(&mut data, snapshot.revision, snapshot.elapsed_ms, snapshot.content);
+            *self.session.feedback.lock() = (data.collector.references.len() as u32, data.notice.clone());
+        }
     }
 }
 impl Drop for RecordingLease {
@@ -127,6 +154,11 @@ pub(crate) fn enrich(id: SessionId, text: String, duration_ms: u64) -> String {
     references.sort_by_key(|r| (r.elapsed_ms, r.sequence));
     for (i, reference) in references.iter_mut().enumerate() { reference.sequence = i as u32 + 1; }
     place(&text, &references, duration_ms, CUES)
+}
+pub(crate) fn delivery_plan(id: SessionId, text: &str) -> Vec<DeliveryPart> {
+    let Some(session) = session(id) else { return vec![DeliveryPart::Text(text.into())]; };
+    let data = session.data.lock();
+    openless_core::dictation_references::delivery_plan(text, &data.collector.references)
 }
 pub(crate) fn project(payload: &mut crate::types::CapsulePayload) {
     let s = sessions().lock().iter().find_map(|(id, s)| (payload.session_id.as_deref() == Some(id.to_string().as_str())).then(|| Arc::clone(s)));
@@ -211,10 +243,15 @@ fn poll_revision(session: &Session, revision: u64, stopped: bool) {
     if own.depth > 0 || own.revisions.contains(&revision) || crate::insertion::clipboard_sequence() != Some(revision) { return; }
     drop(own);
     if !stopped && !session.collecting.load(Ordering::Acquire) { return; }
+    let elapsed_ms = s.started.elapsed().as_millis() as u64;
+    apply_content(&mut s, revision, elapsed_ms, content);
+    *session.feedback.lock() = (s.collector.references.len() as u32, s.notice.clone());
+}
+fn apply_content(s: &mut Collection, revision: u64, elapsed_ms: u64, content: Result<Option<Content>, &'static str>) {
     match content {
-        Ok(Some(content)) => collect(&mut s, revision, content),
+        Ok(Some(content)) => collect_at(s, revision, elapsed_ms, content),
         Ok(None) => { s.filter.observe(revision, 0, 0, false); }
-        Err("tooLarge") => collect(&mut s, revision, Content::TooLarge),
+        Err("tooLarge") => collect_at(s, revision, elapsed_ms, Content::TooLarge),
         Err(notice) => {
             // Native contention already received short bounded retries. Do not
             // repeatedly decode the same malformed payload every 100ms.
@@ -222,17 +259,19 @@ fn poll_revision(session: &Session, revision: u64, stopped: bool) {
             s.notice = Some(notice.into());
         }
     }
-    *session.feedback.lock() = (s.collector.references.len() as u32, s.notice.clone());
 }
 
+#[cfg(test)]
 fn collect(s: &mut Collection, revision: u64, content: Content) {
+    collect_at(s, revision, s.started.elapsed().as_millis() as u64, content);
+}
+fn collect_at(s: &mut Collection, revision: u64, elapsed_ms: u64, content: Content) {
     let (hash, size) = content.fingerprint();
     match s.filter.observe(revision, hash, size, false) {
         FilterResult::TooLarge => { s.notice = Some("tooLarge".into()); return; }
         FilterResult::Accept => {}
         _ => return,
     }
-    let elapsed_ms = s.started.elapsed().as_millis() as u64;
     s.notice = s.collector.capture(&s.dir, elapsed_ms, content);
 }
 
@@ -240,6 +279,44 @@ fn collect(s: &mut Collection, revision: u64, content: Content) {
 mod tests {
     use super::*;
     fn collection(dir: PathBuf) -> Collection { Collection { dir, started: Instant::now(), collector: Collector::default(), filter: ClipboardFilter::new(10), notice: None } }
+    #[test]
+    fn references_stop_freezes_last_copy_before_recorder_teardown_and_next_session() {
+        let root = std::env::temp_dir().join(format!("references-stop-{}", uuid::Uuid::new_v4()));
+        let store = ReferenceStore::new(root.clone()).unwrap();
+        let old = Arc::new(Session { collecting: AtomicBool::new(true), feedback: Mutex::new((0, None)), data: Mutex::new(collection(store.begin("old", 0).unwrap())) });
+        let revision = std::sync::atomic::AtomicU64::new(12345671);
+        let snapshot = freeze_clipboard(&old, || Some(revision.load(Ordering::Acquire)), || Ok(Some(Content::Text("last pre-stop copy\nkept in full".into()))));
+        assert!(!old.collecting.load(Ordering::Acquire));
+        // The native recorder is still shutting down while another recording
+        // starts and the user overwrites CLIPBOARD. Finish must not read it.
+        revision.store(12345672, Ordering::Release);
+        let mut new = collection(store.begin("new", 0).unwrap());
+        collect(&mut new, 12345672, Content::Text("new recording only".into()));
+        StoppedCollection { session: old.clone(), snapshot }.finish();
+        let old_data = old.data.lock();
+        assert_eq!(old_data.collector.references.len(), 1);
+        assert_eq!(old_data.collector.references[0].inline.as_deref(), Some("last pre-stop copy\nkept in full"));
+        assert_eq!(new.collector.references.len(), 1);
+        assert_eq!(new.collector.references[0].inline.as_deref(), Some("new recording only"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn references_failed_or_noop_write_guard_never_claims_a_user_revision() {
+        let user_revision = 98765432101;
+        {
+            let _failed_lock_or_backup = self_write();
+            // No successful write: no explicit revision commit.
+        }
+        assert!(!writes().lock().revisions.contains(&user_revision));
+        let mut filter = ClipboardFilter::new(user_revision - 1);
+        assert_eq!(filter.observe(user_revision, 42, 2, writes().lock().revisions.contains(&user_revision)), FilterResult::Accept);
+        let app_revision = user_revision + 1;
+        let guard = self_write();
+        guard.commit_revision(Some(app_revision));
+        drop(guard);
+        assert_eq!(filter.observe(app_revision, 43, 2, writes().lock().revisions.contains(&app_revision)), FilterResult::SelfWrite);
+        assert_eq!(filter.observe(app_revision + 1, 43, 2, false), FilterResult::Accept);
+    }
     #[test]
     fn reference_self_write_ownership_is_revision_not_text() {
         let own = OwnWrites { depth: 0, revisions: VecDeque::from([12]) };

@@ -3794,6 +3794,18 @@ pub const CATALOG: &[Msg] = &[
         ),
     },
     Msg {
+        key: "settings.recording.references_label",
+        text: row("听写素材", "聽寫素材", "Dictation materials", "音声入力の素材", "받아쓰기 자료"),
+    },
+    Msg {
+        key: "settings.recording.references_desc",
+        text: row("录音时收集复制的文字、图片和文件，随听写输出；临时副本在下次完整启动时清理。", "錄音時收集複製的文字、圖片和檔案，隨聽寫輸出；暫存副本在下次完整啟動時清理。", "Collect copied text, images and files while recording and include them in dictation. Temporary copies are removed at the next full startup.", "録音中にコピーしたテキスト・画像・ファイルを音声入力に含めます。一時コピーは次回の完全起動時に削除されます。", "녹음 중 복사한 텍스트, 이미지, 파일을 받아쓰기에 포함합니다. 임시 사본은 다음 전체 시작 시 삭제됩니다."),
+    },
+    Msg {
+        key: "settings.recording.references_unsupported",
+        text: row("当前剪贴板服务不支持素材采集。", "目前剪貼簿服務不支援素材擷取。", "The current clipboard service does not support material capture.", "現在のクリップボードサービスは素材の取得に対応していません。", "현재 클립보드 서비스는 자료 수집을 지원하지 않습니다."),
+    },
+    Msg {
         key: "settings.recording.restore_clipboard_label",
         text: row(
             "插入后恢复剪贴板",

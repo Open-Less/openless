@@ -930,7 +930,7 @@ fn run_desktop() {
         .manage(commands::TrayMicrophoneMenuState::new(Vec::new()))
         .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             dictation_references::cleanup();
             log::info!("=== OpenLess 启动 ===");
             let ask = Arc::new(ask_window::chat::AskHost::new(app.handle(), core_backend.clone()));
